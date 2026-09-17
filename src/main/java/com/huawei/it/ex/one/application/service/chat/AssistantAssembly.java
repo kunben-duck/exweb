@@ -149,14 +149,6 @@ final class AssistantAssembly {
         domainAgentThinkingSinceContent = false;
     }
 
-    /** 问卷续跑从已保存正文继续组装；不生成回放 delta，也不重复加载旧 Parts。 */
-    void seedQuestionnaireContent(String content) {
-        if (!persistenceState.placeholderMode() && content != null && !content.isEmpty()) {
-            deltaDraft.append(content);
-            seedExistingDomainAgentContent();
-        }
-    }
-
     boolean shouldPersistMessage() {
         if (persistenceState.placeholderMode()) {
             return persistenceState.runtimeDispatchStarted()

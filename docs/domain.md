@@ -320,66 +320,7 @@ data: {"id": 3, "query": "生成资金流向报告", "type": "copy", "language_c
 
 data: [DONE]
 
-### 6.4、Ask User 问卷与答案续跑
-
-DomainAgent 通过当前 HTTP 流返回独立问卷帧，使用与 Relay 相同的问卷结构：
-
-```text
-data: {"type":"approval-request","approval_id":"approval_001","operation_type":"questionnaire","mode":"questionnaire","message":"请补充分析范围","questions":[{"question":"请选择分析期间","options":[{"label":"本月"},{"label":"上月"}],"multi_select":false}]}
-```
-
-- 精确识别 `type=approval-request + operation_type=questionnaire`；`approval_id` 必须是非空字符串且最多128码点，
-  `questions` 必须非空且每个 `question` 为唯一、非空字符串。畸形问卷是协议错误，不降级成普通卡片。
-- 转为 `runtime.card(source=domain-agent, sourceType=approval-request)`，保留问卷业务字段并脱敏。
-  当前 HTTP 流在问卷帧结束，后续帧（包括同一 chunk 内的后续帧）不再消费。
-- ChatService 保存此前正文、问卷及 Interaction，以 `run.waiting_user` 收口；不是 `run.completed`，
-  也不是后台异步任务。Binding 保持 ACTIVE，HTTP、执行心跳和本机运行许可释放。
-- 普通卡片不会触发等待；异步任务结果回调不允许包含问卷控制帧。
-
-前端回答后，ChatService 向**相同的 chat HTTP 地址**发送控制请求，不再发送普通 query、附件或 messages：
-
-```json
-{
-  "type": "approval-response",
-  "runId": "run_B",
-  "messageId": "msg_original_user",
-  "sessionId": "原Binding.runtimeSessionId",
-  "skillId": "原Binding的DomainAgentId",
-  "request_id": "approval_001",
-  "approved": true,
-  "scope": "once",
-  "questionnaire_answers": {
-    "label": {"请选择分析期间": "本月"},
-    "ignore": false
-  }
-}
-```
-
-单选及自定义回答为字符串，多选为字符串数组。手动忽略与自动忽略都发送
-`approved=false, questionnaire_answers={"ignore":true}`。`approved` 只表示本次回答或忽略，
-不是给下游授予额外业务权限。`request_id` 来自持久化的 `approval_id`，其余关联 ID 来自可信
-Run/Interaction/Binding，不接受客户端 metadata 覆盖。Cookie 仅来自本次续跑 HTTP 请求头。
-
-下游必须在原连接关闭后保留等待上下文，通过 session 与问卷 ID 恢复，并将后续执行关联到新的 Run-B。
-续跑可继续返回现有正文、思维链、卡片、引用和结束帧；再次发问应使用新的 `approval_id`。
-Run-B 复用原 user 和 assistant，追加正文和 Parts。续跑若拒答，进入已有拒答状态机与持久化 ACK 屏障，
-使用发问时保存的可信输入、原逻辑 Intent 入口、专家范围及本次答案重新意图；附件仅在该拒答分支重新解析。
-内部输入快照不包含 Cookie 或完整 MemoryContext，不进入公开事件、历史 Parts、分享或 Resume。
-
-配置 `financeex.domain-agent.questionnaire-wait-timeout`
-（`FINANCEEX_DOMAIN_AGENT_QUESTIONNAIRE_WAIT_TIMEOUT`，默认 `0s`）控制前端自动忽略建议时间，
-与 Relay 同名策略独立。启用后返回 `autoActionAt/autoActionTimeoutMs/autoActionType=IGNORE_QUESTIONNAIRE`，
-有效期限必须小于 Interaction 过期时间（默认24小时）。**没有服务端定时提交任务**；页面关闭时不自行忽略。
-不支持 `ignore=true` 的下游不得开启该自动动作。
-
-答案事件先持久化，再发起 HTTP。发送前失败时条件恢复 WAITING 和原 Binding；HTTP 提交开始后视为可能送达，
-之后超时、断连或协议错误不会自动重发答案，而是取消 Interaction 及仍由该 Run 持有的 Binding。
-这是请求内保护，不是跨服务 exactly-once 保证。Stop 继续使用原 DomainAgent cancel 协议，忽略不等于 Stop。
-连接、并发和流式期限复用普通 DomainAgent 配置。普通非问卷调用不增加查询；FULL 问卷续跑增加一次
-已有轻量消息查询用于原正文续接，不读取 Parts/附件。该续跑的 Stop partial 重放也先读取同一原正文，
-避免停止时覆盖发问前内容；普通 Stop 路径不增加查询。no-store 仅保留占位正文和恢复所需问卷/答案控制事实。
-
-### 6.5、后台异步任务
+### 6.4、后台异步任务
 
 异步任务能力默认关闭。启用后，DomainAgent需要在决定关闭当前流并转入后台执行时返回一条独立帧：
 

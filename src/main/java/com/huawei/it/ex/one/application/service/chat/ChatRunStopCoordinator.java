@@ -440,13 +440,6 @@ public class ChatRunStopCoordinator {
             AgentDataPersistenceState persistenceState =
                     AgentDataPersistenceState.fromRunMetadata(run.metadata(), null);
             AssistantAssembly assistant = new AssistantAssembly(persistenceState);
-            if (interactionContinuation && !newTurnInteraction && !persistenceState.placeholderMode()
-                    && "domain-agent".equals(run.runtimeProvider())
-                    && "AGENT_CLARIFICATION".equals(metadataText(run, "interactionType"))) {
-                // Stop（含跨实例）只回放本轮事件，问卷续跑须先保留发问前已经提交的正文。
-                assistant.seedQuestionnaireContent(sessionService.questionnaireAssistantContent(
-                        user, run.sessionId(), interactionAssistantMessageId));
-            }
             chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
             if (!assistant.shouldPersistMessage()) {
                 return StopMessageTarget.notReady();

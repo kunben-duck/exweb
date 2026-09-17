@@ -53,7 +53,6 @@ x-wait-time-semantics:
     30 秒；由前端触发 AUTO_SELECT，后端不注册定时任务。
   autoActionAt: >-
     通用前端自动动作时间。Relay 问卷由 financeex.relay.questionnaire-wait-timeout 配置；
-    DomainAgent 问卷由 financeex.domain-agent.questionnaire-wait-timeout 配置，默认0s关闭，两者互不影响；
     ROUTE_SWITCH_CONFIRMATION 与 AMBIGUOUS_ROUTE 共用 financeex.intent.ambiguous-route-wait-timeout。
     后端只返回时间事实，不注册定时任务。
   routeSwitchConfirmation: >-
@@ -153,9 +152,7 @@ paths:
         - AMBIGUOUS_ROUTE 代选：提交 `interactionAction=AUTO_SELECT`。
         - AMBIGUOUS_ROUTE 其他：提交答案或附件，重新调用 Intent。
         - 拒答切换确认：提交 `approved=true/false`；到达 autoActionAt 后前端提交 `approved=true`。
-        - Relay/DomainAgent 问卷：严格使用 `questionnaireAnswers.label`，忽略使用 `ignore=true`，不支持附件。
-          DomainAgent 续跑复用原user/assistant，使用原Binding向同一HTTP地址发送approval-response，
-          不重发query/messages/附件；下游再次拒答使用发问时保存的逻辑入口及专家范围重意图。
+        - Relay 问卷：严格使用 `questionnaireAnswers.label`，忽略使用 `ignore=true`。
 
         多入口前端应在每次可能调用或重新调用 Intent 的请求中显式提交当前入口的
         `intentAccessName`，包括普通提问、直连 DomainAgent、EDIT、REGENERATE、强制纠偏及
@@ -989,7 +986,7 @@ paths:
         - 路由切换确认的 autoActionAt 已到：前端提交 approved=true。
         - Relay 的 autoActionAt 已到：前端提交 ignore=true。
 
-        run-A 与续接 run-B 使用不同 runId，但 AMBIGUOUS_ROUTE 和 Relay/DomainAgent 问卷会复用同一个 assistant。
+        run-A 与续接 run-B 使用不同 runId，但 AMBIGUOUS_ROUTE 和 Relay 问卷会复用同一个 assistant。
         run-B 处于 active 状态时，本接口继续返回 interactionId、interactionType 和 assistantMessageId；
         前端使用 assistantMessageId 定位历史消息，并将 run-B 的 Resume 事件追加到同一个 assistant。
 
@@ -2231,34 +2228,34 @@ components:
                   status: STARTED
                   userMessageId: msg_user
     WebSocketWaitingUser:
-      summary: DomainAgent 问卷等待；之后产生 done，回答改订阅新 Run topic
+      summary: Relay 问卷等待；之后产生 done，回答改订阅新 Run topic
       value:
         type: message
-        topicId: chat-run-run_question_da
-        offset: '1702'
+        topicId: chat-run-run_question_relay
+        offset: '1712'
         payload:
           type: conversation-turn-stream
           payload:
             type: stream-item
             conversationId: session_demo
-            turnId: run_question_da
-            streamItemId: evt_1702
-            serverTimestampMs: 1789516801702
+            turnId: run_question_relay
+            streamItemId: evt_1712
+            serverTimestampMs: 1789516801712
             encodedItem:
               encoding: chat-event-json-v1
               event: run.waiting_user
               data:
-                runId: run_question_da
+                runId: run_question_relay
                 sessionId: session_demo
-                sequence: 1702
+                sequence: 1712
                 type: run.waiting_user
                 payload:
                   status: WAITING_USER
                   interactionType: AGENT_CLARIFICATION
-                  interactionId: interaction_da
+                  interactionId: interaction_relay
                   messageReady: true
-                  assistantMessageId: msg_question_da
-                  feedbackTargetMessageId: msg_question_da
+                  assistantMessageId: msg_question_relay
+                  feedbackTargetMessageId: msg_question_relay
                   expiresAt: '2026-09-17T00:00:00Z'
     WebSocketAsyncRunning:
       summary: 异步等待不产生 done，原 topic 可继续接收回调
@@ -3167,7 +3164,7 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: Relay/DomainAgent 问卷忽略或路由切换自动同意的建议绝对时间；页面关闭时后端不会代为提交
+          description: Relay 问卷忽略或路由切换自动同意的建议绝对时间
         autoActionTimeoutMs:
           type: integer
           format: int64
@@ -3569,7 +3566,6 @@ components:
 
     RelayQuestionnaireCardPayload:
       type: object
-      description: Relay与DomainAgent共用的问卷展示结构；source区分provider，答案提交结构相同
       required: [sourceType, approval_id, operation_type, questions]
       properties:
         source:

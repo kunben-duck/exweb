@@ -154,21 +154,9 @@ final class DomainAgentRefusalCoordinator {
                 || context.route().selectedAgentCode().isBlank()) {
             return Flux.error(new IllegalStateException("DomainAgent 路由缺少目标 ID"));
         }
-        return execute(context, agentRuntimeExecutor.execute(runtimeExecutionContext(context)),
-                java.util.function.UnaryOperator.identity());
-    }
-
-    /** 问卷续跑共享拒答状态机，但只订阅答案控制流，不重复发起普通 query。 */
-    Flux<ChatEvent> execute(DomainAgentRunContext context, Flux<ChatEvent> source,
-                           java.util.function.UnaryOperator<DomainAgentRunContext> prepareReroute) {
-        if (context.route() == null || context.route().selectedAgentCode() == null
-                || context.route().selectedAgentCode().isBlank()) {
-            return Flux.error(new IllegalStateException("DomainAgent 路由缺少目标 ID"));
-        }
         AtomicReference<DomainAgentRefusal> refusalRef = new AtomicReference<>();
         AtomicReference<Sinks.One<Void>> refusalPersistedRef = new AtomicReference<>();
-        Flux<ChatEvent> current = source
-                .doOnNext(event -> DomainAgentQuestionnaireContext.capture(event, context))
+        Flux<ChatEvent> current = agentRuntimeExecutor.execute(runtimeExecutionContext(context))
                 .map(event -> eventFactory.enrichControlEvent(event, context.route().selectedAgentCode()))
                 .map(event -> acknowledgementEvent(event, refusalRef, refusalPersistedRef))
                 .takeUntil(event -> refusalRef.get() != null);
@@ -177,8 +165,7 @@ final class DomainAgentRefusalCoordinator {
             Mono<Void> persistenceGate = persisted == null
                     ? Mono.empty()
                     : persisted.asMono().publishOn(eventIoScheduler);
-            return persistenceGate.thenMany(Flux.defer(() -> continueAfterRefusal(
-                            refusalRef.get() == null ? context : prepareReroute.apply(context), refusalRef.get()))
+            return persistenceGate.thenMany(Flux.defer(() -> continueAfterRefusal(context, refusalRef.get()))
                     .subscribeOn(eventIoScheduler));
         }));
     }

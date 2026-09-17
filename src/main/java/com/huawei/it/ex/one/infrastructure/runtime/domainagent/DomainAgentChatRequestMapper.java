@@ -5,7 +5,6 @@
 package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
-import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 
@@ -55,41 +54,6 @@ public class DomainAgentChatRequestMapper {
         next.put("query", request.query());
         next.put("sessionId", sessionId(request));
         return Collections.unmodifiableMap(next);
-    }
-
-    public Map<String, Object> toInteractionWireRequest(AgentRuntimeInteractionResponseRequest request) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("type", "approval-response");
-        body.put("runId", requiredText(request.runId()));
-        body.put("messageId", requiredText(request.runtimeMetadata().get("userMessageId")));
-        body.put("sessionId", requiredText(request.runtimeSessionId()));
-        body.put("skillId", requiredText(request.runtimeMetadata().get("skillId")));
-        body.put("request_id", requiredText(request.approvalId()));
-        Object approved = request.responsePayload().get("approved");
-        Object answers = request.responsePayload().get("questionnaireAnswers");
-        if (!(approved instanceof Boolean) || !(answers instanceof Map<?, ?> values)) {
-            throw new IllegalArgumentException("DomainAgent questionnaire response is incomplete");
-        }
-        Map<String, Object> normalized = new LinkedHashMap<>();
-        if (Boolean.TRUE.equals(approved) && values.get("label") instanceof Map<?, ?> labels && !labels.isEmpty()) {
-            normalized.put("label", labels);
-            normalized.put("ignore", false);
-        } else if (Boolean.FALSE.equals(approved) && Boolean.TRUE.equals(values.get("ignore"))) {
-            normalized.put("ignore", true);
-        } else {
-            throw new IllegalArgumentException("DomainAgent questionnaire response is invalid");
-        }
-        body.put("approved", approved);
-        body.put("scope", "once");
-        body.put("questionnaire_answers", normalized);
-        return Collections.unmodifiableMap(body);
-    }
-
-    private String requiredText(Object value) {
-        if (!(value instanceof String text) || text.isBlank()) {
-            throw new IllegalArgumentException("DomainAgent questionnaire requires trusted identifiers");
-        }
-        return text;
     }
 
     private String sessionId(DomainAgentRequest request) {

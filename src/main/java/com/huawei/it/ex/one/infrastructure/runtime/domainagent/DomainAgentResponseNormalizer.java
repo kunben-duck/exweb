@@ -21,12 +21,10 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * DomainAgent eventStream 响应归一化器。
@@ -71,7 +69,7 @@ public class DomainAgentResponseNormalizer {
     }
 
     public List<ChatEvent> normalize(String runId, String sessionId, String chunk, DomainAgentStreamState state) {
-        if (chunk == null || chunk.isEmpty() || (state != null && state.waitingUser)) {
+        if (chunk == null || chunk.isEmpty()) {
             return List.of();
         }
         DomainAgentStreamState streamState = state == null ? newStreamState() : state;
@@ -88,10 +86,6 @@ public class DomainAgentResponseNormalizer {
             }
             if (extraction.frame() != null && !extraction.frame().isBlank()) {
                 events.addAll(normalizeFrame(runId, sessionId, extraction.frame(), streamState));
-                if (streamState.waitingUser) {
-                    streamState.frameBuffer.setLength(0);
-                    break;
-                }
             }
         }
         if (!streamState.frameBuffer.isEmpty()) {
@@ -121,10 +115,6 @@ public class DomainAgentResponseNormalizer {
             throw DomainAgentProtocolException.invalidFrame(
                     "DomainAgent async callback cannot start another async task");
         }
-        if (questionnaireFrame(frame)) {
-            throw DomainAgentProtocolException.invalidFrame(
-                    "DomainAgent async callback cannot request user input");
-        }
         return normalizeJson(runId, sessionId, frame, state == null ? newStreamState() : state);
     }
 
@@ -135,7 +125,7 @@ public class DomainAgentResponseNormalizer {
      * 才输出诊断事件，避免把半截 DataBuffer 误判为业务事件。</p>
      */
     public List<ChatEvent> finish(String runId, String sessionId, DomainAgentStreamState state) {
-        if (state == null || state.waitingUser) {
+        if (state == null) {
             return List.of();
         }
         List<ChatEvent> events = new ArrayList<>();
@@ -348,48 +338,6 @@ public class DomainAgentResponseNormalizer {
         }
     }
 
-    private boolean questionnaireFrame(JsonNode root) {
-        return "approval-request".equals(text(root, "type"))
-                && "questionnaire".equals(text(root, "operation_type"));
-    }
-
-    private void validateQuestionnaire(JsonNode root) {
-        JsonNode approvalId = root.get("approval_id");
-        JsonNode questions = root.get("questions");
-        if (approvalId == null || !approvalId.isTextual() || approvalId.asText().isBlank()
-                || approvalId.asText().codePointCount(0, approvalId.asText().length()) > 128
-                || questions == null || !questions.isArray() || questions.isEmpty()) {
-            throw DomainAgentProtocolException.invalidFrame("DomainAgent questionnaire requires approval_id and questions");
-        }
-        Set<String> names = new HashSet<>();
-        for (JsonNode item : questions) {
-            JsonNode question = item.get("question");
-            if (question == null || !question.isTextual() || question.asText().isBlank()
-                    || !names.add(question.asText())) {
-                throw DomainAgentProtocolException.invalidFrame("DomainAgent questionnaire questions must be nonempty and unique");
-            }
-        }
-    }
-
-    private List<ChatEvent> questionnaireEvents(String runId, String sessionId, JsonNode root,
-                                               DomainAgentStreamState state) {
-        validateQuestionnaire(root);
-        List<ChatEvent> events = new ArrayList<>(flushPendingContent(runId, sessionId, state));
-        Map<String, Object> payload = new LinkedHashMap<>();
-        for (String field : List.of("type", "approval_id", "operation_type", "mode", "message",
-                "questions", "metadata", "risk_level", "agent_name", "parent_instance_id", "timestamp")) {
-            if (root.hasNonNull(field)) {
-                payload.put(field, sanitizeBusiness(root.get(field)));
-            }
-        }
-        payload.put("source", "domain-agent");
-        payload.put("sourceType", "approval-request");
-        // 问卷是本轮 HTTP 边界，不是任务完成；等待事实由上层终态事务保存。
-        state.waitingUser = true;
-        events.add(RuntimeEvent.card(runId, sessionId, payload));
-        return List.copyOf(events);
-    }
-
     private List<ChatEvent> normalizeJson(String runId, String sessionId, JsonNode root, DomainAgentStreamState state) {
         if (root == null || root.isNull() || root.isMissingNode()) {
             return List.of();
@@ -400,9 +348,6 @@ public class DomainAgentResponseNormalizer {
                     Map.of("value", truncate(root.asText(""))))));
         }
         List<ChatEvent> events = new ArrayList<>();
-        if (questionnaireFrame(root)) {
-            return questionnaireEvents(runId, sessionId, root, state);
-        }
         if (asyncTaskEnabled && "agent.async_started".equals(text(root, "type"))) {
             if (state != null && state.asyncStarted) {
                 throw DomainAgentProtocolException.invalidFrame(
@@ -1069,6 +1014,5 @@ public class DomainAgentResponseNormalizer {
         private final StringBuilder frameBuffer = new StringBuilder();
         private DomainAgentPendingFrame pendingFrame;
         private boolean asyncStarted;
-        private boolean waitingUser;
     }
 }

@@ -58,11 +58,10 @@ class ChatFlowFoundationConfiguration {
     @Bean
     RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy(
             ObjectProvider<ChatInteractionProperties> interactionPropertiesProvider,
-            @Value("${financeex.relay.questionnaire-wait-timeout:0s}") String timeout,
-            @Value("${financeex.domain-agent.questionnaire-wait-timeout:0s}") String domainAgentTimeout) {
+            @Value("${financeex.relay.questionnaire-wait-timeout:0s}") String timeout) {
         return new RelayQuestionnaireWaitPolicy(
                 interactionPropertiesProvider.getIfAvailable(),
-                DurationStyle.detectAndParse(timeout), DurationStyle.detectAndParse(domainAgentTimeout));
+                DurationStyle.detectAndParse(timeout));
     }
 
     @Bean

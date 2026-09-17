@@ -427,8 +427,6 @@ financeex:
           success-status-field: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_FIELD:status}
           success-status-value: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_VALUE:200}
   domain-agent:
-    # 仅向前端提供自动忽略截止时间，不注册后端定时提交任务。
-    questionnaire-wait-timeout: ${FINANCEEX_DOMAIN_AGENT_QUESTIONNAIRE_WAIT_TIMEOUT:0s}
     # 仅用于 targetType=DOMAIN_AGENT 的财经领域 DomainAgent 直连调用路径；默认关闭。
     enabled: ${FINANCEEX_DOMAIN_AGENT_ENABLED:false}
     base-url: ${FINANCEEX_DOMAIN_AGENT_BASE_URL:}

@@ -6,8 +6,6 @@ package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntime;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequest;
-import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
-import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
@@ -33,7 +31,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConditionalOnProperty(prefix = "financeex.domain-agent", name = "enabled", havingValue = "true")
-public class DomainAgentRuntime implements AgentRuntime, AgentRuntimeInteraction {
+public class DomainAgentRuntime implements AgentRuntime {
     public static final String PROVIDER = "domain-agent";
 
     private final DomainAgentClient client;
@@ -66,16 +64,6 @@ public class DomainAgentRuntime implements AgentRuntime, AgentRuntimeInteraction
                 request.forwardHeaders()
         );
         return Flux.concat(Flux.just(selectedDomainAgentEvent(domainRequest, request)), client.query(domainRequest));
-    }
-
-    @Override
-    public boolean supportsWaitingUserResponse(String runtimeProvider) {
-        return PROVIDER.equals(runtimeProvider);
-    }
-
-    @Override
-    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
-        return client.continueWithUserResponse(request);
     }
 
     @Override

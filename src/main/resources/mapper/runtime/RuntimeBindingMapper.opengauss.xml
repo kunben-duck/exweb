@@ -126,7 +126,7 @@
     </select>
 
     <!--
-      只刷新仍由 source run 持有的 ACTIVE Relay/DomainAgent Binding，不创建新 Binding。
+      只刷新仍由 source run 持有的 ACTIVE Relay Binding；不创建新 Binding，也不改变 Relay session。
       入参: row 提供 Binding 主键、可信归属和待刷新状态，expectedLastRunId 为等待态来源 run 标识。
     -->
     <update id="updateInteractionResume">
@@ -142,8 +142,7 @@
           AND tenant_id = #{row.tenantId}
           AND user_id = #{row.userId}
           AND chat_session_id = #{row.chatSessionId}
-          AND provider = #{row.provider}
-          AND provider IN ('relay', 'domain-agent')
+          AND provider = 'relay'
           AND status = 'ACTIVE'
           AND last_run_id = #{expectedLastRunId}
     </update>

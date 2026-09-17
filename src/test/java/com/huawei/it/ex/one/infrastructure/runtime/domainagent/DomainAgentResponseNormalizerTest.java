@@ -24,48 +24,6 @@ class DomainAgentResponseNormalizerTest {
     private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(objectMapper);
 
     @Test
-    void questionnaireEndsChunkAndRetainsOnlyPrecedingContent() {
-        var state = normalizer.newStreamState();
-        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
-                data: {"content":"before"}
-
-                data: {"type":"approval-request","approval_id":"q1","operation_type":"questionnaire","mode":"questionnaire","questions":[{"question":"期间","options":[{"label":"本月"}],"multi_select":false}],"metadata":{"token":"secret","business":"kept"}}
-
-                data: {"content":"must not appear"}
-
-                data: {"endFlag":true}
-
-                """, state);
-        assertThat(events).extracting(ChatEvent::type).containsExactly("message.delta", "runtime.card");
-        assertThat(events.getLast().payload()).containsEntry("source", "domain-agent")
-                .containsEntry("sourceType", "approval-request").containsEntry("approval_id", "q1");
-        assertThat(events.getLast().payload().toString()).contains("期间", "本月", "kept").doesNotContain("secret");
-        assertThat(normalizer.normalize("run1", "session1", "data: {\"content\":\"late\"}\n\n", state)).isEmpty();
-        assertThat(normalizer.finish("run1", "session1", state)).isEmpty();
-    }
-
-    @Test
-    void malformedQuestionnaireFailsInsteadOfBecomingOrdinaryCard() {
-        for (String fields : List.of("\"questions\":[]", "\"approval_id\":\"q1\",\"questions\":[]",
-                "\"approval_id\":\"q1\",\"questions\":[{\"question\":\" \"}]",
-                "\"approval_id\":\"q1\",\"questions\":[{\"question\":\"same\"},{\"question\":\"same\"}]")) {
-            assertThatThrownBy(() -> normalizer.normalize("r", "s",
-                    "data: {\"type\":\"approval-request\",\"operation_type\":\"questionnaire\"," + fields + "}\n\n"))
-                    .isInstanceOf(DomainAgentProtocolException.class);
-        }
-    }
-
-    @Test
-    void callbackRejectsQuestionnaireBeforeProducingBusinessEvents() throws Exception {
-        var frame = objectMapper.readTree("""
-                {"type":"approval-request","operation_type":"questionnaire","approval_id":"q1",
-                 "questions":[{"question":"期间"}]}
-                """);
-        assertThatThrownBy(() -> normalizer.normalizeCallbackFrame("r", "s", frame, normalizer.newStreamState()))
-                .isInstanceOf(DomainAgentProtocolException.class);
-    }
-
-    @Test
     void defaultsStructuredFrameLimitTo256KiB() {
         DomainAgentProperties properties = new DomainAgentProperties();
 

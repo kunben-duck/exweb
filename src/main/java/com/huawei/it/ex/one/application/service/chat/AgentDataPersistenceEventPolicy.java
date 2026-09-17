@@ -78,8 +78,7 @@ final class AgentDataPersistenceEventPolicy {
 
     private boolean relayQuestionnaireRequest(ChatEvent event) {
         if (event == null || !"runtime.card".equals(event.type()) || event.payload() == null
-                || !("relay".equals(text(event.payload().get("source")))
-                        || "domain-agent".equals(text(event.payload().get("source"))))
+                || !"relay".equals(text(event.payload().get("source")))
                 || !RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(event.payload())
                 || text(event.payload().get("approval_id")) == null) {
             return false;

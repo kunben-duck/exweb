@@ -40,58 +40,6 @@ import java.util.Map;
 import java.util.Optional;
 class RuntimeBindingApplicationServiceTest {
     @Test
-    void domainQuestionnaireResumeAndConditionalRestoreKeepOriginalTargetAndSession() {
-        Instant now = Instant.now();
-        RuntimeBinding source = new RuntimeBinding("binding-q", "tenant1", "user1", "session1", "domain-agent",
-                "assistant", "domain-session", RuntimeBindingStatus.ACTIVE, "run-a", now.plusSeconds(600), now, now,
-                Map.of("domainAgentId", "skill-a", "routeSource", "front-selected"));
-        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
-        repository.saved = source;
-        var service = service(repository, new InMemoryRuntimeBindingCache());
-        ChatInteractionRequest interaction = domainQuestionnaire(now);
-        RunExecutionClaim claim = new RunExecutionClaim("run-b", "owner", 7L);
-        RuntimeBinding next = service.resumeDomainAgentForInteraction(interaction, "run-b", claim, "skill-a");
-        assertThat(next.id()).isEqualTo(source.id());
-        assertThat(next.metadata()).isEqualTo(source.metadata());
-        assertThat(next.runtimeSessionId()).isEqualTo(source.runtimeSessionId());
-        assertThat(next.expiresAt()).isEqualTo(source.expiresAt());
-        assertThat(repository.resumeClaim).isEqualTo(claim);
-        assertThat(repository.resumeExpectedLastRunId).isEqualTo("run-a");
-        assertThat(service.restoreUnstartedDomainAgentInteraction(next, "run-b", "run-a")).isTrue();
-        assertThat(repository.saved.lastRunId()).isEqualTo("run-a");
-        repository.saved = next.withRun("run-c", source.expiresAt());
-        assertThat(service.restoreUnstartedDomainAgentInteraction(next, "run-b", "run-a")).isFalse();
-        assertThat(repository.saved.lastRunId()).isEqualTo("run-c");
-    }
-
-    @Test
-    void domainQuestionnaireRejectsChangedTargetOrLostOwnerBeforeWriting() {
-        Instant now = Instant.now();
-        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
-        RuntimeBinding source = new RuntimeBinding("binding-q", "tenant1", "user1", "session1", "domain-agent",
-                "assistant", "domain-session", RuntimeBindingStatus.ACTIVE, "run-a", null, now, now,
-                Map.of("domainAgentId", "skill-a"));
-        repository.saved = source;
-        var service = service(repository, new InMemoryRuntimeBindingCache());
-        RunExecutionClaim claim = new RunExecutionClaim("run-b", "old-owner", 7L);
-        assertThatThrownBy(() -> service.resumeDomainAgentForInteraction(domainQuestionnaire(now), "run-b", claim, "skill-b"))
-                .isInstanceOf(IllegalStateException.class);
-        assertThat(repository.saved).isSameAs(source);
-        repository.resumeGuardAccepted = false;
-        assertThatThrownBy(() -> service.resumeDomainAgentForInteraction(domainQuestionnaire(now), "run-b", claim, "skill-a"))
-                .isInstanceOf(ChatEventAppendRejectedException.class);
-        assertThat(repository.saved).isSameAs(source);
-    }
-
-    private ChatInteractionRequest domainQuestionnaire(Instant now) {
-        return new ChatInteractionRequest("interaction", "tenant1", "user1", "session1", "run-a", null,
-                "user-message", "assistant", "domain-agent", "binding-q", "domain-session", "q1",
-                ChatInteractionType.AGENT_CLARIFICATION, ChatInteractionStatus.WAITING,
-                Map.of("sourceType", "approval-request", "operation_type", "questionnaire"), Map.of(),
-                now.plusSeconds(600), null, null, now, now);
-    }
-
-    @Test
     void guardedRouteSwitchRejectsOwnershipLossBeforeBindingMutation() {
         Instant now = Instant.now();
         RuntimeBinding source = new RuntimeBinding(

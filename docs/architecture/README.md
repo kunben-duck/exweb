@@ -1,5 +1,11 @@
 # FinanceEXChatService 正式版架构设计
 
+基于当前实现的场景双层时序图、风险登记、加固任务、高可用测试与故障演练，参见
+[高可用落地蓝图](high-availability/README.md#overview)；已执行的本地检查与待执行的环境验收分别记录。
+
+WCM、ALB、Jalor、ADS与Admin/Tool/Relay/Chat共享数据依赖，以及跨AZ、跨Region主备、静态备用源和区域接管/回切，参见
+[部署架构与容灾设计](high-availability/deployment.md)。下文的DomainAgent表示逻辑provider；实际业务流由Chat携带skillId经Tool转发至第三方，Relay由Chat独立连接。
+
 主编排代码阅读顺序、状态机、记忆边界和调试入口参见
 [FinanceEXChatService 开发导读](../onboarding.md)。
 

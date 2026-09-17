@@ -1,8 +1,8 @@
 # FinanceEXChatService 当前架构图
 
-> 全接口运行视图、Servlet有效默认容量、依赖超时、风险与验证记录见[高可用审计文档集](high-availability/README.md)（基线 `ab52f9bb`，仅分析，不代表加固建议已经实施）。
+> 全接口运行视图、Servlet有效默认容量、依赖超时、风险与验证记录见[高可用审计文档集](high-availability/README.md)（以当前基线为准，不代表加固建议已经实施）。
 
-> Run细节按[入口/准入/启动](high-availability/run-startup-details.md)、[会话标题提炼](high-availability/session-title-flow.md)、[路由与第三方](high-availability/run-routing-details.md)、[事件与控制](high-availability/run-control-details.md)分层展开，包含逐步骤风险表。入站为Jalor网关；实际网关超时、重试、ACL与容量尚未提供，不代表已验证这些保障。
+> 当前场景、资源状态和接口索引见[场景与资源](high-availability/scenarios.md)。Run链路按[受理与启动](high-availability/scenarios.md#s01)、[路由](high-availability/scenarios.md#s02)、[流式输出](high-availability/scenarios.md#s03)、[交互](high-availability/scenarios.md#s04)、[Stop](high-availability/scenarios.md#s05)及[异步回调](high-availability/scenarios.md#s06)阅读，标题见[旁路场景](high-availability/scenarios.md#s11)。物理入口为ALB→Jalor→Chat，实际策略和容量仍需环境验收。
 
 > 当前代码架构快照。实线表示同步或严格有序调用，粗线表示流式消息，虚线表示异步或 best-effort；橙色节点为周期治理任务。
 

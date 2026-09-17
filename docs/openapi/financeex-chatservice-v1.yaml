@@ -3179,11 +3179,11 @@ components:
         bindingTargetType:
           type: string
           nullable: true
-          description: 当前绑定目标类型；固定Relay专家返回DOMAIN_EXPERT
+          description: 当前有效ACTIVE绑定目标类型；所有Relay专家（含Intent命中）返回DOMAIN_EXPERT，正常完成后仍保留绑定
         bindingTargetId:
           type: string
           nullable: true
-          description: DomainAgent技能ID或固定Relay专家roleName
+          description: DomainAgent技能ID或Relay专家roleName；后者不等同于Intent规范化accessName或assistant的skillId
         bindingIntentCode:
           type: string
           nullable: true

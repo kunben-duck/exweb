@@ -115,6 +115,19 @@ ChatService 在 Intent 的规范化 `accessName` 区分大小写精确命中
 `metadata` 及 WebSocket Cookie Header 与普通问答沿用同一透传规则；当前问题只出现在 `content`。
 专家模式和 Delegate 使用独立的可恢复 Binding，不交叉复用 Runtime session。
 
+ChatService中所有Relay专家Binding（包括Intent命中）正常完成后保持`ACTIVE`，下一轮优先
+使用原roleName和runtimeSessionId执行`RESUME`；Delegate仍在正常完成后转为`RESUMABLE`。
+Intent命中不设置前端手动固定标记；`stream-status`返回`DOMAIN_EXPERT`、roleName及已保存的
+意图摘要。旧RESUMABLE专家记录不会批量激活，仅在再次选中匹配档案时恢复。配置、业务及
+问卷续跑报文不变，`forceReroute`、显式换目标及Stop继续使用ChatService现有处理规则。
+
+普通Intent命中专家后，再在同一ChatService会话手动选择同名专家，无开放Interaction且
+Profile、appMode及专家范围匹配时，保留原Binding和真实runtimeSessionId，继续发送`RESUME`，
+同时将该Binding标记为前端固定选择。此复用不要求原Binding已经具有固定标记。
+Delegate转专家、不同角色及跨聚合专家范围仍不交叉恢复；没有匹配的可恢复Binding时发送`NEW`。
+新Binding初始化的sessionId仍取ChatService sessionId，因此不能仅以sessionId字符串相同判断续接，
+也不代表不同Binding在Relay端已获得物理会话隔离。
+
 ### 2.3 approval-response — 回复问卷
 
 收到 `approval-request(operation_type=questionnaire)` 后，通过此消息提交单选、多选或自定义文本。

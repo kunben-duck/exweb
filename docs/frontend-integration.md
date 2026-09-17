@@ -637,7 +637,7 @@ FULL和no-store均保留新开始事件中的关联；本次不扩展`stream-sta
 | `autoActionTimeoutMs` | Relay 问卷前端建议等待毫秒数；未配置时为 `null`。 |
 | `autoActionType` | 当前固定为 `IGNORE_QUESTIONNAIRE`；未配置时为 `null`。 |
 | `bindingProvider` | 当前会话绑定 provider，例如 `domain-agent` 或 `relay`。 |
-| `bindingTargetType` / `bindingTargetId` | 当前绑定目标类型和目标 ID；DomainAgent 绑定时目标 ID 通常是 DomainAgentId/skillId。 |
+| `bindingTargetType` / `bindingTargetId` | 当前有效ACTIVE绑定的目标类型和ID；DomainAgent返回技能ID，Relay专家（包括Intent命中）返回`DOMAIN_EXPERT`及roleName。 |
 | `bindingIntentCode` / `bindingIntentName` | 当前绑定对应的意图编码和名称；无意图来源时为空。 |
 | `bindingRouteSource` | 绑定来源，例如 `front-selected`、`intent-agent`、`use-case-library`。 |
 | `bindingUpdatedAt` | 当前绑定最近更新时间。 |
@@ -645,6 +645,26 @@ FULL和no-store均保留新开始事件中的关联；本次不扩展`stream-sta
 | `activeRunPhase` | DomainAgent后台任务等待时为`ASYNC_RUNNING`；普通运行态为空。此阶段`activeRunStatus`仍为`RUNNING`。 |
 | `asyncExpiresAt` | DomainAgent后台任务等待截止时间；超时由服务端收口为`run.failed(code=DOMAIN_AGENT_ASYNC_TIMEOUT)`。 |
 | `selectedExpert` | 当前聚合意图父专家，包含`expertId/expertName/intentAccessName`；未选择或已显式切换到普通目标时为`null`。 |
+
+Intent命中Relay专家后，Binding正常完成仍保持ACTIVE。`stream-status`相关字段示例（非完整响应）：
+
+```json
+{
+  "activeRunId": null,
+  "activeRunStatus": null,
+  "bindingProvider": "relay",
+  "bindingTargetType": "DOMAIN_EXPERT",
+  "bindingTargetId": "financial-analysis",
+  "bindingIntentCode": "finance_analysis",
+  "bindingIntentName": "经营分析专家",
+  "bindingRouteSource": "intent-agent"
+}
+```
+
+没有活动Run不代表没有Binding。下一轮未显式换目标时优先续接专家；需要重新意图时传现有
+`forceReroute=true`。Binding尚未建立、已取消或不可路由时不返回有效绑定摘要；旧Binding缺失的
+意图摘要不额外查询补齐。`bindingTargetId`是roleName，不保证等于assistant记录的实际`skillId`。
+此变更不新增WebSocket选择事件，Intent命中的专家不会被标记为前端手动选择。
 
 ### `MessageFeedbackDto`
 
@@ -844,7 +864,7 @@ sequenceDiagram
   ```
   前端可展示技能选择入口，用户选中后重新调用 `/v1/chat/runs`，传 `targetType=DOMAIN_AGENT,targetId=<skillId>`。
 - 前端手动选择领域 Agent 时，调用 `/v1/chat/runs` 传 `targetType=DOMAIN_AGENT,targetId=...`。后端会把该会话绑定到目标 DomainAgent，`stream-status` 中可通过 `bindingProvider/bindingTargetId/bindingRouteSource` 查看当前绑定。
-- 未传 target 时，后端优先续接当前 active DomainAgent binding。普通 Relay 回答正常完成后把 binding 改为 `RESUMABLE`，因此下次提交问题仍调用用例库或意图服务；再次进入 Relay 时只恢复 Profile、`appMode` 和 `roleName` 都匹配的 session。意图服务 `ROUTE_SINGLE.items[0].accessName` 先移除一次可选通用前缀；归一化值若精确命中后端敏感信息配置则进入 Relay Delegate，否则命中专家前缀时移除该前缀并把剩余后缀作为 Relay Domain Expert 的动态 `roleName`，均未命中才作为 `DomainAgentId/skillId`。前端直接选择同名 DomainAgent不会触发该转换。
+- 未传target时，后端优先续接当前ACTIVE DomainAgent或Relay专家Binding。Relay Delegate回答正常完成后把Binding改为`RESUMABLE`，因此下次提交问题仍调用用例库或意图服务；再次进入 Relay 时只恢复 Profile、`appMode` 和 `roleName` 都匹配的 session。意图服务 `ROUTE_SINGLE.items[0].accessName` 先移除一次可选通用前缀；归一化值若精确命中后端敏感信息配置则进入 Relay Delegate，否则命中专家前缀时移除该前缀并把剩余后缀作为 Relay Domain Expert 的动态 `roleName`，均未命中才作为 `DomainAgentId/skillId`。前端直接选择同名 DomainAgent不会触发该转换。
 
 - 敏感信息和 Domain Expert 的公开 `intent-result` 都保留原始 `routeAction=ROUTE_SINGLE`、`intentId/intentName/skillId`，但返回 `routeType=AGENT_RUNTIME,targetProvider=relay`，不返回 DomainAgent `targetId`。敏感信息使用普通 Delegate `user-message`并共享 Delegate Binding；专家使用动态 `roleName` 和独立 Profile。前端不需要提交 Runtime Profile、`appMode` 或 `roleName`。敏感信息 run 仍逐帧接收 `message.delta/message.snapshot`及必要的会话状态和问卷卡片，但不会收到 Relay thinking、progress、agent、tool、reference、普通 card 或未知过程事件；这些过程事件也不支持 Resume。下一轮普通 Delegate 不继承该过滤模式。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
@@ -2777,13 +2797,13 @@ DomainAgent异步任务先输出`run.async_running`。无结果回调保持
 
 ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。下游原始响应不再单独持久化；Relay JSON frame 会作为标准事件的 `payload` 保存、推送和恢复。Relay payload 保留原始字段名和嵌套结构，后端只额外补充 `source=relay`、`sourceType=<Relay原始type>`、`runtimeSessionId`，前端可以按 Relay 接口文档解析 payload。
 
-Relay WebSocket 始终使用短连接：每个 run 新建下游 WS，先发送 `config`，首轮 `config.sessionId` 使用 ChatService `sessionId`，只以 `session-ready` 作为 config 阶段唯一完成信号。adapter 会将 `session-ready` 转成 `runtime.metadata`，payload 保留原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于回填 run/RuntimeBinding 的真实会话 ID；其他配置阶段初始化响应会被隔离。`/runs` 入口会通过服务端 `TraceContextProvider` 捕获当前 traceId，存在时发送到 `config.traceId`；普通问答随后还会把同一个值发送到顶层 `user-message.traceId`。该上下文不由前端提供、不持久化，前端 metadata 中同名 `traceId` 会被移除。adapter 把 `/v1/chat/runs.metadata` 中其余非敏感业务扩展作为 `user-message.metadata` 透传给 Relay；Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。Relay 出站 metadata 会由后端补充 `globalUserId` 和 `userAccount`，来源为入口固化的 `UserContext`，前端不需要传入且同名字段会被后端身份覆盖。本轮输出结束后释放物理连接；如果本轮正常 `run.completed`，ChatService 将 Relay RuntimeBinding 改为 `RESUMABLE`，下次普通提问重新路由；如果再次进入 Relay，则使用原真实 session ID 发送 `resume`。如果本轮进入 `AGENT_CLARIFICATION` 等待态，则保留 active RuntimeBinding，后续 `CONTINUE_INTERACTION` 新建短连接并发送 `config(RESUME) -> approval-response`，新的入口 traceId 只进入 config，不修改 approval-response。配置阶段若收到 `clear-session` 或明确的 session not found/corrupted，会永久取消该 binding 并让本轮失败；普通 `error/session-mismatch` 仍直接失败但不会在同一 run 内自动改发 `new`。`user-message` 后会丢弃回答开始前的前置 `session-state=idle/ready/running/agent_thinking` 和迟到 `config`；`relay-start` 或首个业务帧会打开回答阶段，`session-state=completed/waiting_user_input/paused` 即使没有前置业务帧也可闭合空输出轮次。普通问答阶段按 `FINANCEEX_RELAY_WS_HEARTBEAT_INTERVAL` 定时发送 `{ "type": "heartbeat" }`，`heartbeat-response` 不写入事件表、不推送前端；任意业务帧或 `heartbeat-response` 都会刷新活跃时间，超过 `FINANCEEX_RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT` 无回包时，本轮转为 `run.failed` 并尽力发送 `stop_all_agents`。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 分别约束 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，每个阶段独立计时；opening 超时会取消待升级连接并以 `RELAY_WS_CONFIG_TIMEOUT` 结束普通或 Interaction run。其他 WS 配置继续分别约束最长运行、stop ack、控制连接空闲和单帧大小。这些配置不改变前端协议，也不负责拆分超大事件。Relay `approval-request(operation_type=questionnaire)` 会创建 `AGENT_CLARIFICATION` Interaction 等待态并输出 `run.waiting_user`；该帧本身会闭合当前用户轮次。单独的 `session-state=waiting_user_input` 仍只作为本次下游连接终态；`session-state=paused` 仅作为 stop 确认。
+Relay WebSocket 始终使用短连接：每个 run 新建下游 WS，先发送 `config`，首轮 `config.sessionId` 使用 ChatService `sessionId`，只以 `session-ready` 作为 config 阶段唯一完成信号。adapter 会将 `session-ready` 转成 `runtime.metadata`，payload 保留原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于回填 run/RuntimeBinding 的真实会话 ID；其他配置阶段初始化响应会被隔离。`/runs` 入口会通过服务端 `TraceContextProvider` 捕获当前 traceId，存在时发送到 `config.traceId`；普通问答随后还会把同一个值发送到顶层 `user-message.traceId`。该上下文不由前端提供、不持久化，前端 metadata 中同名 `traceId` 会被移除。adapter 把 `/v1/chat/runs.metadata` 中其余非敏感业务扩展作为 `user-message.metadata` 透传给 Relay；Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。Relay 出站 metadata 会由后端补充 `globalUserId` 和 `userAccount`，来源为入口固化的 `UserContext`，前端不需要传入且同名字段会被后端身份覆盖。本轮输出结束后释放物理连接；如果本轮正常`run.completed`，Delegate Binding转为`RESUMABLE`，下次普通提问重新路由；专家Binding保持ACTIVE，下一轮优先用原真实session ID发送`resume`。如果本轮进入 `AGENT_CLARIFICATION` 等待态，则保留 active RuntimeBinding，后续 `CONTINUE_INTERACTION` 新建短连接并发送 `config(RESUME) -> approval-response`，新的入口 traceId 只进入 config，不修改 approval-response。配置阶段若收到 `clear-session` 或明确的 session not found/corrupted，会永久取消该 binding 并让本轮失败；普通 `error/session-mismatch` 仍直接失败但不会在同一 run 内自动改发 `new`。`user-message` 后会丢弃回答开始前的前置 `session-state=idle/ready/running/agent_thinking` 和迟到 `config`；`relay-start` 或首个业务帧会打开回答阶段，`session-state=completed/waiting_user_input/paused` 即使没有前置业务帧也可闭合空输出轮次。普通问答阶段按 `FINANCEEX_RELAY_WS_HEARTBEAT_INTERVAL` 定时发送 `{ "type": "heartbeat" }`，`heartbeat-response` 不写入事件表、不推送前端；任意业务帧或 `heartbeat-response` 都会刷新活跃时间，超过 `FINANCEEX_RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT` 无回包时，本轮转为 `run.failed` 并尽力发送 `stop_all_agents`。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 分别约束 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，每个阶段独立计时；opening 超时会取消待升级连接并以 `RELAY_WS_CONFIG_TIMEOUT` 结束普通或 Interaction run。其他 WS 配置继续分别约束最长运行、stop ack、控制连接空闲和单帧大小。这些配置不改变前端协议，也不负责拆分超大事件。Relay `approval-request(operation_type=questionnaire)` 会创建 `AGENT_CLARIFICATION` Interaction 等待态并输出 `run.waiting_user`；该帧本身会闭合当前用户轮次。单独的 `session-state=waiting_user_input` 仍只作为本次下游连接终态；`session-state=paused` 仅作为 stop 确认。
 
 终态规则以本次统一协议为准：业务消息发送后，终态 `session-state` 即使前面没有 `relay-start`
 或正文事件也会被推送并闭合空输出轮次。前端不得自行等待 `agent-call(false)` 或
 `generate-response(is_final=true)`。
 
-上一段的 `session-ready/user-message` 描述适用于 Delegate。Domain Expert 还接受明确包含 `Ready to chat` 的 system config 帧，并发送带动态 `roleName` 的 `chat_expert`；专家 Profile 和角色不出现在公开请求字段中。Delegate 与不同专家角色分别保留匹配的 `RESUMABLE` Binding，下一次普通问题仍先走 Intent。问卷续接只发送 `approval-response`。Delegate 与专家均只在终态 `session-state=completed/waiting_user_input/paused` 后闭合；`idle`、`agent-call(false)`、`generate-response(is_final=true)`、`stream-complete/[DONE]` 均不得让前端提前结束本轮。
+上一段的 `session-ready/user-message` 描述适用于 Delegate。Domain Expert 还接受明确包含 `Ready to chat` 的 system config 帧，并发送带动态 `roleName` 的 `chat_expert`；专家 Profile 和角色不出现在公开请求字段中。Delegate完成后保留RESUMABLE，专家完成后保持ACTIVE并优先续接；存量专家RESUMABLE不会自动激活，只有再次命中匹配档案后恢复。问卷续接只发送 `approval-response`。Delegate 与专家均只在终态 `session-state=completed/waiting_user_input/paused` 后闭合；`idle`、`agent-call(false)`、`generate-response(is_final=true)`、`stream-complete/[DONE]` 均不得让前端提前结束本轮。
 
 等待用户输入后的续接统一从 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 进入。普通 `INTENT_CLARIFICATION` 属于路由阶段，会把回答保存为独立 user 消息并继续调用 intent-agent，下一轮问题或最终回答也保存为新的 assistant；`AMBIGUOUS_ROUTE` 是例外，指定候选或代选时跳过 intent-agent，输入“其他”时才重新调用，并始终复用原 assistant。`AGENT_CLARIFICATION` 属于 Runtime 执行阶段，由 `AgentRuntimeInteraction` 承载并继续复用原 assistant，当前 Relay WebSocket adapter 会发送 Relay `approval-response`；`ROUTE_SWITCH_CONFIRMATION` 属于 ChatService 路由确认，用户同意后才切换到候选 DomainAgent 或 Relay。
 
@@ -3444,9 +3464,16 @@ DomainAgent binding 返回值。
 
 首次选择会创建或恢复与该 `roleName` 精确匹配的 Relay Domain Expert Binding。正常完成后 Binding
 保持 `ACTIVE`，后续普通提问无需再传 target，仍通过 `chat_expert` 续接同一专家；再次显式选择同一专家时
-复用当前 Binding，选择其他专家或 DomainAgent 时取消旧 ACTIVE Binding 并切换。`forceReroute=true`、
+无开放 Interaction 且 Profile、`appMode` 和专家范围匹配时复用当前 Binding，选择其他专家或 DomainAgent 时取消旧 ACTIVE Binding 并切换。`forceReroute=true`、
 等待态 stop、会话删除或 Relay session 不可恢复会取消固定关系；运行中 stop 只停止当前 run，Binding 保留。
-由 Intent 动态选择的 Domain Expert 没有固定标记，正常完成后仍转为 `RESUMABLE`，不会改变既有行为。
+由 Intent 动态选择的 Domain Expert 初始没有固定标记，但正常完成后同样保持 `ACTIVE`。
+在同一会话手动选择该同名专家时，服务端保留原 Binding ID 和真实 `runtimeSessionId`，发送 `RESUME`，
+并将选择来源更新为 `front-selected`、设置固定标记。本次 `selectedIntent` 决定展示摘要，未传时回退为
+`roleName`；本轮及后续普通续接的 `skillId` 使用显式选择的 `targetId`，历史消息不改写。
+未手动选择的普通续接仍保留原 Intent 的技能标识。
+仅同一个 ChatService `sessionId` 不足以跨 Delegate、不同角色或聚合专家范围复用 Binding。
+切换到首次使用的其他专家时发送 `NEW`；如有匹配的 `RESUMABLE` 专家 Binding，则按原规则恢复，
+不重新激活 `CANCELLED` Binding。已有开放 Interaction 时仍按原等待态替换规则处理，不适用同名保留。
 
 每轮固定专家调用前会先推送并持久化一个 `runtime.metadata`，历史中对应 `METADATA` Part：
 

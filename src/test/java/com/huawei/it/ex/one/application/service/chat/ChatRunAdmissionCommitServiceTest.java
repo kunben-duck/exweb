@@ -189,6 +189,27 @@ class ChatRunAdmissionCommitServiceTest {
         assertThat(result.restorableAdmissionCancellations()).containsExactly(cancellation);
     }
 
+    @Test
+    void explicitExpertWithOpenInteractionStillCancelsAllActiveBindings() {
+        Fixture fixture = fixture();
+        ChatSession current = session(null);
+        AdmissionCancellation cancellation = cancellation();
+        when(fixture.sessionService().lockAndReloadForMessageMutation(
+                USER.tenantId(), USER.ownerUserId(), current)).thenReturn(current);
+        when(fixture.interactionService().cancelOpenBySessionAndCount(USER, current.id())).thenReturn(1);
+        when(fixture.bindingService().cancelActiveForAdmissionWithSnapshots(
+                USER.tenantId(), USER.ownerUserId(), current.id())).thenReturn(List.of(cancellation));
+
+        ChatRunAdmissionCommitService.AdmissionResult result = fixture.service().commitDirectRuntime(
+                new ChatRunAdmissionCommitService.DirectRuntimeAdmissionCommand(
+                        USER, command("DOMAIN_EXPERT", "financial-analysis", null), current, "run1", List.of(),
+                        new ExplicitRuntimeTarget(ExplicitRuntimeTarget.Type.DOMAIN_EXPERT, "financial-analysis")));
+
+        assertThat(result.cancelledBindings()).containsExactly(cancellation.cancelled());
+        verify(fixture.bindingService(), never())
+                .cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(any(), any(), any(), any());
+    }
+
     private Fixture fixture() {
         SessionApplicationService sessionService = mock(SessionApplicationService.class);
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);

@@ -18,6 +18,7 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
@@ -47,10 +48,12 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
+import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.RoutingPolicy;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -80,6 +83,240 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void intentRoutedExpertStaysActiveAndResumesUntilExplicitReroute(boolean historicalSession) {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        AtomicInteger useCaseCalls = new AtomicInteger();
+        AtomicInteger intentCalls = new AtomicInteger();
+        AtomicReference<AgentRuntimeRequest> captured = new AtomicReference<>();
+        String initialSessionId = historicalSession ? "session-history" : null;
+        if (historicalSession) {
+            Instant now = Instant.now();
+            sessions.save(new ChatSession(initialSessionId, "tenant1", "user1", "test", "ACTIVE",
+                    "web", now, now));
+            bindings.save(new RuntimeBinding("binding-history", "tenant1", "user1", initialSessionId,
+                    "relay", null, "relay-history-session", RuntimeBindingStatus.RESUMABLE, "old-run", null,
+                    now, now, RuntimeProfileMetadata.bindingMetadata(
+                            RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "financial-analysis")));
+        }
+        RouteSignalApplicationService routing = new RouteSignalApplicationService(
+                request -> {
+                    useCaseCalls.incrementAndGet();
+                    return UseCaseMatchResult.notMatched("not matched");
+                },
+                intentAgent((command, memory, user) -> {
+                    intentCalls.incrementAndGet();
+                    return new IntentDecision("finance_analysis", "经营分析专家", TaskComplexity.SIMPLE,
+                            0.99, true, "RE_financial-analysis", Map.of("routeAction", "ROUTE_SINGLE"),
+                            List.of(), Map.of());
+                }), new RoutingPolicy(0.85, 0.85, "RE_"), new RouteSignalProperties(true, true));
+        RelayAgentRuntime relay = new RelayAgentRuntime(new RelayRuntimeProtocolAdapter() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                captured.set(request);
+                assertThat(bindings.bindingsForProvider("relay"))
+                        .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                        .singleElement()
+                        .satisfies(binding -> assertThat(binding.metadata())
+                                .containsEntry("intentName", "经营分析专家")
+                                .doesNotContainKey(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY));
+                return Flux.just(
+                        RuntimeEvent.metadata(request.runId(), request.sessionId(), Map.of(
+                                "source", "relay", "sourceType", "session-ready",
+                                "runtimeSessionId", request.runtimeSessionId())),
+                        MessageSnapshotEvent.of(request.runId(), request.sessionId(), "expert answer"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        });
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routing, refusingDomainAgentClient(), relay, bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(), liveEventBus(),
+                new InMemoryInteractionRequestRepository());
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        List<ChatEvent> first = service.executeRun(user, new ChatCommand(
+                        "cmd-first", null, null, initialSessionId, null, "web", "分析经营情况", List.of(), Map.of()))
+                .collectList().block();
+        assertThat(first).isNotNull();
+        assertThat(first.getLast().type()).isEqualTo("run.completed");
+        assertThat(captured.get().runtimeSessionMode()).isEqualTo(
+                historicalSession ? RuntimeSessionMode.RESUME : RuntimeSessionMode.NEW);
+        RuntimeBinding expert = bindings.bindingsForProvider("relay").getFirst();
+        assertThat(expert.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(expert.metadata()).containsEntry("routeSource", "intent-agent")
+                .containsEntry("intentCode", "finance_analysis")
+                .containsEntry(IntentExpertContext.INVOCATION_SKILL_ID_KEY, "RE_financial-analysis");
+        assertThat(expert.runtimeSessionId()).isEqualTo(
+                historicalSession ? "relay-history-session" : expert.chatSessionId());
+        assertThat(first).noneMatch(event -> "selectedDomainExpert".equals(event.payload().get("sourceType")));
+
+        List<ChatEvent> next = service.executeRun(user, new ChatCommand(
+                        "cmd-next", null, null, expert.chatSessionId(), null, "web", "继续分析",
+                        List.of(), Map.of()))
+                .collectList().block();
+        assertThat(next).isNotNull();
+        assertThat(next.getLast().type()).isEqualTo("run.completed");
+        assertThat(useCaseCalls).hasValue(1);
+        assertThat(intentCalls).hasValue(1);
+        assertThat(captured.get().runtimeSessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(captured.get().runtimeSessionId()).isEqualTo(expert.runtimeSessionId());
+        assertThat(captured.get().routeTarget().runtimeRoleName()).isEqualTo("financial-analysis");
+        assertThat(captured.get().routeTarget().invocationSkillId()).isEqualTo("RE_financial-analysis");
+        assertThat(captured.get().routeTarget().routeSource()).isEqualTo("runtime-binding");
+        assertThat(bindings.bindingsForProvider("relay")).singleElement()
+                .extracting(RuntimeBinding::id).isEqualTo(expert.id());
+        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
+                .hasSize(2).allSatisfy(message -> assertThat(message.metadataJson())
+                        .contains("\"skillId\":\"RE_financial-analysis\""));
+
+        List<ChatEvent> rerouted = service.executeRun(user, new ChatCommand(
+                        "cmd-reroute", null, null, expert.chatSessionId(), null, "web", "重新判断",
+                        List.of(), Map.of(), null, null, ChatRunMode.NEXT, null, null, null, "user_correction"))
+                .collectList().block();
+        assertThat(rerouted).isNotNull();
+        assertThat(rerouted.getLast().type()).isEqualTo("run.completed");
+        assertThat(intentCalls).hasValue(2);
+        assertThat(bindings.bindingsForProvider("relay")).filteredOn(binding -> binding.id().equals(expert.id()))
+                .singleElement().extracting(RuntimeBinding::status).isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(bindings.bindingsForProvider("relay"))
+                .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE).hasSize(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void manualSelectionAfterIntentExpertResumesOriginalSession(boolean selectedIntentProvided) {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session-history", "tenant1", "user1", "test", "ACTIVE",
+                "web", now, now));
+        bindings.save(new RuntimeBinding("binding-history", "tenant1", "user1", "session-history",
+                "relay", null, "relay-original-session", RuntimeBindingStatus.RESUMABLE, "old-run", null,
+                now, now, RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "financial-analysis")));
+        AtomicInteger useCaseCalls = new AtomicInteger();
+        AtomicInteger intentCalls = new AtomicInteger();
+        AtomicInteger runtimeCalls = new AtomicInteger();
+        AtomicReference<AgentRuntimeRequest> captured = new AtomicReference<>();
+        RouteSignalApplicationService routing = new RouteSignalApplicationService(
+                request -> {
+                    useCaseCalls.incrementAndGet();
+                    return UseCaseMatchResult.notMatched("not matched");
+                },
+                intentAgent((command, memory, user) -> {
+                    intentCalls.incrementAndGet();
+                    return new IntentDecision("original-intent", "Original expert", TaskComplexity.SIMPLE,
+                            0.99, true, "RE_financial-analysis", Map.of("routeAction", "ROUTE_SINGLE"),
+                            List.of(), Map.of());
+                }), new RoutingPolicy(0.85, 0.85, "RE_"), new RouteSignalProperties(true, true));
+        RelayAgentRuntime relay = new RelayAgentRuntime(new RelayRuntimeProtocolAdapter() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                runtimeCalls.incrementAndGet();
+                captured.set(request);
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "expert answer"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        });
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routing, refusingDomainAgentClient(), relay, bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(), liveEventBus());
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        List<ChatEvent> first = service.executeRun(user, new ChatCommand(
+                        "cmd-intent", null, null, "session-history", null, "web", "Analyze finances",
+                        List.of(), Map.of()))
+                .collectList().block();
+        assertThat(first).isNotNull();
+        assertThat(first.getLast().type()).isEqualTo("run.completed");
+        RuntimeBinding original = bindings.bindingsForProvider("relay").getFirst();
+        assertThat(original.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(original.runtimeSessionId()).isEqualTo("relay-original-session");
+        assertThat(original.metadata()).doesNotContainKey(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY);
+
+        Map<String, Object> selected = selectedIntentProvided
+                ? SelectedIntentContext.attach(Map.of(), "manual-intent", "Selected expert")
+                : Map.of();
+        String displayName = selectedIntentProvided ? "Selected expert" : "financial-analysis";
+        List<ChatEvent> manual = service.executeRun(user, new ChatCommand(
+                        "cmd-manual", null, null, "session-history", null, "web", "Use the same expert",
+                        List.of(), selected, "DOMAIN_EXPERT", "financial-analysis",
+                        ChatRunMode.NEXT, null, null, null))
+                .collectList().block();
+        assertThat(manual).isNotNull();
+        assertThat(manual.getLast().type()).isEqualTo("run.completed");
+        assertThat(captured.get().runtimeSessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(captured.get().runtimeSessionId()).isEqualTo("relay-original-session");
+        assertThat(manual).filteredOn(event -> "selectedDomainExpert".equals(event.payload().get("sourceType")))
+                .singleElement().satisfies(event -> assertThat(event.payload())
+                        .containsEntry("intentName", displayName).containsEntry("routeSource", "front-selected"));
+        assertThat(bindings.bindingsForProvider("relay")).singleElement().satisfies(binding -> {
+            assertThat(binding.id()).isEqualTo(original.id());
+            assertThat(binding.metadata())
+                    .containsEntry(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true)
+                    .containsEntry("routeSource", "front-selected")
+                    .containsEntry("intentName", displayName)
+                    .containsEntry(IntentExpertContext.INVOCATION_SKILL_ID_KEY, "financial-analysis");
+            if (selectedIntentProvided) {
+                assertThat(binding.metadata()).containsEntry("intentCode", "manual-intent");
+            } else {
+                assertThat(binding.metadata()).doesNotContainKey("intentCode");
+            }
+        });
+
+        RuntimeBindingApplicationService bindingService = new RuntimeBindingApplicationService(
+                bindings, runtimeBindingCache(), new SequentialIdGenerator(), Duration.ZERO, "relay");
+        var providers = new org.springframework.beans.factory.support.StaticListableBeanFactory(
+                Map.of("bindings", bindingService));
+        ChatRunApplicationService runService = new ChatRunApplicationService(
+                runs, new NeverCancelRunCache(), events, new PermissionChecker(), sessions,
+                null, null, null, providers.getBeanProvider(RuntimeBindingApplicationService.class));
+        var status = runService.streamStatus(user, "session-history");
+        assertThat(status.activeRunId()).isNull();
+        assertThat(status.bindingProvider()).isEqualTo("relay");
+        assertThat(status.bindingTargetType()).isEqualTo("DOMAIN_EXPERT");
+        assertThat(status.bindingTargetId()).isEqualTo("financial-analysis");
+        assertThat(status.bindingRouteSource()).isEqualTo("front-selected");
+        assertThat(status.bindingIntentName()).isEqualTo(displayName);
+        assertThat(status.bindingIntentCode()).isEqualTo(selectedIntentProvided ? "manual-intent" : null);
+
+        List<ChatEvent> next = service.executeRun(user, new ChatCommand(
+                        "cmd-next", null, null, "session-history", null, "web", "Continue",
+                        List.of(), Map.of()))
+                .collectList().block();
+        assertThat(next).isNotNull();
+        assertThat(next.getLast().type()).isEqualTo("run.completed");
+        assertThat(captured.get().runtimeSessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(captured.get().runtimeSessionId()).isEqualTo("relay-original-session");
+        assertThat(captured.get().routeTarget().invocationSkillId()).isEqualTo("financial-analysis");
+        assertThat(bindings.bindingsForProvider("relay")).singleElement()
+                .extracting(RuntimeBinding::id).isEqualTo(original.id());
+        assertThat(runtimeCalls).hasValue(3);
+        assertThat(useCaseCalls).hasValue(1);
+        assertThat(intentCalls).hasValue(1);
+        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
+                .extracting(ChatMessage::metadataJson).containsExactly(
+                        "{\"skillId\":\"RE_financial-analysis\"}",
+                        "{\"skillId\":\"financial-analysis\"}",
+                        "{\"skillId\":\"financial-analysis\"}");
+    }
+
     @ParameterizedTest
     @NullSource
     @ValueSource(booleans = {true, false})

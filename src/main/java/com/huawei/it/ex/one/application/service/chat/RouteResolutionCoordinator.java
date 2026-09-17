@@ -244,6 +244,7 @@ final class RouteResolutionCoordinator {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("routeSource", "front-selected");
         metadata.put(com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
+        metadata.put(IntentExpertContext.INVOCATION_SKILL_ID_KEY, roleName);
         putIfNotNull(metadata, "intentCode", SelectedIntentContext.intentId(commandMetadata));
         metadata.put("intentName", firstText(SelectedIntentContext.intentName(commandMetadata), roleName));
         return Map.copyOf(metadata);
@@ -280,8 +281,7 @@ final class RouteResolutionCoordinator {
                     : runtimeBindingService.touchForRun(scopedActive, preparation.runId());
         }
         boolean domainExpert = !domainAgent
-                && (runtimeBindingService.isPinnedDomainExpert(binding)
-                || runtimeBindingService.isIntentExpertDomainExpert(binding));
+                && runtimeBindingService.isDomainExpert(binding);
         RouteTarget route = domainAgent
                 ? RouteTarget.domainAgent(
                         domainAgentId(binding),
@@ -292,7 +292,7 @@ final class RouteResolutionCoordinator {
                         ? RouteTarget.domainExpertRuntime(
                                 "runtime-binding",
                                 1.0,
-                                "active pinned domain expert binding",
+                                "active domain expert binding",
                                 runtimeBindingService.runtimeRoleName(binding),
                                 firstText(metadataText(binding, IntentExpertContext.INVOCATION_SKILL_ID_KEY),
                                         runtimeBindingService.runtimeRoleName(binding)))
@@ -466,7 +466,8 @@ final class RouteResolutionCoordinator {
             IntentDecision intent,
             ChatCommand command) {
         IntentExpertScope intentExpertScope = command == null ? null : command.intentExpertScope();
-        if (intentExpertScope == null) {
+        boolean domainExpert = route != null && route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT;
+        if (intentExpertScope == null && !domainExpert) {
             return Map.of();
         }
         Map<String, Object> metadata = new LinkedHashMap<>();

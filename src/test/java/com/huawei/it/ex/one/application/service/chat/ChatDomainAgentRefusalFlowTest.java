@@ -53,11 +53,15 @@ import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+import com.huawei.it.ex.one.domain.intent.IntentDecision;
+import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
 
 import reactor.core.publisher.Flux;
@@ -65,6 +69,8 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -352,8 +358,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 });
     }
 
-    @Test
-    void userConfirmedRefusalAutoSwitchesToHistoricalRelaySessionWhenEnabled() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void userConfirmedRefusalAutoSwitchesToHistoricalRelaySessionWhenEnabled(boolean expert) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -371,7 +378,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         bindings.save(new RuntimeBinding("relay-binding", user.tenantId(), user.ownerUserId(), "session1",
                 "relay", "relay-leaf", "relay-session-1", RuntimeBindingStatus.RESUMABLE, "old-run",
                 null, now.minus(Duration.ofDays(30)), now.minus(Duration.ofDays(30)),
-                Map.of("runtimeSessionEstablished", true)));
+                expert ? RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "financial-analysis")
+                        : Map.of("runtimeSessionEstablished", true)));
         AtomicInteger routeCalls = new AtomicInteger();
         AtomicReference<Map<String, Object>> rerouteMetadata = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
@@ -383,6 +392,14 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 routeCalls.incrementAndGet();
                 rerouteMetadata.set(request.command().metadata());
+                if (expert) {
+                    IntentDecision decision = new IntentDecision("finance_analysis", "经营分析专家",
+                            TaskComplexity.SIMPLE, 0.99, true, "RE_financial-analysis",
+                            Map.of("routeAction", "ROUTE_SINGLE"), List.of(), Map.of());
+                    return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(
+                            RouteTarget.domainExpertRuntime("intent-agent", 0.99, "expert matched",
+                                    "financial-analysis", "RE_financial-analysis"), decision, 1L, 0.85)));
+                }
                 var noMatch = new com.huawei.it.ex.one.domain.intent.IntentDecision(
                         "finance.runtime.no_intent", "未识别到可用意图",
                         com.huawei.it.ex.one.domain.intent.TaskComplexity.COMPLEX,
@@ -443,7 +460,14 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .satisfies(binding -> {
                     assertThat(binding.id()).isEqualTo("relay-binding");
                     assertThat(binding.runtimeSessionId()).isEqualTo("relay-session-1");
-                    assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
+                    assertThat(binding.status()).isEqualTo(expert
+                            ? RuntimeBindingStatus.ACTIVE : RuntimeBindingStatus.RESUMABLE);
+                    if (expert) {
+                        assertThat(binding.metadata()).containsEntry("intentCode", "finance_analysis")
+                                .containsEntry("intentName", "经营分析专家")
+                                .containsEntry("invocationSkillId", "RE_financial-analysis")
+                                .doesNotContainKey(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY);
+                    }
                 });
         assertThat(runs.findById(started.get().runId()))
                 .hasValueSatisfying(run -> {

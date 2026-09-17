@@ -29,6 +29,8 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -541,6 +543,118 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-1");
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void manuallySelectingIntentExpertPreservesBindingAtBothStages(boolean withAdmission) {
+        RuntimeBinding active = intentRoutedExpertBinding();
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(active));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ZERO, "relay");
+
+        if (withAdmission) {
+            assertThat(service.cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                    "t", "u", "s", "financial-analysis")).isEmpty();
+            assertThat(repository.findById(active.id())).contains(active);
+        }
+
+        RuntimeBindingResolution resolution = service.resolvePinnedDomainExpertForRun(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-next", "leaf-next",
+                        RuntimeProfile.DOMAIN_EXPERT, "financial-analysis"),
+                Map.of(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true,
+                        "routeSource", "front-selected", "intentName", "financial-analysis",
+                        IntentExpertContext.INVOCATION_SKILL_ID_KEY, "financial-analysis"),
+                new RunExecutionClaim("run-next", "instance-current", 9L));
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.previousBinding()).isEqualTo(active);
+        assertThat(resolution.binding().id()).isEqualTo(active.id());
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("relay-original-session");
+        assertThat(resolution.binding().lastRunId()).isEqualTo("run-next");
+        assertThat(resolution.binding().metadata())
+                .containsEntry(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true)
+                .containsEntry("routeSource", "front-selected")
+                .containsEntry("intentName", "financial-analysis")
+                .doesNotContainKey("intentCode");
+        assertThat(repository.bindings).hasSize(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"role", "appMode", "scope", "delegate", "provider", "expired", "cancelled"})
+    void manuallySelectingExpertDoesNotResumeIneligibleBinding(String mismatch) {
+        RuntimeBinding source = intentRoutedExpertBinding();
+        Map<String, Object> metadata = new LinkedHashMap<>(source.metadata());
+        switch (mismatch) {
+            case "role" -> metadata.put(RuntimeProfileMetadata.ROLE_NAME_KEY, "other-expert");
+            case "appMode" -> metadata.put(RuntimeProfileMetadata.APP_MODE_KEY, "other-app-mode");
+            case "scope" -> metadata = new LinkedHashMap<>(IntentExpertContext.withScope(metadata,
+                    new IntentExpertScope("parent-expert", "Parent expert", "parent-entry")));
+            case "delegate" -> metadata = new LinkedHashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                    RuntimeProfile.DELEGATE, "delegate", "domain_expert", null));
+            case "expired" -> source = source.withExpiresAt(Instant.now().minusSeconds(1));
+            case "cancelled" -> source = source.withStatus(RuntimeBindingStatus.CANCELLED);
+            case "provider" -> source = new RuntimeBinding(
+                    source.id(), source.tenantId(), source.userId(), source.chatSessionId(), "domain-agent",
+                    source.leafMessageId(), source.runtimeSessionId(), source.status(), source.lastRunId(),
+                    source.expiresAt(), source.createdAt(), source.updatedAt(), source.metadata());
+            default -> throw new IllegalArgumentException(mismatch);
+        }
+        RuntimeBinding original = source.withMetadata(metadata);
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(original));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ZERO, "relay");
+
+        service.cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                "t", "u", "s", "financial-analysis");
+        RuntimeBindingResolution resolution = service.resolvePinnedDomainExpertForRun(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-next", "leaf-next",
+                        RuntimeProfile.DOMAIN_EXPERT, "financial-analysis"),
+                Map.of(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true),
+                new RunExecutionClaim("run-next", "instance-current", 9L));
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
+        assertThat(resolution.binding().id()).isNotEqualTo(original.id());
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("s");
+        assertThat(repository.findById(original.id())).get()
+                .extracting(RuntimeBinding::status).isEqualTo(RuntimeBindingStatus.CANCELLED);
+    }
+
+    @Test
+    void admissionPreservesLatestEligibleExpertInsteadOfNewerScopedExpert() {
+        RuntimeBinding eligible = intentRoutedExpertBinding();
+        Instant older = eligible.updatedAt().minusSeconds(10);
+        RuntimeBinding duplicate = new RuntimeBinding(
+                "binding-older", "t", "u", "s", "relay", null, "relay-older-session",
+                RuntimeBindingStatus.ACTIVE, "run-old", null, older, older, eligible.metadata());
+        Instant newer = eligible.updatedAt().plusSeconds(10);
+        RuntimeBinding scoped = new RuntimeBinding(
+                "binding-scoped", "t", "u", "s", "relay", null, "relay-scoped-session",
+                RuntimeBindingStatus.ACTIVE, "run-scoped", null, newer, newer,
+                IntentExpertContext.withScope(eligible.metadata(),
+                        new IntentExpertScope("parent-expert", "Parent expert", "parent-entry")));
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(duplicate, scoped, eligible));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ZERO, "relay");
+
+        assertThat(service.cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                "t", "u", "s", "financial-analysis"))
+                .extracting(cancellation -> cancellation.cancelled().id())
+                .containsExactly(duplicate.id(), scoped.id());
+        assertThat(repository.findById(eligible.id())).contains(eligible);
+
+        RuntimeBindingResolution resolution = service.resolvePinnedDomainExpertForRun(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-next", "leaf-next",
+                        RuntimeProfile.DOMAIN_EXPERT, "financial-analysis"),
+                Map.of(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true),
+                new RunExecutionClaim("run-next", "instance-current", 9L));
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.binding().id()).isEqualTo(eligible.id());
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("relay-original-session");
+    }
+
     @Test
     void resolveForRunReactivatesCompletedRelaySessionWithoutExpiry() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
@@ -674,6 +788,29 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(completed.leafMessageId()).isEqualTo("leaf2");
         assertThat(completed.expiresAt()).isNull();
         assertThat(cache.get("t", "u", "s")).isEmpty();
+    }
+
+    @Test
+    void completedIntentRoutedExpertStaysActiveWithoutBecomingPinned() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE)
+                .withRuntimeSessionId("runtime-expert-1")
+                .withMetadata(RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "financial-analysis"));
+        repository.saved = active;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding completed = service.completeAfterRun(active, "run2", "leaf2");
+
+        assertThat(completed.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(completed.runtimeSessionId()).isEqualTo("runtime-expert-1");
+        assertThat(completed.lastRunId()).isEqualTo("run2");
+        assertThat(completed.leafMessageId()).isEqualTo("leaf2");
+        assertThat(completed.metadata()).doesNotContainKey(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY);
+        assertThat(service.isDomainExpert(completed)).isTrue();
+        assertThat(service.isPinnedDomainExpert(completed)).isFalse();
+        assertThat(cache.get("t", "u", "s")).contains(completed);
     }
 
     @Test
@@ -1226,6 +1363,18 @@ class RuntimeBindingApplicationServiceTest {
                 now,
                 now,
                 Map.of("runtimeSessionEstablished", true));
+    }
+
+    private RuntimeBinding intentRoutedExpertBinding() {
+        Map<String, Object> metadata = new LinkedHashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "financial-analysis"));
+        metadata.put("routeSource", "intent-agent");
+        metadata.put("intentCode", "finance_analysis");
+        metadata.put("intentName", "Finance analysis");
+        metadata.put(IntentExpertContext.INVOCATION_SKILL_ID_KEY, "RE_financial-analysis");
+        return binding(RuntimeBindingStatus.ACTIVE)
+                .withRuntimeSessionId("relay-original-session")
+                .withMetadata(metadata);
     }
 
     private RuntimeBinding pinnedExpertBinding(String roleName, String runId) {

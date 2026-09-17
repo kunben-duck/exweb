@@ -34,7 +34,6 @@ import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
-import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -767,13 +766,8 @@ public class ChatRunApplicationService {
     private BindingSummary toBindingSummary(RuntimeBinding binding) {
         Map<String, Object> metadata = binding.metadata();
         boolean domainAgent = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider());
-        boolean pinnedDomainExpert = !domainAgent
-                && RuntimeProfileMetadata.isPinnedDomainExpert(metadata);
-        boolean intentExpertDomainExpert = !domainAgent
-                && IntentExpertContext.scopedDomainExpert(metadata)
-                && RuntimeProfile.DOMAIN_EXPERT.name().equals(
-                        stringValue(metadata.get(RuntimeProfileMetadata.PROFILE_KEY)));
-        boolean domainExpert = pinnedDomainExpert || intentExpertDomainExpert;
+        boolean domainExpert = RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())
+                && RuntimeProfileMetadata.isDomainExpert(metadata);
         String targetType = domainAgent
                 ? "DOMAIN_AGENT"
                 : domainExpert ? "DOMAIN_EXPERT" : "AGENT_RUNTIME";

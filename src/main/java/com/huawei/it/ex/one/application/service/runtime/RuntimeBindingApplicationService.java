@@ -122,8 +122,8 @@ public class RuntimeBindingApplicationService {
      * 解析本轮 AgentRuntime 应使用的会话绑定。
      *
      * <p>这里按会话维度复用 active binding，不再因消息树 leaf 切换而创建新的下游 Runtime
-     * session。Relay 正常完成后只释放自动路由，并以 RESUMABLE 状态保留其真实 session；只有
-     * 路由再次选择 Relay 时才恢复该 binding。</p>
+     * session。Delegate 正常完成后释放自动路由，以 RESUMABLE 状态保留真实 session；
+     * Domain Expert 正常完成后保持 ACTIVE，后续普通问题优先续接。</p>
      */
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
@@ -254,8 +254,8 @@ public class RuntimeBindingApplicationService {
     /**
      * 按会话维度查询 active RuntimeBinding。
      *
-     * <p>普通继续提问优先复用会话下最新的 active binding。Relay 正常完成后不保留 active binding；
-     * 如果仍能查到 relay binding，说明当前 Relay 任务尚未完成或处于等待用户输入状态。</p>
+     * <p>普通继续提问优先复用会话下最新的 active binding。Delegate 正常完成后不保留 active
+     * binding；Domain Expert 与 DomainAgent 正常完成后仍可续接。</p>
      */
     public Optional<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
         Instant now = Instant.now();
@@ -581,16 +581,15 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
-     * Runtime 正常完成后更新绑定生命周期。DomainAgent 保持 active；Relay 只释放自动路由，
-     * 仍永久保留实际 runtimeSessionId 供后续重新路由时恢复。
+     * Runtime 正常完成后更新绑定生命周期。DomainAgent 和 Relay 专家保持 active；
+     * Delegate 释放自动路由，保留实际 runtimeSessionId 供后续重新路由时恢复。
      */
     public RuntimeBinding completeAfterRun(RuntimeBinding binding, String runId, String leafMessageId) {
         if (binding == null) {
             return null;
         }
         if (DOMAIN_AGENT_PROVIDER.equals(binding.provider())
-                || isPinnedDomainExpert(binding)
-                || isIntentExpertDomainExpert(binding)) {
+                || isDomainExpert(binding)) {
             return touchAndMoveToLeaf(binding, runId, leafMessageId);
         }
         RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
@@ -690,7 +689,8 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
-     * 直连专家准入时保留同一固定专家，其余ACTIVE Binding仍在同一事务内取消。
+     * 直连专家准入时保留可复用的同名专家，包括尚未手动固定的 Intent 专家。
+     * 其余 ACTIVE Binding 仍在同一事务内取消。
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public List<RuntimeBinding> cancelActiveForAdmissionExceptPinnedDomainExpert(
@@ -708,7 +708,7 @@ public class RuntimeBindingApplicationService {
             String sessionId,
             String roleName) {
         Map<String, RuntimeBinding> active = activeBindingsForAdmission(tenantId, userId, sessionId);
-        RuntimeBinding preserved = newestPinnedDomainExpert(active.values().stream().toList(), roleName);
+        RuntimeBinding preserved = newestReusableDomainExpert(active.values().stream().toList(), roleName);
         List<AdmissionCancellation> cancelled = new ArrayList<>();
         for (RuntimeBinding binding : active.values()) {
             if (binding.status() == RuntimeBindingStatus.ACTIVE
@@ -1004,6 +1004,13 @@ public class RuntimeBindingApplicationService {
         return bindingProfile(binding).roleName();
     }
 
+    /** 是否为具有可信专家档案的Relay Binding。 */
+    public boolean isDomainExpert(RuntimeBinding binding) {
+        return binding != null
+                && DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())
+                && RuntimeProfileMetadata.isDomainExpert(binding.metadata());
+    }
+
     /** 是否为前端固定选择的Relay专家Binding。 */
     public boolean isPinnedDomainExpert(RuntimeBinding binding) {
         return binding != null
@@ -1057,7 +1064,7 @@ public class RuntimeBindingApplicationService {
         if (active.isEmpty()) {
             active = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider);
         }
-        RuntimeBinding preserved = newestPinnedDomainExpert(active, roleName);
+        RuntimeBinding preserved = newestReusableDomainExpert(active, roleName);
         for (RuntimeBinding binding : active) {
             if (binding.status() == RuntimeBindingStatus.ACTIVE
                     && (preserved == null || !preserved.id().equals(binding.id()))) {
@@ -1069,13 +1076,17 @@ public class RuntimeBindingApplicationService {
         }
     }
 
-    private RuntimeBinding newestPinnedDomainExpert(List<RuntimeBinding> bindings, String roleName) {
+    private RuntimeBinding newestReusableDomainExpert(List<RuntimeBinding> bindings, String roleName) {
         if (bindings == null || roleName == null || roleName.isBlank()) {
             return null;
         }
+        Instant now = Instant.now();
+        RuntimeProfileMetadata.Snapshot desiredProfile = configuredProfile(RuntimeProfile.DOMAIN_EXPERT, roleName);
+        // 保留条件与后续 resolveForProfile 一致，不能因未 pinned 提前取消，也不能跨专家范围复用。
         return bindings.stream()
-                .filter(this::isPinnedDomainExpert)
-                .filter(binding -> roleName.equals(runtimeRoleName(binding)))
+                .filter(binding -> routableForCurrentProvider(binding, now))
+                .filter(binding -> matchingProfile(binding, desiredProfile))
+                .filter(binding -> IntentExpertContext.matches(binding.metadata(), null))
                 .max(Comparator.comparing(RuntimeBinding::updatedAt,
                         Comparator.nullsFirst(Comparator.naturalOrder())))
                 .orElse(null);

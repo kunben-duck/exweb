@@ -4,6 +4,7 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
@@ -150,7 +151,8 @@ final class RouteSwitchContextResolver {
                             request.runId(),
                             interaction.assistantMessageId(),
                             input.candidateRuntimeProfile(),
-                            input.candidateRuntimeRoleName()));
+                            input.candidateRuntimeRoleName()),
+                    relayExpertBindingMetadata(interaction, input));
             binding = resolution.binding();
             runtimeSessionMode = resolution.sessionMode();
         } else {
@@ -260,6 +262,21 @@ final class RouteSwitchContextResolver {
         return blankToDefault(
                 firstText(interaction.requestPayload().get("currentRouteSource")),
                 "front-selected");
+    }
+
+    private Map<String, Object> relayExpertBindingMetadata(
+            ChatInteractionRequest interaction,
+            RouteSwitchInput input) {
+        if (input.candidateRuntimeProfile() != RuntimeProfile.DOMAIN_EXPERT) {
+            return Map.of();
+        }
+        // 候选摘要来自服务端保存的确认记录，不从本次客户端 metadata 推断路由事实。
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("routeSource", "user-confirmed");
+        putIfNotNull(metadata, "intentCode", interaction.requestPayload().get("candidateIntentCode"));
+        putIfNotNull(metadata, "intentName", interaction.requestPayload().get("candidateIntentName"));
+        putIfNotNull(metadata, IntentExpertContext.INVOCATION_SKILL_ID_KEY, input.invocationSkillId());
+        return Map.copyOf(metadata);
     }
 
     private Map<String, Object> bindingMetadata(

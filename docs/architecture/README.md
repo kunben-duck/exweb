@@ -742,8 +742,8 @@ flowchart TB
 ## 路由规则
 
 - `targetType=DOMAIN_AGENT,targetId=...` 优先级最高；存在时进入 `DOMAIN_AGENT` 路由并绑定对应 DomainAgent，`routeSource=front-selected`。`runMode=NEXT` 直连可原子取消会话下开放的 `WAITING/RESPONDING` Interaction 并解除等待，但不抢占真正执行中的 run；旧等待 run/message 保留，新 user 节点挂在等待 assistant 后。直连只使用本轮 message/metadata/attachments，取消当前 ACTIVE binding、保留历史 RESUMABLE Relay session。可选 `selectedIntent` 只作为展示摘要写入 binding；后续复用 binding 时用于补齐 `selectedDomainAgent` 历史 part，不参与路由或下游请求。
-- `targetType=DOMAIN_EXPERT,targetId=...` 进入 Relay `DOMAIN_EXPERT`，`targetId`直接作为区分大小写的`roleName`。Binding以`relayExpertPinned=true`标记前端固定选择，正常完成后保持`ACTIVE`；后续普通问题继续`chat_expert`，同专家复用、不同专家替换。每轮调用前生成`selected_domain_expert`元数据事件，assistant以roleName记录`skillId`。可选`selectedIntent`只保存展示摘要，缺失时以roleName回退，不发送给Relay。Intent动态专家没有固定标记，完成后仍转为`RESUMABLE`。
-- active RuntimeBinding 优先级次之；`provider=domain-agent` 时续接当前 DomainAgent，固定的`provider=relay + DOMAIN_EXPERT`也可持续续接；其他 Relay binding 只用于未闭合或等待用户输入的任务。普通Relay和动态专家正常完成后转为 `RESUMABLE`，下次普通提问仍重新路由；再次选择 Relay 时，只恢复 Runtime Profile、`appMode` 和 `roleName` 都匹配的 session。存量无 Profile Binding 按 `DELEGATE` 兼容。
+- `targetType=DOMAIN_EXPERT,targetId=...` 进入 Relay `DOMAIN_EXPERT`，`targetId`直接作为区分大小写的`roleName`。Binding以`relayExpertPinned=true`标记前端固定选择，正常完成后保持`ACTIVE`；后续普通问题继续`chat_expert`，同专家复用、不同专家替换。每轮调用前生成`selected_domain_expert`元数据事件，assistant以roleName记录`skillId`。可选`selectedIntent`只保存展示摘要，缺失时以roleName回退，不发送给Relay。Intent命中的专家不设置固定标记，但完成后同样保持ACTIVE；原Intent摘要及invocationSkillId随已有Binding写入，续接时保留实际技能标识。
+- active RuntimeBinding 优先级次之；`provider=domain-agent` 时续接当前 DomainAgent，所有可信的`provider=relay + DOMAIN_EXPERT`均可持续续接；Delegate Binding只用于未闭合或等待用户输入的任务，正常完成后转为`RESUMABLE`，下次普通提问重新路由；再次选择 Relay 时，只恢复 Runtime Profile、`appMode` 和 `roleName` 都匹配的 session。存量无 Profile Binding 按 `DELEGATE` 兼容。
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
 - 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 DomainAgent 路由目标后绑定为 DomainAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。
@@ -779,7 +779,7 @@ flowchart LR
 RuntimeBinding 维护前端 chat session、当前消息树 leaf 与当前下游会话的关系。当前 provider 包括 `relay` 和 `domain-agent`。leaf 维度隔离可以避免编辑历史问题、切换版本或从历史消息新建分支时误用另一条路径的下游 session。
 
 Relay Binding 还保存内部 `runtimeProfile/relayAppMode/relayRoleName` 快照。`DELEGATE` 与不同动态角色的
-`DOMAIN_EXPERT` 可在同一 ChatService 会话中分别保留 `RESUMABLE` 记录，解析时按
+`DOMAIN_EXPERT` 在同一ChatService会话中按档案隔离；Delegate完成后为RESUMABLE，专家完成后为ACTIVE。存量专家RESUMABLE仅在再次选中时恢复，解析时按
 `profile + appMode + roleName` 完整档案筛选并只清理完全匹配档案的重复项；缺少 Profile 的存量 Binding 按 `DELEGATE` 解释，专家 Binding 缺少 `relayRoleName` 时失败关闭。档案同步写入 run 私有
 `_relayRuntimeProfile` 供跨实例 stop 恢复，但会在接口入口清理，且不会进入 Event、RouteMemory 或下游业务 metadata。
 
@@ -864,7 +864,7 @@ stop 语义：
 - DomainAgent `searchList`引用会把同帧`metadata`保存在相同的reference payload中；该规则不扩展到`sourcesDocuments/sourceDocuments`。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent,is_streaming=true` 的 `content/context` 映射为 assistant 正文增量 `message.delta`，把 `type=agent,is_streaming=false` 和 `type=generate-response,content非空` 映射为最终回答快照 `message.snapshot`。正式 WebSocket 轮次只在 `session-state.state=completed/waiting_user_input/paused` 后生成一次 `message.completed`；`idle`、`agent-call(false)`、`generate-response(is_final=true)`、`steam-complete/stream-complete/[DONE]` 均不参与终态判断。`expert_rejection` 映射为可见 `runtime.card`。
 
-DomainAgent 当前通过 HTTP 文本流调用，并和 Relay Runtime 一样以 `AgentRuntime` provider 注册，使用 RuntimeBinding 保存下游会话 ID、绑定来源和意图摘要。DomainAgent 请求会把 `runId/messageId/skillId/query/sessionId` 固定为服务端当前Run、可信user消息、当前绑定和本轮问题，前端 metadata 只作为业务扩展，不能覆盖这些保留字段。可选异步协议收到 `agent.async_started` 后会保存原assistant和 `run.async_running`，把execution转为无owner的`ASYNC_WAITING`并结束原HTTP流；回调可只提交完成状态，也可复用普通Normalizer按APPEND/REPLACE回填正文和当前run Parts；回调、stop和超时通过同一run终态CAS竞争。当前上线版本内置 `RelayAgentRuntime` 与 `DomainAgentRuntime` 两个 provider；Relay provider 唯一委托 `RelayRuntimeProtocolAdapter` 的 WebSocket 实现。Relay WebSocket 始终使用短连接，每个 run 都重新建立下游 WS；首轮 `new` 的 `config.sessionId` 使用 ChatService `sessionId`，收到 `session-ready.session_id` 后回填 RuntimeBinding 中的 Relay 真实`runtimeSessionId`。Relay 正常 `run.completed` 后将 binding 改为 `RESUMABLE`，后续普通提问重新走用例库/意图路由；若再次选择 Relay，则使用该 binding 的真实 session ID 执行 `resume`。如果 Relay 进入 Agent 澄清等待态，则保留 active binding 供 `CONTINUE_INTERACTION` 续接。
+DomainAgent 当前通过 HTTP 文本流调用，并和 Relay Runtime 一样以 `AgentRuntime` provider 注册，使用 RuntimeBinding 保存下游会话 ID、绑定来源和意图摘要。DomainAgent 请求会把 `runId/messageId/skillId/query/sessionId` 固定为服务端当前Run、可信user消息、当前绑定和本轮问题，前端 metadata 只作为业务扩展，不能覆盖这些保留字段。可选异步协议收到 `agent.async_started` 后会保存原assistant和 `run.async_running`，把execution转为无owner的`ASYNC_WAITING`并结束原HTTP流；回调可只提交完成状态，也可复用普通Normalizer按APPEND/REPLACE回填正文和当前run Parts；回调、stop和超时通过同一run终态CAS竞争。当前上线版本内置 `RelayAgentRuntime` 与 `DomainAgentRuntime` 两个 provider；Relay provider 唯一委托 `RelayRuntimeProtocolAdapter` 的 WebSocket 实现。Relay WebSocket 始终使用短连接，每个 run 都重新建立下游 WS；首轮 `new` 的 `config.sessionId` 使用 ChatService `sessionId`，收到 `session-ready.session_id` 后回填 RuntimeBinding 中的 Relay 真实`runtimeSessionId`。Relay Delegate正常`run.completed`后转为RESUMABLE，下次普通提问重新路由；专家正常完成保持ACTIVE，下次直接以相同roleName及真实session ID执行`resume`。如果 Relay 进入 Agent 澄清等待态，则保留 active binding 供 `CONTINUE_INTERACTION` 续接。
 
 `Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders`、`DomainAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 或 cancel 请求中向可信 adapter 传递；这些字段被 JSON 序列化忽略，且 adapter 会把内部请求映射为专用 wire DTO 或受控 multipart，不能进入下游请求体、form 字段、文档元数据、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、Event Resume/WS 恢复、文档库管理或故障治理被持久化或回放。
 

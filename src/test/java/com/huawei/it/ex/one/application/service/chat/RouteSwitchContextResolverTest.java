@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
@@ -54,6 +55,30 @@ class RouteSwitchContextResolverTest {
         assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
         assertThat(target.routeSource()).isEqualTo("user-confirmed");
         assertThat(target.invocationSkillId()).isEqualTo("RE_system-awareness");
+    }
+
+    @Test
+    void approvedExpertBindingStoresOnlyTrustedCandidateSummary() {
+        RuntimeBindingApplicationService bindings = mock(RuntimeBindingApplicationService.class);
+        RouteSwitchContextResolver bindingResolver = new RouteSwitchContextResolver(bindings);
+        ChatInteractionRequest interaction = interaction("system-awareness");
+        RouteSwitchInput input = bindingResolver.input(
+                interaction, new ChatInteractionClaimResult(interaction, Map.of("approved", true)));
+        RuntimeBinding source = binding("source", "agent-a", RuntimeBindingStatus.ACTIVE, "run-b");
+        when(bindings.resumeForInteraction(interaction, "run-b")).thenReturn(source);
+        when(bindings.resolveForProfile(any(), any())).thenReturn(new RuntimeBindingResolution(
+                source, com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode.NEW));
+
+        bindingResolver.selectBinding(interaction, input, new RouteSwitchBindingRequest(
+                new UserContext("tenant-1", "user-1", "account-1"),
+                new ChatSession("session-1", "tenant-1", "user-1", "title", "ACTIVE",
+                        "web", Instant.now(), Instant.now()), "run-b", null, null));
+
+        verify(bindings).resolveForProfile(any(), eq(Map.of(
+                "routeSource", "user-confirmed",
+                "intentCode", "intent-expert",
+                "intentName", "领域专家",
+                "invocationSkillId", "RE_system-awareness")));
     }
 
     @Test

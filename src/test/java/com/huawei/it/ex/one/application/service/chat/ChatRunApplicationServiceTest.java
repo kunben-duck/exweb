@@ -685,6 +685,53 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void streamStatusReturnsIntentRoutedExpertDuringAndAfterRun() {
+        RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
+        ObjectProvider<RuntimeBindingApplicationService> bindingProvider = mock(ObjectProvider.class);
+        when(bindingProvider.getIfAvailable()).thenReturn(bindingService);
+        Instant now = Instant.now();
+        Map<String, Object> metadata = new HashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                com.huawei.it.ex.one.domain.routing.RuntimeProfile.DOMAIN_EXPERT,
+                "delegate", "domain_expert", "financial-analysis"));
+        metadata.put("intentCode", "finance_analysis");
+        metadata.put("intentName", "经营分析专家");
+        metadata.put("routeSource", "intent-agent");
+        RuntimeBinding binding = new RuntimeBinding(
+                "binding1", "tenant1", "user1", "session1", "relay", "runtime1",
+                RuntimeBindingStatus.ACTIVE, "run1", null, now, now, metadata);
+        when(bindingService.findActiveBySession("tenant1", "user1", "session1"))
+                .thenReturn(Optional.of(binding));
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        ChatRun running = runningRun();
+        runs.save(running);
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                runs, new InMemoryRunCache(), new InMemoryEventStore(0L),
+                new PermissionChecker(), new FixedSessionRepository(), null, null, null, bindingProvider);
+
+        var active = service.streamStatus(user(), "session1");
+        assertThat(active.activeRunId()).isEqualTo("run1");
+        assertThat(active.bindingTargetType()).isEqualTo("DOMAIN_EXPERT");
+        assertThat(active.bindingTargetId()).isEqualTo("financial-analysis");
+        runs.save(running.completed(10L));
+
+        var completed = service.streamStatus(user(), "session1");
+        assertThat(completed.activeRunId()).isNull();
+        assertThat(completed.activeRunStatus()).isNull();
+        assertThat(completed.bindingProvider()).isEqualTo("relay");
+        assertThat(completed.bindingTargetType()).isEqualTo("DOMAIN_EXPERT");
+        assertThat(completed.bindingTargetId()).isEqualTo("financial-analysis");
+        assertThat(completed.bindingIntentCode()).isEqualTo("finance_analysis");
+        assertThat(completed.bindingIntentName()).isEqualTo("经营分析专家");
+        assertThat(completed.bindingRouteSource()).isEqualTo("intent-agent");
+        assertThat(completed.selectedExpert()).isNull();
+
+        when(bindingService.findActiveBySession("tenant1", "user1", "session1"))
+                .thenReturn(Optional.empty());
+        assertThat(service.streamStatus(user(), "session1").bindingTargetId()).isNull();
+    }
+
+    @Test
     void findOwnedRunsByIdsReturnsOnlyCurrentUsersRuns() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         ChatRunApplicationService service = service(repository, new InMemoryRunCache());

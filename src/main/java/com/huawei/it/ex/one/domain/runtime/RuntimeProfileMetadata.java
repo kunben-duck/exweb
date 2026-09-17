@@ -144,12 +144,18 @@ public final class RuntimeProfileMetadata {
         return sanitized.isEmpty() ? Map.of() : Map.copyOf(sanitized);
     }
 
+    /** 专家续接资格由服务端档案决定，不依赖是否由前端手动固定。 */
+    public static boolean isDomainExpert(Map<String, Object> metadata) {
+        Map<String, Object> source = metadata == null ? Map.of() : metadata;
+        return RuntimeProfile.DOMAIN_EXPERT.name().equals(text(source.get(PROFILE_KEY)))
+                && text(source.get(ROLE_NAME_KEY)) != null;
+    }
+
     /** 判断Binding是否为前端显式选择并固定续接的Relay专家。 */
     public static boolean isPinnedDomainExpert(Map<String, Object> metadata) {
         Map<String, Object> source = metadata == null ? Map.of() : metadata;
         return Boolean.TRUE.equals(source.get(RELAY_EXPERT_PINNED_KEY))
-                && RuntimeProfile.DOMAIN_EXPERT.name().equals(text(source.get(PROFILE_KEY)))
-                && text(source.get(ROLE_NAME_KEY)) != null;
+                && isDomainExpert(source);
     }
 
     private static RuntimeProfile profile(Object value, boolean missingAsDelegate) {

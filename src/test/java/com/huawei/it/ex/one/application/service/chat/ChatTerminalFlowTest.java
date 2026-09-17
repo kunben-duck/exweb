@@ -41,8 +41,10 @@ import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -50,6 +52,8 @@ import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -425,8 +429,9 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
         assertThat(bindings.saved.metadata()).containsEntry("runtimeSessionEstablished", true);
     }
 
-    @Test
-    void terminalCommitReleasesRelayRouteButKeepsSessionResumableAfterCompletedRun() {
+    @ParameterizedTest
+    @EnumSource(RuntimeProfile.class)
+    void terminalCommitRetainsExpertsButReleasesDelegateRouteAfterCompletedRun(RuntimeProfile profile) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -445,7 +450,8 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
         Instant now = Instant.now();
         RuntimeBinding binding = new RuntimeBinding("binding1", user.tenantId(), user.ownerUserId(),
                 session.id(), "relay", userMessage.id(), "runtime-session-1", RuntimeBindingStatus.ACTIVE,
-                "run1", now.plus(Duration.ofMinutes(5)), now, now, Map.of());
+                "run1", now.plus(Duration.ofMinutes(5)), now, now,
+                RuntimeProfileMetadata.bindingMetadata(profile, "delegate", "domain_expert", "financial-analysis"));
         bindings.save(binding);
         ChatInteractionApplicationService interactionService = new ChatInteractionApplicationService(interactionRequests, ids,
                 permissionChecker, new ChatInteractionProperties());
@@ -490,7 +496,8 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
         assertThat(runs.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo("msg-assistant");
         assertThat(bindings.saved.id()).isEqualTo(binding.id());
-        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
+        assertThat(bindings.saved.status()).isEqualTo(profile == RuntimeProfile.DOMAIN_EXPERT
+                ? RuntimeBindingStatus.ACTIVE : RuntimeBindingStatus.RESUMABLE);
         assertThat(bindings.saved.leafMessageId()).isEqualTo("msg-assistant");
         assertThat(bindings.saved.runtimeSessionId()).isEqualTo("runtime-session-1");
         assertThat(bindings.saved.expiresAt()).isNull();

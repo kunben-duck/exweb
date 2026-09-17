@@ -43,10 +43,14 @@ import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -284,19 +288,29 @@ class ChatRunTerminalCommitServiceTest {
         verify(runRepository, times(2)).findById("run1");
     }
 
-    @Test
-    void reusedAssistantReceivesOnlyCurrentRunFinalSkill() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void reusedAssistantReceivesOnlyCurrentRunFinalSkill(boolean relayExpert) {
         ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
         SessionApplicationService sessionService = mock(SessionApplicationService.class);
         ChatRunRepository runRepository = mock(ChatRunRepository.class);
         ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
         ChatInteractionApplicationService interactionService = mock(ChatInteractionApplicationService.class);
+        RuntimeBindingRepository bindingRepository = mock(RuntimeBindingRepository.class);
         ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
-                streamService, sessionService, runRepository, leaseService, null, interactionService, Duration.ZERO);
+                streamService, sessionService, runRepository, leaseService, bindingRepository,
+                interactionService, Duration.ZERO);
         Instant now = Instant.now();
+        RuntimeBinding binding = relayExpert ? new RuntimeBinding(
+                "binding1", "tenant1", "user1", "session1", "relay", "msg-assistant",
+                "relay-expert-session", RuntimeBindingStatus.ACTIVE, "run-b", null, now, now,
+                RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "financial-analysis")) : null;
+        when(bindingRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         ChatRun run = new ChatRun(
                 "run-b", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
-                "DOMAIN_AGENT", "skill-new", "domain-agent", null, ChatRunMode.CONTINUE_INTERACTION,
+                relayExpert ? "AGENT_RUNTIME" : "DOMAIN_AGENT", "skill-new",
+                relayExpert ? "relay" : "domain-agent", null, ChatRunMode.CONTINUE_INTERACTION,
                 null, "msg-user", null, null, null, null, now, null, Map.of(), now, now);
         UserContext user = new UserContext("tenant1", "user1", "User One");
         ChatSession session = new ChatSession(
@@ -315,7 +329,7 @@ class ChatRunTerminalCommitServiceTest {
                         user, session,
                         new ChatRunMessagePlan(ChatRunMode.CONTINUE_INTERACTION,
                                 userMessage.id(), userMessage, null),
-                        new AtomicReference<>(), assistant, "run-b", claim, interaction);
+                        new AtomicReference<>(binding), assistant, "run-b", claim, interaction);
         ChatEvent event = RunCompletedEvent.of("run-b", "session1", Map.of("status", "COMPLETED"));
         ChatEvent stored = new RunCompletedEvent(
                 "run-b", "session1", 10L, now, event.payload());
@@ -329,7 +343,7 @@ class ChatRunTerminalCommitServiceTest {
         when(sessionService.updateAssistantMessage(any(AssistantMessageUpdateCommand.class)))
                 .thenReturn(savedAssistant);
 
-        service.commitCompleted(new ChatRunTerminalCommitService.CompletedCommitCommand(
+        var result = service.commitCompleted(new ChatRunTerminalCommitService.CompletedCommitCommand(
                 event, context, new ChatRunTerminalCommitService.MessageTarget(true, "msg-assistant")));
 
         ArgumentCaptor<AssistantMessageUpdateCommand> commandCaptor =
@@ -338,6 +352,13 @@ class ChatRunTerminalCommitServiceTest {
         assertThat(commandCaptor.getValue().runId()).isEqualTo("run-b");
         assertThat(commandCaptor.getValue().metadataJson())
                 .contains("\"skillId\":\"skill-new\"");
+        verify(interactionService).markAnswered(interaction);
+        if (relayExpert) {
+            assertThat(result.binding().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+            assertThat(result.binding().runtimeSessionId()).isEqualTo("relay-expert-session");
+            assertThat(result.binding().lastRunId()).isEqualTo("run-b");
+            assertThat(result.binding().metadata()).doesNotContainKey(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY);
+        }
     }
 
     @Test

@@ -9,6 +9,8 @@
 > Event live-only。控制及终态 ChatEvent、用户消息和下游存储仍保留，因此不属于本文的 `NO_STORE`。
 > 当前实现见 `docs/architecture/domain-agent-assistant-persistence.md`；本文其余内容仍是端到端增强提案。
 
+> 物理部署补充：文中的“直接DomainAgent”表示相对Relay的逻辑provider，并非绕过中转服务。当前实际为ChatService→agentService统一chat→DomainAgent，以及ChatService→relayService→agentService MCP→下游；一体agentService的转发、工具、查询及管理模块都需纳入留存边界。外部内部行为待联合验证，未来服务拆分见[现状与目标部署图](architecture/high-availability/deployment.md#dep01)。
+
 ## 1. 背景
 
 FinanceEX 的 Supervisor Agent、DomainAgent 以及 Relay 编排的下游 Agent 都可能处理资金、账务、税务、审批、金额、企业文档等敏感信息。敏感内容不只存在于最终回答中，还可能出现在用户问题、意图结果、思考过程、工具参数、工具结果、澄清问题、异常信息和附件引用中。

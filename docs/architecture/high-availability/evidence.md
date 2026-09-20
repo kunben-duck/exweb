@@ -1,5 +1,9 @@
 # 本轮验证记录与证据边界
 
+当前审查基线为`8f48d6cc084be91bcbaad90be43dac7181636cb4`（2026-09-21），本轮文档检查见[第8节](#stability-review-20260921)。**下方第1–7节及其开头说明为2026-09-18历史原记录**；当时的基线、179项测试、失败/重跑记录、旧路径和图数量均保持，不表示本轮重新运行。当前架构事实以[部署现状](deployment.md#dep01)为准，历史Tool/Admin独立描述已被本轮一体agentService事实替代。
+
+---
+
 源码基线：`00abae4f80b7e7e5b4d0ddca707035f1878a8ec8`。执行日期：2026-09-18（Asia/Shanghai）。本轮新增/更新高可用文档，未修改业务Java、测试Java、SQL、配置或协议；未运行生产操作、数据库迁移、压测或故障演练。
 
 第1–4节保留首批场景审计及179项现有测试的原记录；第5节记录同日按用户确认拓扑补充部署/容灾文档的增量检查。增量阶段没有重复运行Java测试，不能把原结果算作新增平台测试通过。
@@ -155,3 +159,48 @@ mmdc -i docs/architecture/high-availability/deployment.md -o /tmp/financeex-ha-c
 - 772处本地链接（含200处源码行号引用）检查通过，无残留旧版链接，行尾空白检查通过；仅修改文档，未运行新的业务测试或故障演练。
 
 当前业务测试记录仍为第1–2节的179项现有测试，不将已删除旧版的执行结果计入当前验收。
+
+
+<a id="stability-review-20260921"></a>
+## 8. 全面稳定性复核与服务隔离方案（2026-09-21）
+
+起点提交：`8f48d6cc084be91bcbaad90be43dac7181636cb4`；从干净的`202605/fin_ex_web_v3`创建`codex/ha-stability-hardening`。与历史`00abae4`比较，`src`、`pom.xml`和联调前端没有变更，本轮仍重新核对关键调用链、事务、SQL、默认配置和证据边界。复用结论不等于重跑历史实验。本轮只修改7份高可用文档及3份相关架构文档；没有修改业务/测试Java、SQL、部署或配置。
+
+| 检查 | 本轮结果 | 证明范围与限制 |
+|---|---|---|
+| 入口及覆盖 | 重新提取45个Controller handler，对应44个唯一HTTP操作；Controller、场景索引及当前OpenAPI集合一致；317个本地引用可解析 | 增补前端技能查询、admin管理、MCP三个外部入口组；不计入Chat接口数量。入口×场景×资源×十类故障矩阵有检查落点，不承诺消除所有未知风险 |
+| 源码与锁/等待 | 核对受理、路由、事件、交互、Stop、回调、恢复、历史/删除、文件、旁路、治理及其适配器/Mapper/配置；新增14条事务锁路径、6类JVM锁对象和16段等待预算 | 保留Session排序、Run NOWAIT、短事务、CAS/fencing；区分同事务锁序与commit后阶段。记录兼容入口事务内Redis、部分期限未覆盖鉴权/排队/底层IO等条件，不宣称已复现死锁 |
+| 当前与目标架构 | 当前一体agentService和两条执行链、独立intentService、共享DB/Redis按U/S纠正；DEP01分现状与目标 | 未来五服务、文档直传/隔离worker、跨AZ/Region与静态备用均属P；外部内部实现/平台参数仍E。修正目录外两个架构入口和零留存提案的物理调用边界 |
+| 风险闭环 | R01–R38、T01–T38、W01–W14、RB01–RB14、D01–D12连续；38行风险矩阵全部具备W/T/RB/D和责任角色 | 新增R36一体服务争抢、R37 MCP放大/取消、R38跨路径锁等待/事务边界；原35项重核条件与保护，无CLOSED项 |
+| 文档引用 | 1013处本地链接（含320处源码行号引用）、Markdown锚点、目录外入链和修改的相关文档检查通过；原显式锚点、场景步骤及DEP编号保留 | 行号存在不等于语义正确；关键新结论另外核对源码，外部服务无源码不补造内部实现 |
+| 图语法与渲染 | 12场景24图＋7部署图共31张主图均经本地Mermaid CLI生成SVG；另渲染修改的目录外整体架构图1张 | 本轮渲染不沿用历史30图结果；未向第三方制图服务上传文档。长图以可缩放SVG或完整宽度阅读 |
+| 图可读性 | 32张图生成PNG联系表检查整体布局；放大抽查DEP01目标、S02粗图、S03/S04/S09/S11细图、DEP06回切；长类名分行、资源名统一及缓存/DB/ACK边界拆分后复渲染 | 保留真实类/方法名、稳定步骤及U/S/P/E边界；PNG仅为临时视觉检查，仓库Markdown/Mermaid为事实源 |
+| 交叉审阅修正 | 修正Redis发布执行器任务队列与每topic事件缓冲混淆、OBS期限作用域、现状与目标混用；补T12/D06文档迁移与T27/D07灰度子矩阵 | 500MiB不是当前默认允许或已压测通过；已有50MB/60MB及许可不代表该容量安全；灰度共库必须验证旧新应用与DDL兼容 |
+| 范围与格式 | `git diff --check`通过；改动限定10份相关Markdown；高可用目录仍7份，无archive或重复方案 | 无生产操作、Java测试、压测或故障注入；文档检查不能关闭业务风险或代替容灾验收 |
+
+本轮首次文档检查在并行编辑期间发现新锚点尚未落地、灰度锚点拼写及子标题重复T编号，均在最终检查前修正；没有将其当作业务测试失败。渲染后对三张细图的长参与者名称加换行，统一细图DB/Redis名称并拆开缓存和ACK边界，重新渲染确认。补充JVM锁内emit/dispose与已有锁外发送/释放保护，未取得反向锁环证据。历史Mockito错误及旧图解析失败原样保留在第1–7节，不计入本轮测试。
+
+本轮用例和演练均为**NOT_RUN**；执行时若契约、平台能力或预算缺失，则相关子例标BLOCKED。仍待真实环境验证：
+
+- 实际openGauss版本/驱动/隔离级别、锁等待/死锁实验、DDL影响、池耗尽与切主后的回滚及连接释放；Redis按真实部署拓扑验证，生产使用Cluster时不能以standalone替代。
+- agentService各模块及Relay MCP的队列、扇出、嵌套重试、远端停止、幂等与UNKNOWN对账；DomainAgent/intentService的SLA数值和定位字段须双方签认。
+- 4C4G等实际规格下的CPU/堆/native/线程/FD/临时盘上界、500MiB传输、稳态及故障恢复放量；未得到测量前不推定并发容量或服务必然崩溃。
+- 前端/WCM备用源、ADS控制/运行面、ALB流式期限及摘流、跨AZ剩余容量、Region网络分区单写与回切；SLO、服务/任务RTO及数据/附件RPO尚未冻结。
+- 文档迁移、直传授权/完成登记、EDM worker隔离、配置版本和灰度协调、跨服务trace/结果查询/取消协议等均为待实施任务，不是现有控制API。
+
+复现文档检查时读取当前文件，不复用旧YAML导出或旧图快照。临时校验脚本和渲染产物只作本机证据，正式验收须归档原始指标/日志及执行单。
+
+```sh
+mmdc -i docs/architecture/high-availability/scenarios.md -o /tmp/financeex-ha-stability/scenarios.md -e svg -j 2
+mmdc -i docs/architecture/high-availability/deployment.md -o /tmp/financeex-ha-stability/deployment.md -e svg -j 2
+git diff --check
+```
+
+| 本机临时证据 | 内容 |
+|---|---|
+| `/tmp/financeex-ha-stability-check.py`、`/tmp/financeex-ha-stability/check.json` | 当前文件链接/锚点/源码行范围、稳定编号/步骤、38行闭环、全新解析OpenAPI、改动范围及空白检查 |
+| `/tmp/financeex-ha-stability/scenarios-render.log`、`deployment-render.log`、`architecture-render.log` | 本轮最终31主图及目录外1图的本地渲染记录 |
+| `/tmp/financeex-ha-stability/scenarios-{1..24}.svg`、`deployment-{1..7}.svg` | 当前主图SVG；同名PNG及`contact-{1..4}.png`用于可读性检查 |
+| `/tmp/financeex-ha-stability/render-manifest.json` | 最终图源摘要与产物检查，区分图修改后的复渲染 |
+
+本次分支提交/推送只发布方案，不表示W01–W14已实现或T/D已通过。后续关闭风险须补修复版本、有效参数、双方契约、资源与业务断言、测试/演练证据和具名复核。

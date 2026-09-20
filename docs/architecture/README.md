@@ -3,8 +3,10 @@
 基于当前实现的场景双层时序图、风险登记、加固任务、高可用测试与故障演练，参见
 [高可用落地蓝图](high-availability/README.md#overview)；已执行的本地检查与待执行的环境验收分别记录。
 
-WCM、ALB、Jalor、ADS与Admin/Tool/Relay/Chat共享数据依赖，以及跨AZ、跨Region主备、静态备用源和区域接管/回切，参见
-[部署架构与容灾设计](high-availability/deployment.md)。下文的DomainAgent表示逻辑provider；实际业务流由Chat携带skillId经Tool转发至第三方，Relay由Chat独立连接。
+当前静态资源和入口采用WCM、ALB、Jalor，应用部署在ADS；ChatService、relayService、一体agentService共享DB和Redis，参见
+[部署架构与容灾设计](high-availability/deployment.md)。当前agentService同时承担管理、技能查询、统一chat与MCP；Chat携带skillId经agentService转发至第三方DomainAgent，Chat独立连接relayService，relayService再经agentService MCP调用下游。intentService是独立第三方。下文DomainAgent指逻辑provider，不表示Chat绕过agentService直连第三方。
+
+拆分为adminService/toolService/agentService、文档管理迁移、跨AZ/Region主备与独立静态备用源均为目标设计，见[现状及目标图](high-availability/deployment.md#dep01)；现有调用链和待建设能力不能混用。运行视图、事务/锁及等待预算、风险到测试/预案的追踪以高可用文档为准。
 
 主编排代码阅读顺序、状态机、记忆边界和调试入口参见
 [FinanceEXChatService 开发导读](../onboarding.md)。

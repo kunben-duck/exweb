@@ -1,71 +1,115 @@
 # 部署架构与跨 AZ / 跨 Region 容灾设计
 
-源码基线：`00abae4f80b7e7e5b4d0ddca707035f1878a8ec8`；设计日期：2026-09-18。本文补充[高可用落地蓝图](README.md#overview)，仅交付设计，未修改部署、业务代码、SQL或协议，未执行平台故障注入。
+源码基线：`8f48d6cc084be91bcbaad90be43dac7181636cb4`；复核日期：2026-09-21。本文补充[高可用落地蓝图](README.md#overview)，仅交付设计，未修改部署、业务代码、SQL或协议，未执行平台故障注入。
 
 ## 1. 设计依据与边界
 
 | 标记 | 含义 | 本次内容 |
 |---|---|---|
-| U | 用户确认的架构事实 | Web静态资源在WCM；ALB管理路由文根；服务在ADS Docker；Admin/Tool/Relay/Chat共享DB和Redis；各Region ALB独立，ADS控制面和运行面均独立 |
-| S | 当前源码确认 | Chat以统一HTTP地址及skillId调用逻辑DomainAgent；独立WS连接Relay；独立技能属性查询；默认不支持可靠Runtime接管 |
-| P | 已选定、待实施的目标 | 区域内跨AZ多副本、异地主备热备、GSLB/DNS受控切换、WCM独立备用源、区域单写屏障 |
-| E | 尚需平台/联调证据 | 有效URL、文根、ALB源站接入、复制/隔离机制、ADS部署参数、其他服务内部状态及真实恢复结果 |
+| U | 用户确认的架构事实 | WCM静态资源；ALB提供路由文根；Jalor和业务服务运行于ADS Docker；当前ChatService、relayService、agentService共享数据库和Redis；intentService独立第三方；各Region的ALB与ADS运行/控制面独立 |
+| S | 本仓源码确认 | Chat通过统一HTTP地址和skillId执行逻辑DomainAgent请求；独立WS连接Relay；通过独立配置URL查询技能属性；默认不支持可靠Runtime接管 |
+| P | 待实施目标 | agentService拆分为adminService、toolService、agentService；文档管理迁移；跨AZ、跨Region主备、静态备用源和区域执行屏障 |
+| E | 待平台/联合验证 | 生效URL、文根、ADS资源、外部服务内部实现、MCP协议与取消、共享数据用途、复制及真实容灾能力 |
 
-U不等于已完成生产验收。本文不假定ADS等同Kubernetes、ALB等同某公有云产品或S3兼容API等同静态网站托管；所有能力依本平台证据验收。
+用户最新确认的一体agentService架构替代旧文档“Admin/Tool已经独立部署”的描述。后文“参与服务”按阶段计算：当前是ChatService、relayService、agentService；拆分后是ChatService、relayService、adminService、toolService、agentService，文档转发worker计入对应服务实例预算。拆分后数据库和Redis第一阶段继续共享。
+
+U不等于生产验收；不假定ADS等同Kubernetes、ALB等同某公有云产品。图中资源统一为**共享DB（openGauss）**和**Redis**，实际Redis拓扑、HA和持久化设置为E，不从名称推断。对象存储的静态产物与业务附件分别管理。
 
 | 代码边界 | 源码证据与解释 |
 |---|---|
-| Chat → Tool → DomainAgent | [ConfiguredDomainAgentClient.query](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)向统一配置URL发送流式请求；[请求映射](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/DomainAgentChatRequestMapper.java#L53)填可信skillId。Tool物理转发及Admin映射由U确认，Tool实现不在本仓 |
-| Chat → Relay | [Relay连接](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)、[配置端点](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L952)是独立WS链路，不经过Tool |
-| 技能属性查询 | [配置Provider](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L60)向独立URL查询技能属性；不能等同Tool的skillId→Agent地址映射。实际API归属Admin/Tool或其他门面需绑定生效URL |
-| 接管边界 | [UnsupportedAgentRuntimeRecoveryPort](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/UnsupportedAgentRuntimeRecoveryPort.java#L21)返回不支持；恢复历史与继续远端执行是不同能力 |
-| 生效配置 | [application.yml](../../../src/main/resources/application.yml)只是配置入口，不能由默认值推断生产副本、ALB超时或数据库拓扑 |
+| ChatService → agentService → DomainAgent | [ConfiguredDomainAgentClient.query](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)向配置地址发起流式HTTP；[请求映射](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/DomainAgentChatRequestMapper.java#L53)传可信skillId。物理中转为agentService（U），Java类名不代表绕过中转 |
+| ChatService → relayService → agentService MCP | [Relay连接](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)及[端点](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L952)确认Chat独立WS；后续MCP调用为U，具体协议、重试及资源释放为E |
+| 技能查询 | [配置Provider](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L60)查询skillName/isSaveSession/attachmentType；用户确认归agentService。实际配置URL需联调核对，不能等同执行mapping查询或宣称Chat直接查管理表 |
+| 接管边界 | [UnsupportedAgentRuntimeRecoveryPort](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/UnsupportedAgentRuntimeRecoveryPort.java#L21)不支持可靠Runtime接管；历史恢复不等于重跑外部执行 |
+| 生效配置 | [application.yml](../../../src/main/resources/application.yml)只是配置入口；默认连接数、超时不能当作生产安全容量 |
 
-以下六图的编号稳定：架构节点为`DEPxx-Nnn`，时序步骤为`DEPxx-nn`。逻辑图省略的鉴权、存储、WeLink、记忆/标题等条件依赖继续见[场景图](scenarios.md#flows)，不因省略而退出容灾清单。
+保留DEP01–DEP06，DEP01分别展示现状与目标，共7张部署图；架构节点编号与时序步骤稳定。节点显示名称从部署、证据属性中分离，属性在图例及表中解释。鉴权、存储、WeLink、记忆/标题等条件依赖见[场景图](scenarios.md#flows)。
 
 <a id="dep01"></a>
-## DEP01 — 完整逻辑架构
+## DEP01 — 现状与拆分目标
 
-基础调用边界为U/S，备用静态源及管理入口复用Jalor为P（实际管理鉴权链待E确认）。图中两个ALB节点是同一区域路由层的不同逻辑视图，不代表额外部署了两套ALB。服务间HTTP/WS经内部文根，数据库连接/Redis协议不经过HTTP文根。
+<a id="dep01-current"></a>
+### 当前逻辑架构（U/S）
+
+ALB入口文根与内部文根是同一区域路由层的逻辑视图。下图只有一个agentService物理服务，其管理、技能查询、chat和MCP是内部能力；内部线程池、队列和连接是否隔离均需E。前端技能查询属于完整架构，不能计入ChatService的HTTP接口数量。
 
 ```mermaid
 flowchart LR
-    web["DEP01-N01 Web浏览器"] --> edge["DEP01-N02 区域ALB入口文根"]
-    edge -->|静态主源 U| wcm["DEP01-N03 WCM"]
-    edge -.->|静态备用 P| staticOrigin["DEP01-N04 独立托管HTTPS静态源"]
-    staticOrigin --> objects["DEP01-N05 对象存储发布包"]
-    edge -->|API及前端WS| jalor["DEP01-N06 Jalor网关"]
+    web["DEP01-CN01 Web"] --> edge["DEP01-CN02 ALB"]
+    edge -->|静态资源| wcm["DEP01-CN03 WCM"]
+    edge -->|业务文根| jalor["DEP01-CN06 Jalor"]
+    jalor -->|聊天与前端WS| chat["DEP01-CN07 ChatService"]
+    jalor -->|技能查询和管理入口| agent["DEP01-CN09 agentService"]
+    chat -->|chat和技能查询HTTP| internal["DEP01-CN08 ALB内部文根"]
+    chat -->|独立WS| internal
+    internal -->|chat和技能查询| agent
+    internal -->|WS| relay["DEP01-CN10 relayService"]
+    relay -->|MCP工具调用| internal
+    internal -->|MCP服务| agent
+    agent -->|统一chat或MCP适配后调用| domain["DEP01-CN12 DomainAgent"]
+    chat -->|意图识别| intent["DEP01-CN13 intentService"]
+    chat --> db["DEP01-CN14 共享DB（openGauss）"]
+    agent --> db
+    relay --> db
+    chat --> redis["DEP01-CN15 Redis"]
+    agent --> redis
+    relay --> redis
+```
+
+agentService同时服务管理操作、前端技能列表、Chat运行查询、统一chat和Relay MCP工具。**Chat的两条执行路线在agentService重新汇合**：其进程/资源或共享依赖故障可能同时影响两路；不能把切到Relay当作无条件的故障隔离。MCP扇出、取消传递及第三方任务查询由联合契约验证。
+
+<a id="dep01-target"></a>
+### 三服务拆分及文档归属目标（P）
+
+保留旧DEP01-N编号作为目标节点；目标不是现有能力。adminService发布可追溯配置版本，toolService和agentService加载已发布配置，不让每次执行同步依赖后台管理可用性。
+
+```mermaid
+flowchart LR
+    web["DEP01-N01 Web"] --> edge["DEP01-N02 ALB"]
+    edge -->|静态主源| wcm["DEP01-N03 WCM"]
+    edge -.->|静态备用| staticOrigin["DEP01-N04 独立HTTPS静态源"]
+    staticOrigin --> staticObjects["DEP01-N05 静态对象存储"]
+    edge --> jalor["DEP01-N06 Jalor"]
     jalor --> chat["DEP01-N07 ChatService"]
-    tool["DEP01-N09 ToolService"]
-    relay["DEP01-N10 RelayService"]
-    admin["DEP01-N11 AdminService"]
-    chat -->|Tool HTTP或独立Relay WS| internal["DEP01-N08 同区域ALB内部文根"]
-    internal -->|Tool HTTP文根| tool
-    internal -->|Relay WS文根| relay
-    jalor -.->|管理入口目标 P| admin
-    admin -.->|映射配置流 U 具体分发机制E| tool
-    tool -->|第三方流式API| domain["DEP01-N12 第三方DomainAgent"]
-    chat -->|路由请求| intent["DEP01-N13 第三方IntentService"]
-    chat --> db["DEP01-N14 四服务共享数据库"]
+    jalor -->|查询和文档管理| agent["DEP01-N16 agentService"]
+    jalor -->|管理入口| admin["DEP01-N11 adminService"]
+    chat -->|chat及查询HTTP 或Relay WS| internal["DEP01-N08 ALB内部文根"]
+    internal -->|统一chat| tool["DEP01-N09 toolService"]
+    internal -->|运行时查询和文档引用| agent
+    internal -->|独立WS| relay["DEP01-N10 relayService"]
+    relay -->|MCP工具调用| internal
+    internal -->|MCP服务| tool
+    tool --> domain["DEP01-N12 DomainAgent"]
+    chat --> intent["DEP01-N13 intentService"]
+    admin -.->|已发布配置版本| tool
+    admin -.->|已发布配置版本| agent
+    chat --> db["DEP01-N14 共享DB（openGauss）"]
     tool --> db
     relay --> db
     admin --> db
-    chat --> redis["DEP01-N15 四服务共享Redis"]
+    agent --> db
+    chat --> redis["DEP01-N15 Redis"]
     tool --> redis
     relay --> redis
     admin --> redis
-    chat -.->|独立配置URL S| skill["DEP01-N16 技能属性API 归属E"]
+    agent --> redis
+    web -->|短期授权后分片直传| objects["DEP01-N18 文档对象存储"]
+    agent -->|完成校验与对账| objects
+    agent -.->|需转发的EDM任务| worker["DEP01-N17 文档转发worker"]
+    worker --> edm["DEP01-N19 API Store或EDM"]
 ```
 
-N06/N07/N09/N10/N11运行于ADS Docker；为了让逻辑调用边可读，容器/AZ边界在DEP02单独展开。Tool HTTP请求包含可信skillId，Relay使用独立WS及其会话标识。
+业务HTTP/WS的实际文根和管理鉴权需平台确认，图不新建公网管理入口。文档对象存储直传走授权的对象入口，其是否需专用ALB文根/企业出口为E；文件数据不得绕回Chat或技能查询进程。worker归属agentService文档能力，但采用独立进程/实例组和资源配额，不增加第四个业务服务职责；其数据库/Redis连接同样计入预算。
 
-| 节点/故障传播 | 风险、措施与验证 |
+| 节点或链路 | 故障传播与闭环 |
 |---|---|
-| N03–N05不可用或版本不一致，页面无法启动，后端健康也无用 | R31 → W12 → T31 → RB12/D10 |
-| N02/N08文根、重写、鉴权头或长连接策略错误，多个服务同时受影响 | R32 → W12 → T32 → RB12/D10 |
-| N09/N11配置错误或发布不完整可能把同一skillId送往错误目标；外部已执行而响应丢失产生未知结果 | R30 → W11 → T30 → RB11/D09 |
-| N14/N15由任一服务耗尽，影响其他服务、Chat Stop/心跳及管理修复操作 | R28/R29 → W11 → T28/T29 → RB11/D09 |
-| 第三方Intent/DomainAgent、共享鉴权仍可能是跨Region共同故障点 | R06/R30/R35；区域切换不能保证消除外部故障 |
+| CN09当前一体服务 | 管理/查询洪峰耗尽CPU、堆、线程或DB连接，chat与MCP同时受影响；R36 → W11 → T36 → RB11/D09 |
+| CN10→CN09→CN12 | 扇出与分层重试放大，超时后工具继续执行；R37 → W05/W11 → T37 → RB05/D04 |
+| CN14/CN15、目标N14/N15 | 任一服务耗尽共享资源，影响其他服务及Stop/心跳；R28/R29 → W11 → T28/T29 → RB11/D09 |
+| CN09配置、目标N09/N11/N16 | 映射/留存配置过期或版本不一致；R16/R30 → W05/W11 → T16/T30 |
+| N17/N18/N19 | 500MiB传输、元数据登记与对象结果分离；R12 → W06 → T12 → RB07/D06 |
+| CN02/CN08、N02/N08 | 路由、鉴权头、流缓冲、期限和重试错误跨服务传播；R32 → W12 → T32 |
+| N03–N05及第三方依赖 | 静态源故障、共同第三方不可用；R31/R35，切区不能修复同一第三方故障 |
 
 ## 2. ALB路由与协议契约
 
@@ -76,10 +120,11 @@ N06/N07/N09/N10/N11运行于ADS Docker；为了让逻辑调用边可读，容器
 | 前端静态文根 | WCM主源/独立备用源；原域名及base path保持；故障切换只作用于静态路径 | HTTPS源站接入、Host/SNI、私有访问、深层路由、MIME、缓存；API前缀优先于SPA兜底 |
 | Chat HTTP/Resume/SSE | ALB → Jalor → Chat；连接、首字节、idle、总期限分别登记；预算与应用一致 | SSE不被缓冲到终态，错误码透传；受理/Stop/回调等非幂等操作不做入口透明重试 |
 | 前端WS | ALB → Jalor → Chat；Upgrade、心跳、idle及摘流策略显式配置 | 正常长流、半开连接、断连后退避、跨实例恢复、DNS旧缓存 |
-| Chat → Tool | 内部文根 → Tool → DomainAgent；逐跳分配总期限 | skillId/请求标识透传、流式背压、取消路由、未知执行结果查询；各跳重试次数合并计入预算 |
-| Chat → Relay | 内部WS文根 → Relay；不能轮流把同一运行会话发给不持有状态的副本 | 会话归属、重连/Stop同目标、专家跨Run会话及迟到Stop；粘性路由本身不证明故障接管 |
-| Admin管理文根 | 经既有鉴权边界进入Admin；权限和内部暴露范围与现状一致 | 配置发布一致性、作业单执行权、页面配置缺失的降级边界；不自行新增公网管理入口 |
-| 技能属性API | 绑定独立配置URL到实际服务，不与Tool执行API混淆 | 留存和附件策略的现有失败语义；撤销或权限类配置不得无限沿用旧缓存 |
+| ChatService → 执行接口 | 当前内部文根 → agentService → DomainAgent；目标为toolService；逐跳分配总期限 | skillId/请求标识透传、流式背压、取消路由、未知执行结果查询；各跳重试次数合并计入预算 |
+| ChatService → relayService | 内部WS文根 → Relay；不能轮流把同一运行会话发给不持有状态的副本 | 会话归属、重连/Stop同目标、专家跨Run会话及迟到Stop；粘性路由本身不证明故障接管 |
+| 管理文根 | 当前agentService管理模块，目标adminService；经既有鉴权边界，权限和内部暴露范围保持 | 配置发布一致性、作业单执行权、页面配置缺失的降级边界；不自行新增公网管理入口 |
+| 前端及运行时技能查询 | 当前与目标均为agentService；独立配置URL需核对，不与统一chat或执行mapping混淆 | 留存和附件策略的现有失败语义；撤销或权限类配置不得无限沿用旧缓存 |
+| relayService → MCP | 当前内部文根 → agentService MCP → 下游；目标为toolService MCP | 明确MCP传输、会话、工具次数/并发/总期限、429/重试归属、取消传播及远端结果查询，不按普通短HTTP推断 |
 | 异步回调 | 稳定回调地址经ALB/既有鉴权进入当前有权处理的Chat | 第三方实际回调地址、允许重试范围、重复/迟到/失权拒绝、切区后认证和runId关联 |
 
 入口重试、静态备用切换和区域接管是三种不同动作。只有已验证可安全重试的方法/命令才允许自动重试；业务调用未知结果不能按静态GET的方式切源重发。第三方Intent/DomainAgent使用其服务地址；其流量是否经过企业统一出口由平台补证，不能把第三方描述为本方ALB后端。
@@ -87,7 +132,7 @@ N06/N07/N09/N10/N11运行于ADS Docker；为了让逻辑调用边可读，容器
 <a id="dep02"></a>
 ## DEP02 — 单 Region 跨 AZ 部署
 
-整图为P；两AZ是应用部署下限，不限定数据服务仲裁成员只能放两AZ。数据库/Redis切主仲裁依实际产品支持的故障域布局设计，失去一个AZ后必须仍能选出唯一合法主节点。
+整图为P，按当前三服务集合建设跨AZ；拆分后用五服务及worker分别替换副本预算，不假定已拆分。两AZ是应用部署下限，不限定数据服务仲裁成员只能放两AZ。数据库/Redis切主仲裁依实际产品支持的故障域布局设计，失去一个AZ后必须仍能选出唯一合法主节点。
 
 ```mermaid
 flowchart TB
@@ -95,26 +140,26 @@ flowchart TB
     subgraph regionalAds["DEP02-N02 本Region独立ADS运行面和控制面 U"]
         subgraph azOne["AZ-1"]
             jalorOne["DEP02-N03 Jalor副本组"]
-            servicesOne["DEP02-N04 Chat Tool Relay Admin各自副本组"]
+            servicesOne["DEP02-N04 ChatService relayService agentService各自副本组"]
             jalorOne --> servicesOne
         end
         subgraph azTwo["AZ-2"]
             jalorTwo["DEP02-N05 Jalor副本组"]
-            servicesTwo["DEP02-N06 Chat Tool Relay Admin各自副本组"]
+            servicesTwo["DEP02-N06 ChatService relayService agentService各自副本组"]
             jalorTwo --> servicesTwo
         end
     end
     entry --> jalorOne
     entry --> jalorTwo
-    servicesOne --> db["DEP02-N07 共享DB跨AZ HA 单写入口"]
+    servicesOne --> db["DEP02-N07 共享DB（openGauss）"]
     servicesTwo --> db
-    servicesOne --> redis["DEP02-N08 共享Redis跨AZ HA"]
+    servicesOne --> redis["DEP02-N08 Redis"]
     servicesTwo --> redis
     dependencies["DEP02-N09 镜像 配置 密钥 鉴权 网络出口"] -.-> regionalAds
     entry --> staticSource["DEP02-N10 WCM或非ADS备用静态源"]
 ```
 
-N04/N06表示每项服务都有跨AZ副本，不是把四服务装进一个容器。Relay副本分布只提供服务容量冗余，其内存会话的可迁移性仍需协议验证；丢失会话按明确中断/收口处理。内部调用经ALB文根的逻辑边见DEP01。
+N04/N06表示每项服务都有跨AZ副本，不是把参与服务装进一个容器。Relay副本分布只提供服务容量冗余，其内存会话的可迁移性仍需协议验证；丢失会话按明确中断/收口处理。内部调用经ALB文根的逻辑边见DEP01。
 
 | 目标 | 实施及验收要求 |
 |---|---|
@@ -125,43 +170,64 @@ N04/N06表示每项服务都有跨AZ副本，不是把四服务装进一个容�
 | 数据层 | 数据节点、仲裁、连接入口均检查AZ故障影响；主备切换中的未知提交按业务标识核对，不盲目重试 |
 | 关联闭环 | DEP02-N01/N10 → R31/R32；N02–N06/N09 → R33/R34 → W13 → T33/T34 → RB13/D11；N07/N08 → R28/R29 |
 
-## 3. 四服务共享资源与配置职责
+## 3. 服务拆分、共享资源与配置职责
 
-| 服务 | 数据库职责 | Redis职责 | 预算与证据 |
-|---|---|---|---|
-| Chat | S：会话、Run、事件、Binding、Interaction及相关业务事实 | S：实时广播、Binding/技能等缓存；具体用途见[生命周期](scenarios.md#resources) | Run/恢复/查询/Stop/心跳分别计等待与占用；跨实例池总和纳入预算 |
-| Tool | U：与其他服务共享DB；映射、执行账本是否直接落DB为E | U：共享Redis；配置缓存、锁、队列是否使用及其权威性为E | Tool负责人登记各操作、重试、连接、流缓冲及在途外呼上限 |
-| Relay | U：共享DB；会话状态、任务进度、外部执行记录的持久化范围为E | U：共享Redis；会话路由/锁/任务状态具体用途为E | Relay负责人证明会话归属、丢失处理、控制命令隔离及副本容量 |
-| Admin | U：配置技能映射、作业、页面；实际表/发布事务为E | U：共享Redis；配置分发/作业调度状态的具体用途为E | 管理查询、配置发布、批量任务限额；作业单执行权覆盖切区 |
+| 阶段/服务 | 数据和能力职责 | 必须隔离的预算及故障边界 |
+|---|---|---|
+| 当前ChatService（S/U） | 会话、Run、事件、Binding、Interaction、当前文档及相关业务事实；Redis缓存和广播 | 主Run、恢复、历史、文档、Stop/心跳分别度量等待、占用与释放 |
+| 当前agentService（U，内部实现E） | 管理配置、技能查询、统一chat、MCP共进程；各模块表/缓存/队列用途需负责人登记 | 管理批任务和前端查询不得吃满执行资源；chat与MCP按调用方/下游设预算，并有实例总上限 |
+| 当前relayService（U，内部实现E） | 会话、工具执行与任务状态；具体持久化和锁用途需取证 | 每Run工具并发/总调用次数、连接、重试与取消；不能只用Chat请求数估算MCP负载 |
+| 目标adminService（P） | 管理写入和版本化发布，后台作业单执行权 | 独立账号/实例/任务与DDL预算；运行时不逐请求访问管理服务 |
+| 目标toolService（P） | 已发布skill映射、chat/MCP转发与执行对账 | chat与MCP分别隔离，并共享提供方总配额；不同技能的慢依赖不能耗尽全部执行资源 |
+| 目标agentService（P） | 技能展示、关键策略查询、文档授权/状态/元数据及可信引用 | 展示、策略、文档分别设资源配额；关键留存策略不能无限使用旧配置降级；文件worker独立进程 |
 
-数据库预算按四服务**最大计划副本数和发布重叠副本**计算：所有连接池上限之和 + 运维/治理保留连接 + 其他客户端预算 ≤ 数据库已验证安全连接额度。连接数满足不代表CPU/IO/锁容量满足，需同时验收。备用应用不连接旧区域主库执行业务；其只读探测也受预算约束。
+数据库预算按参与服务**最大计划副本、worker及发布重叠副本**计算：所有连接池上限之和 + 运维/治理保留 + 其他客户端预算 ≤ 已验证的数据库安全额度。还需验证CPU、IO、锁等待、长事务和磁盘增长；满足连接数不等于满足容量。独立账号、表归属和查询限额不形成物理隔离。共享实例仍不可接受时另立资源拆分任务，本阶段不默认迁移双库。
 
-Redis逐用途登记owner、key/topic命名空间、ACL、数据量/TTL、连接/命令速率、重要性及可否重建。逻辑隔离不形成内存或CPU硬隔离；如共享部署无法满足混合故障测试，W11必须提出实例拆分或更强资源隔离任务，经容量证据决策，不能以增加连接数结案。
+Redis逐用途登记owner、key/topic、ACL、数据量/TTL、连接/命令速率、可否重建及是否存持久状态。逻辑命名空间不隔离CPU/内存，不能通过FLUSH清理某个模块。各模块并发回源、重试、缓存预热与故障恢复共同受总预算约束。
 
-**读写分离默认不启用。** Run/Interaction/Binding判断、鉴权/删除/分享撤销、写后读及Resume继续读当前权威主库。只读副本仅评估能明确容忍陈旧数据的查询，并单独设计一致性和延迟门槛；`readOnly=true`不是自动读副本依据。特别是Resume历史读取落后于实时广播时，可能漏掉已提交但尚未复制的事件，不能直接改用从库。
+**读写分离默认不启用。** Run/Interaction/Binding、鉴权、删除/撤销、写后读和Resume访问当前权威主库；只读副本仅评估明确容忍陈旧的查询。`readOnly=true`不代表可读副本，异步复制落后不能用实时流掩盖历史缺口。
 
-配置目标契约P：Admin发布可追溯版本；Tool为每次执行固定实际映射与版本，Stop/回调沿原执行目标处理，不能在映射更新后发送给另一Agent。最后可用配置仅在约定新鲜度与权限规则内续服；未知、撤销或越权映射拒绝执行。该契约需Tool/Admin联合实现，不假定现有协议有版本字段。Chat独立技能属性缓存仍遵守本仓留存及附件失败语义，不擅自放宽。
+<a id="service-split"></a>
+### 拆分实施与文档迁移（P）
+
+1. 先在一体agentService内建立模块指标与资源预算，记录管理/查询对chat/MCP的影响；这是拆分收益的对照基线。
+2. 为管理发布建立版本化快照及激活/撤回流程，再拆adminService；toolService和agentService只加载已发布配置，记录实际使用版本。保留配置新鲜度和撤销边界，不将缓存当永远有效。
+3. 将统一chat和MCP迁入toolService，先保留原路径、skillId、错误/流格式及回调合同，经ALB受控切换。运行中的会话、工具调用、取消与回调仍归原执行目标，未收口任务不得因映射变化改投另一Agent。
+4. agentService保留技能查询，文档管理分批迁入：维持documentId、归属权限、历史附件、可信provider引用和软删除语义；先兼容旧接口及数据读取，再转移元数据写入权。同一文档不能由新旧管理路径并行修改；存量对象不因控制面迁移重新上传。
+5. 对象存储上传由短期授权、分片传输、完成校验和幂等登记组成。签名/合并/登记属于待建设协议，不把前端完成通知视为可信事实；长期凭据不下发。skillId→EDM路径若不支持对象引用导入，沿现有契约由隔离worker流式转发，不能直接换成S3文档身份。
+6. 同负载复验故障隔离、资源回落和业务正确性；撤销灰度只对新流量生效，在途任务继续受原归属约束。共享DB/Redis造成的共同故障仍单独验证。
+
+完整措施、参数作用域和双方SLA/故障定位契约统一见[W11](risks.md#w11)，文档资源生命周期见[W06](risks.md#w06)。本页描述目标职责，不表示这些隔离或协议当前已具备。
+
+<a id="canary-schema"></a>
+### 灰度、数据库兼容与回滚（P）
+
+日常灰度的正式/灰度应用共享生产库；独立预发布库先验证DDL、数据迁移、锁/资源影响和新旧读写兼容。生产DDL单独受控执行，先扩展再灰度应用，结束回滚窗口后才收缩；新增字段或索引也可能阻塞生产，不能只凭SQL执行成功验收。跨所有参与服务检查状态值、字段语义及新数据能否被旧版本读取。
+
+同库灰度维持同一业务协调域，按用户/租户及Session/Run稳定归属，覆盖HTTP、WS、Resume、回调和后台扫描。[Redis环境命名](../../../src/main/java/com/huawei/it/ex/one/infrastructure/redis/FinanceExRedisKeyBuilder.java#L208)当前取首个Spring profile，不能仅新增gray profile而意外分裂取消标记与广播；[恢复扫描](../../../src/main/resources/mapper/persistence/ChatRunExecutionMapper.opengauss.xml#L187)尚无灰度批次过滤。二者列入W09/W13实施与T27验收，不能宣称HIS/ADS比例切流已经解决。
+
+应用回滚优先保留兼容新增结构，不自动删除灰度产生的业务数据。对不兼容DDL、字段语义或物理隔离要求另立数据迁移方案，不通过本轮服务拆分默认引入双向双写。
 
 <a id="dep03"></a>
 ## DEP03 — 双 Region 主备部署
 
-图为P，ADS区域独立性和区域ALB独立为U；数据复制、备用源、屏障和编排需E。图中数据库复制按**默认异步**设计；Redis未绘制无条件复制箭头。
+图为P，按当前三服务集合展示，未来拆分后的五服务/worker逐项纳入同一接管屏障。ADS区域独立性和区域ALB独立为U；数据复制、备用源、屏障和编排需E。图中数据库复制按**默认异步**设计；Redis未绘制无条件复制箭头。Region A为当前唯一写主，Region B提升前只读；Redis分别为各区域实例，其锁不能直接继承为执行权。
 
 ```mermaid
 flowchart TB
     browser["DEP03-N01 浏览器与稳定业务域名"] --> globalEntry["DEP03-N02 GSLB或DNS 受接管门槛控制"]
     subgraph primaryRegion["Region A 正常主区域"]
-        albA["DEP03-N03 ALB-A"] --> adsA["DEP03-N04 ADS-A 跨AZ Jalor及四服务"]
-        adsA --> dbA["DEP03-N05 DB-A 当前唯一写主"]
-        adsA --> redisA["DEP03-N06 Redis-A 区域HA"]
+        albA["DEP03-N03 ALB-A"] --> adsA["DEP03-N04 ADS-A 跨AZ Jalor及参与服务"]
+        adsA --> dbA["DEP03-N05 共享DB（openGauss）"]
+        adsA --> redisA["DEP03-N06 Redis"]
         albA --> webA["DEP03-N07 WCM或独立静态备用源A"]
         artifactsA["DEP03-N08 区域镜像 配置 密钥及对象存储"] -.-> adsA
         artifactsA -.-> webA
     end
     subgraph standbyRegion["Region B 预部署热备区域"]
-        albB["DEP03-N09 ALB-B"] --> adsB["DEP03-N10 ADS-B 跨AZ Jalor及四服务 写入执行关闭"]
-        adsB --> dbB["DEP03-N11 DB-B 只读灾备 提升前禁写"]
-        adsB --> redisB["DEP03-N12 Redis-B 分类恢复 禁复用旧锁"]
+        albB["DEP03-N09 ALB-B"] --> adsB["DEP03-N10 ADS-B 跨AZ Jalor及参与服务 写入执行关闭"]
+        adsB --> dbB["DEP03-N11 共享DB（openGauss）"]
+        adsB --> redisB["DEP03-N12 Redis"]
         albB --> webB["DEP03-N13 独立静态备用源B"]
         artifactsB["DEP03-N14 区域镜像 配置 密钥及对象存储"] -.-> adsB
         artifactsB -.-> webB
@@ -174,7 +240,7 @@ flowchart TB
     fence -.-> adsA
     fence -.-> adsB
     fence -.-> globalEntry
-    external["DEP03-N16 第三方Agent Intent 鉴权等共同依赖"] --- adsA
+    external["DEP03-N16 DomainAgent intentService 鉴权等共同依赖"] --- adsA
     external --- adsB
 ```
 
@@ -195,7 +261,7 @@ N15是待建设的操作能力，不代表仓库已有独立控制服务。隔�
 
 区域级隔离与Chat现有Run级owner/fencing是两层控制，不能互相替代。数据复制滞后时，本地CAS不会检测另一份数据库上的独立写入。DNS缓存或长连接仍访问旧区域时，旧区域也必须拒绝写入；GSLB所有目标不健康时的实际返回行为须实测，不能依赖其必然断流。
 
-接管承诺：新请求可恢复服务；FULL仅恢复新主实际保留的持久化范围，不能掩盖异步复制丢失；no-store不增加业务正文持久化；未可靠接管的在途Runtime按策略核对/收口。Relay会话、Tool请求、异步回调、Admin作业及外部副作用逐项对账，不宣称原流无缝续跑。Region切换不能解决两地都依赖的同一个故障第三方。
+接管承诺：新请求可恢复服务；FULL仅恢复新主实际保留的持久化范围，不能掩盖异步复制丢失；no-store不增加业务正文持久化；未可靠接管的在途Runtime按策略核对/收口。Relay会话、chat/MCP请求、异步回调、管理作业及外部副作用逐项对账，不宣称原流无缝续跑。Region切换不能解决两地都依赖的同一个故障第三方。
 
 关联：N05/N11 → R28/R35；N06/N12 → R29/R35；N02–N04/N09–N10/N15 → R32–R35 → W12–W14 → T32–T35；N07/N13/N08/N14 → R31/R33。区域切换闭环为RB14/D12。
 
@@ -229,7 +295,7 @@ sequenceDiagram
     end
 ```
 
-发布清单含releaseId、内容哈希、HTML入口、带内容哈希的静态资源、运行配置、适配后端版本和回滚版本。先上传资源并验证，再切入口版本；HTML/运行配置采用能及时更新的缓存策略，带哈希资源长缓存且保留旧版本。禁止仅清缓存而删除仍被旧HTML引用的资源。Admin动态页面配置不随静态备用自动恢复，T30/T31同时验证其不可用时的实际体验。
+发布清单含releaseId、内容哈希、HTML入口、带内容哈希的静态资源、运行配置、适配后端版本和回滚版本。先上传资源并验证，再切入口版本；HTML/运行配置采用能及时更新的缓存策略，带哈希资源长缓存且保留旧版本。禁止仅清缓存而删除仍被旧HTML引用的资源。当前agentService中的动态页面配置（目标adminService）不随静态备用自动恢复，T30/T31同时验证其不可用时的实际体验。
 
 备用源须可从本地及备用Region的ALB访问；若ALB不支持该HTTPS源类型或必要的鉴权/重写，W12接入验收失败，先完成平台接入能力，不能临时改成ADS内唯一代理并声称仍独立容灾。对象存储静态发布与业务附件采用独立职责和访问策略，不把用户文件公开为网站资源。
 
@@ -252,7 +318,7 @@ sequenceDiagram
     participant GSLB as GSLB及区域ALB
     IC->>IC: DEP05-01 确认影响范围并发起受控接管
     IC->>GSLB: DEP05-02 停原区域新准入且保持备用未开放
-    IC->>OLD: DEP05-03 隔离四服务后台作业及外部执行
+    IC->>OLD: DEP05-03 隔离参与服务及chat MCP和后台外部执行
     IC->>DBA: DEP05-04 隔离旧主写入并取得证明
     alt 旧应用执行权与旧主均已隔离
         DBA->>NEW: DEP05-05 核对复制恢复点及允许损失
@@ -269,7 +335,7 @@ sequenceDiagram
     end
 ```
 
-05–06若发现复制损失超出事先批准的RPO边界，保持接管门槛关闭并升级；不能由“备用已启动”推导数据可接受。分别核对DB与业务附件对象的实际恢复点、引用和权限：DB已有引用但对象未复制也属于缺口，不能用静态发布包哈希通过来替代。无法核对或超批准损失范围时停止相关接管；已明确接受的缺失对象仍须列清单、隔离对应功能并报告受限恢复，不计为全功能恢复。08前确认Relay会话、Tool执行及Admin作业的接管策略；现有进程可预启动但不能提前执行业务。09包括映射、带附件的新Run、Stop、FULL补读及文档访问正负例。外部已执行、内部记录未复制是必须单独对账的未知结果，不能按“新库没有记录”自动补执行。
+05–06若发现复制损失超出事先批准的RPO边界，保持接管门槛关闭并升级；不能由“备用已启动”推导数据可接受。分别核对DB与业务附件对象的实际恢复点、引用和权限：DB已有引用但对象未复制也属于缺口，不能用静态发布包哈希通过来替代。无法核对或超批准损失范围时停止相关接管；已明确接受的缺失对象仍须列清单、隔离对应功能并报告受限恢复，不计为全功能恢复。08前确认Relay会话、chat/MCP执行及管理作业的接管策略；现有进程可预启动但不能提前执行业务。09包括映射、带附件的新Run、Stop、FULL补读及文档访问正负例。外部已执行、内部记录未复制是必须单独对账的未知结果，不能按“新库没有记录”自动补执行。
 
 DNS TTL、递归解析缓存、浏览器已有连接、第三方回调固定地址分别测量；DNS切换不转移已建立的WS/SSE。回调经稳定地址进入新区域时仍执行现有授权、租约/终态判断；记录缺失或失权回调进入可观察处置，不盲目创建新Run。新旧区域隔离状态在观察期持续验证。
 
@@ -319,9 +385,9 @@ sequenceDiagram
 | CAP02 | GSLB/DNS受控放行、缓存及全不健康行为、管理入口独立 | 网络/SRE；解析轨迹、旧连接与切换实测 | 不自动切备用业务流量 |
 | CAP03 | ADS两Region独立运行和控制，已有容器与重建能力分别验证 | ADS/SRE；拓扑、控制面/数据面注入、T33/T34 | 不把控制面独立当全部依赖独立 |
 | CAP04 | 跨AZ数据库仲裁、旧主隔离、异步恢复点及反向重建 | DBA；真实openGauss拓扑、T28/T35、备份恢复 | 未证明旧主失权则禁止提升后开放写入 |
-| CAP05 | 四服务Redis用途完整，区域HA及分类恢复策略 | 缓存与四服务负责人；用途清单、T29/T35 | 不可重建状态未覆盖则阻断区域接管验收 |
-| CAP06 | 区域执行屏障、停准入、停止调度、排空与有权激活 | 四服务/SRE；受控接口或操作清单、T33/T35 | 当前不存在的开关先列W13/W14，不写成值班命令 |
-| CAP07 | Tool映射版本、执行/取消/回调关联，Relay会话和命令顺序 | Tool/Admin/Relay/第三方负责人；联合契约和T30/T35 | 未知结果不盲重试，不承诺Runtime接管 |
+| CAP05 | 参与服务Redis用途完整，区域HA及分类恢复策略 | 缓存与参与服务负责人；用途清单、T29/T35 | 不可重建状态未覆盖则阻断区域接管验收 |
+| CAP06 | 区域执行屏障、停准入、停止调度、排空与有权激活 | 参与服务/SRE；受控接口或操作清单、T33/T35 | 当前不存在的开关先列W13/W14，不写成值班命令 |
+| CAP07 | agentService当前及拆分后toolService映射版本、chat/MCP执行/取消/回调关联，Relay会话和命令顺序 | agentService/relayService及拆分目标服务/第三方负责人；联合契约和T30/T35 | 未知结果不盲重试，不承诺Runtime接管 |
 | CAP08 | 静态发布包、备用托管源、跨Region对象和访问策略独立 | 前端/WCM/存储；哈希清单、浏览器T31、DEP04 | 不能只以bucket存在或首页200通过验收 |
 | CAP09 | 配额、N-1容量、主备版本兼容、网络出口及认证可用 | 测试/SRE/集成；混合压测、依赖矩阵 | RTO及容量未校准不能签上线通过 |
 | CAP10 | 复制以外的独立备份、恢复演练及数据损坏检测 | DBA/存储；恢复点、校验与耗时证据 | 异步复制不能替代防误删/损坏备份 |
@@ -330,23 +396,23 @@ sequenceDiagram
 
 | 对象 | 预置/复制及核对规则 |
 |---|---|
-| 容器镜像与部署清单 | 两区域可独立读取同一摘要；覆盖Jalor及四服务的启动参数、资源限制、探针、路由、兼容版本；不依赖原Region现场构建 |
-| 配置与Admin发布记录 | 区分业务配置、平台配置和路由配置；记录版本与激活状态，接管时避免恢复到未经发布或错误映射版本 |
+| 容器镜像与部署清单 | 两区域可独立读取同一摘要；覆盖Jalor及参与服务的启动参数、资源限制、探针、路由、兼容版本；不依赖原Region现场构建 |
+| 配置与管理发布记录 | 区分业务配置、平台配置和路由配置；记录版本与激活状态，接管时避免恢复到未经发布或错误映射版本 |
 | 密钥、证书及身份依赖 | 仅登记引用、可用区域、轮换/有效期和访问权限；不在文档复制凭据；第三方白名单和回调认证预验证 |
 | 前端产物 | 同包哈希、发布清单、HTML/JS/配置一致；保留旧资源和上一兼容版本；备用源独立于ADS/WCM故障域 |
-| 数据库与备份 | 按四服务完整数据范围复制，登记持久化恢复点和未知提交；独立备份与恢复验证；表/DDL兼容性覆盖四服务 |
+| 数据库与备份 | 按参与服务完整数据范围复制，登记持久化恢复点和未知提交；独立备份与恢复验证；表/DDL兼容性覆盖参与服务 |
 | Redis | 按缓存/广播/协调/持久任务分类，明确可重建和不可丢失数据；不复制后直接信任旧锁；禁止盲目FLUSH共享实例 |
 | 业务附件与对象 | 与静态发布包分开；同步对象、元数据、权限及引用，核对DB恢复点与对象恢复点差异及孤儿对象 |
-| Relay/Tool/第三方任务 | 明确会话、执行标识、查询结果、取消代次及外部副作用对账；未持久化的进程状态按中断处理 |
+| Relay/chat/MCP/第三方任务 | 明确会话、执行标识、查询结果、取消代次及外部副作用对账；未持久化的进程状态按中断处理 |
 
 ## 5. 验收、发布与证据归档
 
-先验证共享依赖与单服务隔离，再验证WCM/ALB及单AZ失效，最后执行Region计划切换、旧区域仍存活的网络分区、复制滞后、非计划故障与回切。每组具体注入、自动停止条件、撤销步骤、观察窗口及责任人见[T28–T35](tests.md)和[RB11–RB14 / D09–D12](operations.md)。
+先验证共享依赖与单服务隔离，再验证WCM/ALB及单AZ失效，最后执行Region计划切换、旧区域仍存活的网络分区、复制滞后、非计划故障与回切。每组具体注入、自动停止条件、撤销步骤、观察窗口及责任人见[T28–T38](tests.md)和[RB11–RB14 / D09–D12](operations.md)。
 
 SLI至少区分页面可启动、请求受理、首业务事件、Run正确完成、FULL恢复、Stop、服务恢复与遗留任务收口。RPO分别统计配置、已提交事实、对象与外部副作用；无持久化承诺的实时事件单列，不混成一个RPO值。SLO/RTO/RPO、DNS期限、排空期限、观测窗口和资源上限在演练前校准并签认，未填写仅能记录测量结果。
 
-- [ ] 六图与实际服务/ALB/数据职责逐项核对；U/S/P/E证据分开。
-- [ ] 真实openGauss、Redis Cluster及ADS/ALB环境通过适用用例，不能由本地替代组件结果关闭。
+- [ ] 七张部署图与当前/目标服务/ALB/数据职责逐项核对；U/S/P/E证据分开。
+- [ ] 真实openGauss、实际Redis拓扑及ADS/ALB环境通过适用用例，不能由本地替代组件结果关闭。
 - [ ] 旧Region存活及旧DNS/连接场景下，无双写、重复调度或越权外部执行。
 - [ ] WCM故障后浏览器能加载全部资源并完成聊天；一AZ或ADS区域失效后满足约定负载和期限。
 - [ ] FULL/no-store及未知外部副作用恢复边界已验证；未完成任务有可解释的最终处置。

@@ -6,6 +6,8 @@
 
 > 当前代码架构快照。实线表示同步或严格有序调用，粗线表示流式消息，虚线表示异步或 best-effort；橙色节点为周期治理任务。
 
+> 物理边界按用户确认：当前只有一个agentService，包含管理、技能查询、统一chat和MCP；ChatService的DomainAgent适配器访问agentService，relayService也经其MCP调用下游。外部服务内部实现待联合验证，图不推断其线程池或持久化机制。未来拆分、文档迁移和大文件直传见[部署目标](high-availability/deployment.md#service-split)，不属于本图已实现能力。
+
 ## 整体架构图
 
 ```mermaid
@@ -14,9 +16,11 @@ flowchart TB
         direction LR
         PC["PC Web<br/>全量会话与实时续接"]
         Mobile["移动端<br/>channel=mobile"]
-        Gateway["Jalor网关 / 容器<br/>身份、Trace、Cookie配置待验"]
-        PC --> Gateway
-        Mobile --> Gateway
+        ALB["ALB<br/>统一文根与流式连接路由"]
+        Gateway["Jalor<br/>身份、Trace、Cookie配置待验"]
+        PC --> ALB
+        Mobile --> ALB
+        ALB --> Gateway
     end
 
     subgraph Service["FinanceEXChatService 多实例"]
@@ -76,8 +80,8 @@ flowchart TB
         direction LR
         subgraph Data["数据与缓存设施"]
             direction LR
-            OpenGauss[("openGauss<br/>会话、消息、Run、Execution、Event、Binding、Interaction<br/>RouteMemory、分享、文档、反馈")]
-            Redis[("Redis Cluster / Standalone<br/>Active Run、Cancel、Recover Lock、Binding Cache<br/>短期记忆、策略缓存、Pub/Sub")]
+            OpenGauss[("共享DB（openGauss）")]
+            Redis[("Redis")]
             LocalStorage[("本地文件系统")]
             Obs[("Huawei OBS / S3")]
         end
@@ -87,14 +91,14 @@ flowchart TB
             subgraph RoutingExternal["路由与策略依赖"]
                 direction TB
                 UseCaseService["用例库服务"]
-                IntentService["Intent Service<br/>getIntentDecisionStream / Blocking"]
-                SkillConfigService["DomainAgent 技能配置服务"]
+                IntentService["intentService<br/>独立第三方"]
                 EnterpriseAuth["企业鉴权 / SGOV Token Provider<br/>可替换扩展"]
             end
             subgraph RuntimeExternal["Runtime依赖"]
                 direction TB
-                DomainAgentService["DomainAgent Service<br/>chat stream / stop"]
-                RelayService["Relay Service<br/>Delegate / Domain Expert / RESUME / stop"]
+                AgentService["agentService<br/>管理 / 技能查询 / 统一chat / MCP"]
+                DomainAgentService["DomainAgent<br/>第三方"]
+                RelayService["relayService<br/>Delegate / Domain Expert / RESUME / stop"]
             end
             subgraph SupportingExternal["辅助依赖"]
                 direction TB
@@ -161,9 +165,15 @@ flowchart TB
     AuthAdapter -.-> EnterpriseAuth
     UseCaseAdapter --> UseCaseService
     IntentAdapter ==>|"SSE / JSON"| IntentService
-    SkillConfigAdapter --> SkillConfigService
-    DomainAdapter ==>|"HTTP 流 / cancel"| DomainAgentService
+    SkillConfigAdapter -->|"技能属性查询"| AgentService
+    DomainAdapter ==>|"skillId / 统一chat / cancel契约待验"| AgentService
     RelayAdapter ==>|"WebSocket / stop"| RelayService
+    RelayService ==>|"MCP tool（用户确认）"| AgentService
+    AgentService ==>|"转发chat或工具调用（内部实现待验）"| DomainAgentService
+    AgentService --> OpenGauss
+    AgentService --> Redis
+    RelayService --> OpenGauss
+    RelayService --> Redis
 
     DocumentService --> StorageAdapter
     StorageAdapter --> LocalStorage
@@ -189,12 +199,12 @@ flowchart TB
     classDef external fill:#fff4e5,stroke:#a56a20,color:#17202a;
     classDef scheduled fill:#fff0d6,stroke:#c47a00,color:#17202a;
 
-    class PC,Mobile,Gateway client;
+    class PC,Mobile,ALB,Gateway client;
     class RestApi,ShareApi,DocumentApi,RealtimeApi,RunOrchestrator,SessionMessage,InteractionStop,ShareService,DocumentService service;
     class Admission,Lease,Routing,RetentionGate,Binding,RuntimeDispatch,EventPipeline,Terminal core;
     class UseCaseAdapter,IntentAdapter,SkillConfigAdapter,DomainAdapter,RelayAdapter,AuthAdapter,StorageAdapter,StreamAdapter adapter;
     class OpenGauss,Redis,LocalStorage,Obs data;
-    class UseCaseService,IntentService,SkillConfigService,DomainAgentService,RelayService,SessionTitleService,WeLink,ApiStore,EnterpriseAuth,LongTermMemory external;
+    class UseCaseService,IntentService,AgentService,DomainAgentService,RelayService,SessionTitleService,WeLink,ApiStore,EnterpriseAuth,LongTermMemory external;
     class SessionTitle,IntentRecord,RouteMemoryWrite service;
     class Governance scheduled;
 ```

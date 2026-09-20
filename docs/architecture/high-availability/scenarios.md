@@ -1,25 +1,27 @@
 # 功能场景、资源状态与接口索引
 
-按需阅读：[12场景与24张时序图](#flows) → [资源生命周期及状态转换](#resources) → [44个HTTP操作与非REST入口](#interfaces)。资源表统一说明当前资源/状态口径；各场景的源码索引用于核对具体方法和边界。
+按需阅读：[12场景与24张时序图](#flows) → [资源生命周期及状态转换](#resources) → [44个HTTP操作与非REST入口](#interfaces)。另见[入口与十维故障矩阵](#coverage-matrix)、[事务锁顺序](#transaction-lock-order)、[全链路等待预算](#wait-budgets)。资源表统一说明当前资源/状态口径；各场景的源码索引用于核对具体方法和边界。
 
 <a id="flows"></a>
 
 <a id="flows--按功能场景的双层运行时序图"></a>
 ## 按功能场景的双层运行时序图
 
-基线：`00abae4f80b7e7e5b4d0ddca707035f1878a8ec8`；核对日期：2026-09-18。本文同时标出**当前代码、用户确认的部署关系和待落地的容灾目标**，箭头中的风险不是已经发生的事故。本次不修改业务实现。
+基线：`8f48d6cc084be91bcbaad90be43dac7181636cb4`；核对日期：2026-09-21。本文同时标出**当前代码、用户确认的部署关系和待落地的容灾目标**，箭头中的风险不是已经发生的事故。本次不修改业务实现。
 
 证据标记：**S**=本仓源码；**U**=用户确认的生产架构；**P**=目标方案，尚未实施；**E**=需要平台或联合验证。粗图中未写P/E的业务处理沿用S/U事实，涉及外部服务内部步骤的箭头明确保留E，不把图当作外部源码证据。
 
-用户确认的链路为：Web经区域ALB的静态文根从WCM取得资源，运行时API经**区域ALB按文根路由→Jalor→ChatService**；ChatService按`skillId`调用**ToolService→第三方DomainAgent**，另以独立WS调用**自部署Relay**，并调用第三方Intent。AdminService负责mapping、作业及页面配置。Admin、Tool、Relay、Chat均以Docker部署在ADS，共享数据库和Redis（U）。所有路由文根由ALB提供（U），包括Tool HTTP与Relay WS的内部文根；具体路径、目标组、有效URL和长连接策略为E。图中入口/内部文根是同一ALB路由层的逻辑视图，不代表额外部署多套ALB。WCM不是运行时API代理；全站资源和API入口的一致性仍需验收。
+用户确认的链路为：Web经区域ALB的静态文根从WCM取得资源，运行时API经**区域ALB按文根路由→Jalor→ChatService**；ChatService按`skillId`调用**agentService→第三方DomainAgent**，另以独立WS调用**自部署Relay**，并调用intentService。agentService的admin模块负责mapping、作业及页面配置。agentService、relayService和ChatService均以Docker部署在ADS，共享数据库和Redis（U）。所有路由文根由ALB提供（U），包括agentService HTTP与Relay WS的内部文根；具体路径、目标组、有效URL和长连接策略为E。图中入口/内部文根是同一ALB路由层的逻辑视图，不代表额外部署多套ALB。WCM不是运行时API代理；全站资源和API入口的一致性仍需验收。
 
-DB是Chat持久化事实源；Chat使用Redis做派生缓存和Pub/Sub分发。其他三服务的Redis用途、表/键归属及配额属于E，不能把整个共享Redis视为可无条件清空的缓存。图中共享DB不表示四服务共享同一个Hikari池：代码默认10连接仅属于每个Chat实例，全部服务/实例的连接和IO必须另做总预算。部署目标为区内跨AZ、跨Region主备与WCM/ADS容灾（P），详见[DEP01–DEP06](deployment.md)；现有代码不提供Region全局互斥或Runtime无损接管保证。
+DB是Chat持久化事实源；Chat使用Redis做派生缓存和Pub/Sub分发。agentService与relayService的Redis用途、表/键归属及配额属于E，不能把整个共享Redis视为可无条件清空的缓存。图中共享DB不表示当前服务共享同一个Hikari池：代码默认10连接仅属于每个Chat实例，全部服务/实例的连接和IO必须另做总预算。部署目标为区内跨AZ、跨Region主备与WCM/ADS容灾（P），详见[DEP01–DEP06](deployment.md)；现有代码不提供Region全局互斥或Runtime无损接管保证。
 
 `->>` 表示调用，`-->>` 表示响应/通知；是否同步、异步或流式以箭头说明为准。细图中的BE表示`boundedElastic`，EIO表示Event IO Scheduler；一次Run会跨线程。JDBC借用Chat实例池，事务提交/回滚后归还；同步提交后回调也可能延长实际归还时间。ALB/Jalor的超时、限流、健康检查、ADS故障域及底层资源拓扑仍需E。
 
-步骤编号`Sxx-Cn`为粗图、`Sxx-Dn`为细图；保留原编号，新增物理跳转使用`a/b/…`字母后缀。方法源码链接的`#L`按该基线核对；后续代码变动应同步更新。风险编号对应[当前风险登记](risks.md#risk-register)：R26为CPU、R27为运行治理，新增R28–R35分别覆盖共享DB、共享Redis、配置/Tool、WCM、ALB、ADS、AZ和Region，对应用例T28–T35。本文仍为12组场景、24张图，不声称主图穷尽所有事件交错。
+步骤编号`Sxx-Cn`为粗图、`Sxx-Dn`为细图；保留原编号，新增物理跳转使用`a/b/…`字母后缀。方法源码链接的`#L`按该基线核对；后续代码变动应同步更新。风险编号对应[当前风险登记](risks.md#risk-register)：R26为CPU、R27为运行治理，新增R28–R35分别覆盖共享DB、Redis、配置与执行契约、WCM、ALB、ADS、AZ和Region，对应用例T28–T35；R36/R37/R38分别覆盖一体服务资源争抢、MCP放大与取消、跨路径事务锁验证缺口。本文仍为12组场景、24张图，不声称主图穷尽所有事件交错。
 
-技能**属性查询**是独立边界：Chat向单独配置的API请求`skillName/isSaveSession/attachmentType`，API归属未确认（E）；不能把它等同Tool执行mapping查询，更不能凭服务名称宣称Chat直接读Admin的mapping表。源码所称“DomainAgent直连”是相对绕开Relay的逻辑路径，部署图采用用户确认的Tool统一执行入口。
+当前`agentService`是一个物理部署单元，包含后台admin技能管理、供前端与Chat调用的技能运行查询、`chat(skillId→DomainAgent)`统一执行、供`relayService`调用下游DomainAgent的MCP service/tool能力（U）。`ChatService→relayService`仍是独立WS链路；`relayService→agentService MCP→DomainAgent`是新增明确的调用边界（U），MCP传输、工具扇出、重试及取消协议仍需E。前端的技能查询不是本仓44个HTTP操作之一。
+
+技能**属性查询**与执行mapping必须分开核对：本仓Provider向独立配置URL请求`skillName/isSaveSession/attachmentType`（S），用户确认技能运行查询由agentService提供（U），具体URL、字段及鉴权对应关系仍需E；不能由此声称Chat直接读取admin模块的mapping表。它可能决定留存、附件准入和可调用技能，不能统一标成可丢弃旁路或失败开放。源码中的“DomainAgent直连”指绕开relayService的逻辑路径。未来拆成`adminService/toolService/agentService`属于P，职责及调用关系见[DEP01目标图](deployment.md#dep01)，本页场景图画当前一体服务。
 
 <a id="flows--场景目录与覆盖规则"></a>
 ### 场景目录与覆盖规则
@@ -41,6 +43,56 @@ DB是Chat持久化事实源；Chat使用Redis做派生缓存和Pub/Sub分发。�
 
 接口逐项索引见本页[44个HTTP操作与非REST入口](#interfaces)；REST 的同一路径不同方法是不同操作，不能用路径去重替代接口覆盖。全局身份解析、参数绑定和错误封装在每个 HTTP 入口成立；以下图省略其重复方法箭头，不省略其网关故障影响。
 
+<a id="coverage-matrix"></a>
+### 入口、场景、资源与故障覆盖矩阵
+
+以下两表按场景编号连接，构成入口×场景×资源×故障模式的检查范围。HTTP编号沿用本页01–44；X01–X03是用户确认的外部服务入口，**不增加ChatService的HTTP操作数**。同一入口有多种模式时须同时检查所有关联场景，不以一条正常调用代替覆盖。
+
+| 入口编号/触发 | 场景与步骤证据 | 涉及资源/依赖 | 已有保护及剩余缺口状态 |
+|---|---|---|---|
+| 01受理；NEXT/EDIT/REGENERATE/显式专家 | [S01](#s01) C1–C6/D1–D8；[S02](#s02) | ALB/Jalor、Chat、共享DB（openGauss）、Redis、附件元数据 | S：速率/租户许可、Session锁及活动Run唯一约束；缺：端到端受理幂等和总预算，R02/R08 |
+| 01路由及运行；02切换后新执行 | [S02](#s02) C3–C8g/D1–D9 | 用例库、intentService、agentService查询/chat、relayService/MCP、DB/Redis | S：provider许可、配置Gate、路由fence；U/E：agentService/MCP内部隔离、重试及副作用契约，R06/R16/R30/R36/R37 |
+| 已启动Run、29回调中的结果事件 | [S03](#s03) D1–D9；[S06](#s06) | 网络帧、normalizer、正文/Parts、EIO、DB事务、Redis发布/接收、WS | S：帧/批次上限及guard；缺：累计内存、接收线程、提交到交付窗口，R01/R04/R09/R26 |
+| 01 CONTINUE_INTERACTION；02候选切换；可信拒答 | [S04](#s04) D1–D11 | Interaction/Session/Run/Binding、ACK、intentService、agentService/relayService | S：claim、Session锁、回放持久化ACK；缺：跨路径竞争/取消联合验证，R05/R07/R13/R38 |
+| 03 Stop；超时/异常；删除后Stop | [S05](#s05) C2–C6/D1–D7；[锁表](#transaction-lock-order) | Run状态、控制IO、Relay WS、agentService取消、DB、Redis | S：先提交CANCELLING、远端等待在事务外、终态CAS；缺：远端真实停止/迟到命令、停止方退出，R05/R14/R37 |
+| 29异步回调；async_started；到期治理 | [S06](#s06) D1–D7；[S12](#s12) | 入站body/许可、回调Scheduler、DB正文/事件/Execution | S：4并发、原始body/标准化限额、等待lease CAS；缺：挂起总量、未知响应/晚回调压力，R02/R09/R13/R26 |
+| 06/07 Resume、08 stream-status、WS subscribe/unsubscribe | [S07](#s07) D1–D7 | DB历史List、本机/Redis live源、WS队列、ALB/Jalor | S：live有界、去重与恢复信号；缺：历史分页/HTTP恢复配额/删除校验，R03/R17/R20 |
+| 09–24会话/历史/树/版本/path/branch/归档/删除 | [S08](#s08) D1–D7 | Session/Message/Parts/附件/反馈、DB锁、Redis、提交后Stop | S：页上限、部分事务期限、批删排序锁；缺：全树/字节/分支原子性/path竞争，R11/R15/R18/R23/R24 |
+| 37–44文档全生命周期 | [S09](#s09) D1–D8 | Servlet临时盘、byte[]、存储许可/HTTP/SDK、FD、DB | S：默认50MB/60MB及32存储许可；缺：500MiB适配、整文件缓冲、完整下载期限/许可、孤儿和信任边界，R12/R21/R22 |
+| 04/05普通反馈；25–28候选/偏好/意图反馈；30–36分享/投递 | [S10](#s10) D1–D8 | DB、反馈/偏好池、候选鉴权、intentService、WeLink | S：新反馈排队预算及幂等、投递许可；缺：旧偏好底层取消、未知投递结果和分享并发，R10/R18/R19 |
+| 01记忆/标题/识别记录；反馈后旁路；11–13读取标题结果 | [S11](#s11) D1–D8及源码索引 | 历史DB/Redis、旁路执行器、标题HTTP、Session锁 | S：独立开关/部分有界队列、标题条件提交；缺：候选查询和全部任务生命周期预算，R10/R25/R26 |
+| 心跳/Watchdog/缓存任务、08懒恢复、Actuator、ADS发布退出 | [S12](#s12) D1–D9；[DEP02–DEP06](deployment.md) | 调度器、DB/Redis、实例/磁盘、ALB、ADS、AZ/Region | S：租约/fence、scan guard及部分关闭回调；缺/E：全分支治理期限、排空与平台切换证据，R13/R14/R27/R28/R29/R33–R35 |
+| X01 前端及Chat技能运行查询 | [S02](#s02) C1b/C1c/C6/C6a；属性Provider源码 | agentService查询模块、ALB、共享DB/Redis；前端状态 | U：物理归属；S：Chat缓存及配置Gate；E：前端实际API/鉴权/查询限额。关键技能策略不统一降级，R16/R30/R36 |
+| X02 admin技能管理、mapping、作业、页面配置 | [S02](#s02) C1a；[资源职责](#resources--11-四服务的职责共享资源与证据边界) | 同一agentService进程/池、共享DB/Redis、配置版本 | U：与chat/MCP同部署；E：事务/作业单执行权/发布与资源隔离；R28/R29/R30/R36 |
+| X03 relayService MCP service/tool调用 | [S02](#s02) C8e–C8g；[S03](#s03) C1e–C1g | relayService→ALB文根→agentService MCP→DomainAgent；任务/连接/副作用 | U：依赖关系；E：传输、扇出、总尝试数、工具任务查询与取消；Chat64许可不约束MCP全局，R30/R36/R37 |
+
+<a id="fault-dimensions"></a>
+#### 十类故障模式与检查状态
+
+M1=堆/累计对象/缓冲；M2=CPU/解析/序列化/GC；M3=线程/队列/连接/FD；M4=SQL/事务/显式与隐式锁；M5=Redis慢/断开/回源；M6=网络/鉴权/下游超时及重试；M7=幂等/状态/通知/副作用；M8=文件/临时盘/对象；M9=清理/恢复/发布/AZ/Region；M10=配置/权限/证书变更。
+
+单元格“保”表示存在源码保护但仍需测试；“缺”表示已识别源码缺口或有限保证；“验”表示外部行为、容量或交错需环境证据；“—”仅表示没有直接路径，不能推导共享资源无影响。每行的源码入口在上表对应S节，风险和关闭证据分别见[登记](risks.md#risk-register)、[测试](tests.md)及[证据](evidence.md)。本表不是已通过的测试结果。
+
+| 场景 | M1 | M2 | M3 | M4 | M5 | M6 | M7 | M8 | M9 | M10 | 主要风险/证据状态 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S01 | 保/验 | 验 | 保/缺 | 保/验 | 缺 | 验 | 保/缺 | 保/验 | 缺/验 | 保/验 | R02/R08/R38；S源码、网关E |
+| S02 | 保/缺 | 缺/验 | 保/缺 | 保/验 | 保/缺 | 保/缺 | 保/缺 | — | 缺/验 | 保/缺 | R01/R06/R16/R30/R36/R37；外部内部实现E |
+| S03 | 缺 | 缺/验 | 保/缺 | 保/验 | 保/缺 | 验 | 保/缺 | — | 缺/验 | 验 | R01/R04/R07/R09/R26/R38；帧/guard为S |
+| S04 | 保/验 | 验 | 保/缺 | 保/验 | 保/缺 | 保/缺 | 保/缺 | 保/验 | 缺/验 | 保/验 | R05/R07/R13/R16/R37/R38；claim/ACK为S |
+| S05 | 保/验 | 验 | 保/缺 | 保/验 | 保/缺 | 缺/验 | 保/缺 | — | 缺/验 | 验 | R05/R14/R37/R38；跨事务保护为S、远端停止E |
+| S06 | 保/验 | 缺/验 | 保/缺 | 保/验 | 保/缺 | 验 | 保/缺 | — | 缺/验 | 保/验 | R02/R04/R09/R13/R26/R38；回调CAS为S |
+| S07 | 保/缺 | 缺/验 | 保/缺 | 缺/验 | 缺/验 | 验 | 保/缺 | — | 保/缺 | 保/缺 | R03/R17/R20/R28/R29；全量历史为S |
+| S08 | 保/缺 | 缺/验 | 缺/验 | 保/缺 | 缺/验 | 验 | 保/缺 | 保/验 | 缺/验 | 保/缺 | R11/R15/R18/R23/R24/R38；批删排序与path缺口分别为S |
+| S09 | 缺 | 缺/验 | 保/缺 | 缺/验 | — | 保/缺 | 缺 | 保/缺 | 缺/验 | 缺 | R12/R21/R22；500MiB工作负载E、整读S |
+| S10 | 保/缺 | 验 | 保/缺 | 保/验 | — | 保/缺 | 保/缺 | 保/验 | 缺/验 | 保/验 | R10/R18/R19；本地幂等S、外部投递E |
+| S11 | 保/缺 | 缺/验 | 保/缺 | 保/缺 | 保/缺 | 保/缺 | 保/验 | — | 缺 | 保/验 | R10/R25/R26；开关/条件提交S |
+| S12 | 验 | 验 | 保/缺 | 保/缺 | 保/缺 | 验 | 保/缺 | 验 | 保/缺 | 验 | R13/R14/R27–R29/R33–R35/R38；平台能力E |
+| X01 | 验 | 验 | 验 | 验 | 验 | 验 | 保/验 | — | 验 | 保/验 | R16/R30/R36；仅Chat客户端保护S，其余U/E |
+| X02 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | R28/R29/R30/R36；外部模块U/E |
+| X03 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | 验 | R30/R36/R37；外部MCP U/E，不能以本地mock关闭 |
+
+M8“—”表示该路径不直接上传、下载或处理业务对象；S01/S04的附件是可信引用，S08/S10的文件检查是引用/快照一致性，文件内容传输统一检查S09。S09/S10的M5“—”只表示图示主操作没有直接Redis步骤，共享Redis事故影响会话入口和其他链路时仍按S07/S12验收。X01的M7/M10“保”仅指Chat一侧的Gate，不能扩展为前端或agentService已有同样保护。
+
 <a id="flows--部署故障如何进入业务场景"></a>
 #### 部署故障如何进入业务场景
 
@@ -50,14 +102,14 @@ DB是Chat持久化事实源；Chat使用Redis做派生缓存和Pub/Sub分发。�
 |---|---|---|---|
 | S01-C1a | WCM不可达、发布不完整或静态版本/API地址不兼容，用户无法进入业务；后端健康不能弥补 | R31 / T31 | DEP01逻辑架构、DEP04 WCM切换 |
 | S01-C1/C1b；S03-C5a/C5b；S07-C1a/C7a | ALB文根错路由、长连接idle期限、跨AZ摘流引发未知受理和恢复风暴 | R32 / T32 | DEP02跨AZ、DEP05接管、DEP06回切 |
-| S02-C1a/C8/C8a/C8b；S04/S05 | Admin配置发布、Tool mapping或限流影响第三方技能；Relay是独立WS故障域，不能用Tool健康替代 | R30 / T30 | DEP01逻辑架构、DEP03主备Region |
-| 所有访问DB的步骤，尤其S03-C2/S06-C6/S12-C3a | 任一服务的长事务、作业或连接洪峰影响四服务；单库fence不能扩展为两个异步写库的全局互斥 | R28 / T28 | DEP02、DEP03、DEP05 |
+| S02-C1a/C8/C8a/C8b；S04/S05 | agentService内admin配置发布、chat/MCP mapping或限流影响第三方技能；Relay是独立WS故障域，不能用agentService健康替代 | R30 / T30 | DEP01逻辑架构、DEP03主备Region |
+| 所有访问DB的步骤，尤其S03-C2/S06-C6/S12-C3a | 任一服务的长事务、作业或连接洪峰影响当前服务；单库fence不能扩展为两个异步写库的全局互斥 | R28 / T28 | DEP02、DEP03、DEP05 |
 | S03-C3/C4、S07-C3、S12-C3b | 共享Redis的热点、阻塞、重连或清理可同时影响路由、会话或交付；其他服务持久语义未知 | R29 / T29 | DEP02、DEP03、DEP05 |
 | S09-C2/C5；S12-C1/C6 | ADS宿主机、容器退出、临时盘、镜像/配置发布影响当前实例与在途任务；无现成全量Run drain | R33 / T33 | DEP02、DEP03 |
-| S12-C1/C1a/C7 | 单AZ失效后ALB、Jalor、四服务和共享依赖须共同可用；仅增加Chat副本不足 | R34 / T34 | DEP02跨AZ |
-| S12-C7a/C7b，关联S01/S05/S06/S07 | Region接管须验证唯一写权威、四服务配置、第三方出口/回调、WCM/API版本和Runtime会话；不自动重放未知副作用 | R35 / T35 | DEP03、DEP05、DEP06 |
+| S12-C1/C1a/C7 | 单AZ失效后ALB、Jalor、当前服务和共享依赖须共同可用；仅增加Chat副本不足 | R34 / T34 | DEP02跨AZ |
+| S12-C7a/C7b，关联S01/S05/S06/S07 | Region接管须验证唯一写权威、当前服务配置、第三方出口/回调、WCM/API版本和Runtime会话；不自动重放未知副作用 | R35 / T35 | DEP03、DEP05、DEP06 |
 
-属性API的归属、Tool内部重试/幂等、Admin作业调度语义和Relay会话持久化/恢复能力分别取证；四服务共用DB/Redis（U）不能替代这些专项证明。Chat的64下游许可也不是Tool对所有调用方的总配额。
+属性API与agentService实际URL的对应关系、chat/MCP内部重试/幂等、admin模块作业调度语义和Relay会话持久化/恢复能力分别取证；当前服务共用DB/Redis（U）不能替代这些专项证明。Chat的64下游许可也不是agentService对所有调用方的总配额。
 
 <a id="flows--s01-请求受理与run启动"></a>
 <a id="s01"></a>
@@ -65,13 +117,13 @@ DB是Chat持久化事实源；Chat使用Redis做派生缓存和Pub/Sub分发。�
 
 ```mermaid
 sequenceDiagram
-    participant U as Web浏览器 U
-    participant WCM as WCM静态资源 U
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant C as ChatService ADS Docker U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
+    participant U as Web浏览器
+    participant WCM as WCM
+    participant L as 区域ALB
+    participant G as Jalor
+    participant C as ChatService
+    participant D as 共享DB（openGauss）
+    participant R as Redis
     U->>L: S01-C1a 请求静态页面与资源
     L->>WCM: S01-C1c 静态文根路由 U 实际目标组E
     WCM-->>L: 静态资源和页面版本
@@ -92,7 +144,7 @@ sequenceDiagram
         Note over U,D: 已提交Run不能由HTTP超时回滚<br/>错误或无响应均先查询 补偿和孤儿治理见S12
     end
     Note over WCM,L: WCM提供静态资产 不作为运行时API代理<br/>跨区入口与版本切换为P 验证见DEP04
-    Note over C,R: Admin Tool Relay同用资源 可相互放大等待<br/>池总预算和ALB超时需E
+    Note over C,R: agentService relayService同用资源 可相互放大等待<br/>池总预算和ALB超时需E
 ```
 
 ```mermaid
@@ -101,7 +153,7 @@ sequenceDiagram
     participant ST as ChatRunStartCoordinator
     participant PRE as StandardRunInputPreparer
     participant ADM as ChatRunAdmissionCommitService
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     participant RT as StandardRunRuntimeCoordinator
     API->>ST: S01-D1 startRun经Facade到startStandard
     ST->>ST: S01-D2 newState获取准入许可 独立订阅BE
@@ -135,20 +187,25 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant C as ChatService ADS U
-    participant L as 同区域ALB内部文根 U
-    participant ADM as AdminService ADS U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
+    participant U as Web浏览器
+    participant C as ChatService
+    participant L as 区域ALB
+    participant D as 共享DB（openGauss）
+    participant R as Redis
     participant K as 用例库
-    participant I as 第三方Intent U
-    participant S as 技能属性API 归属E
-    participant TOOL as ToolService ADS U
-    participant DA as 第三方DomainAgent U
-    participant RL as 自部署Relay ADS U
-    opt Admin配置或作业访问共享资源 U
-        ADM->>D: S02-C1a mapping 作业 页面配置 数据表和发布事务E
-        Note over ADM,R: 四服务共享DB及Redis 具体键与配额E<br/>配置发布不是每次聊天的同步前置步骤
+    participant I as intentService
+    participant AG as agentService
+    participant DA as DomainAgent
+    participant RL as relayService
+    opt admin模块配置或作业访问共享资源 U
+        AG->>D: S02-C1a mapping 作业 页面配置 数据表和发布事务E
+        Note over AG,R: 当前服务共享DB及Redis 具体键与配额E<br/>配置发布不是每次聊天的同步前置步骤
+    end
+    opt 前端技能列表或运行查询 U
+        U->>L: S02-C1b 技能运行查询
+        L->>AG: S02-C1c 查询文根 实际鉴权与路由E
+        AG-->>L: 技能数据或错误
+        L-->>U: 查询结果
     end
     C->>D: S02-C1 查询受scope约束的ACTIVE Binding
     alt 显式目标或可续接Binding
@@ -161,29 +218,39 @@ sequenceDiagram
     opt DomainAgent且附件或留存要求配置
         C->>R: S02-C5 技能属性缓存
         R-->>C: hit或miss或错误
-        C->>S: S02-C6 miss时HTTP POST skillId列表
-        S-->>C: skillName isSaveSession attachmentType 或错误
-        Note over S,TOOL: 属性API不等同Tool执行mapping<br/>API实际归属和URL需E
+        C->>L: S02-C6 miss时HTTP POST skillId列表
+        L->>AG: S02-C6a 技能运行查询 属性URL与鉴权对应关系E
+        AG-->>L: skillName isSaveSession attachmentType 或错误
+        L-->>C: 查询结果
+        Note over C,AG: 属性查询与chat执行是同服务内不同接口<br/>关键策略失败语义见R16 不统一降级
     end
     alt 配置和策略允许
         C->>D: S02-C7 Binding及最终Route持久化
         alt DomainAgent逻辑路由
             C->>L: S02-C8 skillId及可信上下文 HTTP流式
-            L->>TOOL: S02-C8c Tool内部文根路由
-            TOOL->>DA: S02-C8a 按mapping调用 U 内部协议及重试E
-            DA-->>TOOL: 第三方输出或故障
-            TOOL-->>L: 输出或故障
+            L->>AG: S02-C8c agentService内部文根路由
+            AG->>DA: S02-C8a 按mapping调用 U 内部协议及重试E
+            DA-->>AG: 第三方输出或故障
+            AG-->>L: 输出或故障
             L-->>C: 内部文根回程 转S03
         else Relay逻辑路由
             C->>L: S02-C8b 独立WS config及query
-            L->>RL: S02-C8d Relay WS文根路由
+            L->>RL: S02-C8d relayService WS文根路由
+            opt Relay调用MCP工具 U
+                RL->>L: S02-C8e MCP调用 传输与文根E
+                L->>AG: S02-C8f MCP service/tool入口
+                AG->>DA: S02-C8g MCP工具转下游 内部调度与重试E
+                DA-->>AG: 结果或未知执行状态
+                AG-->>L: MCP结果或错误
+                L-->>RL: MCP结果或错误
+            end
             RL-->>L: WS帧或断流
             L-->>C: 内部WS回程 转S03
         end
     else 澄清 附件拒绝或失败
         C->>D: S02-C9 对应WAIT completed或failed提交
     end
-    Note over TOOL,RL: Chat Tool Relay Admin部署ADS 第三方Agent不在此边界<br/>会话跨AZ或Region续接仍需E 资源隔离见R28至R30
+    Note over AG,RL: admin 查询 chat MCP同进程可能互相争抢 R36<br/>MCP扇出及取消边界需E R37 会话恢复不作保证
 ```
 
 ```mermaid
@@ -193,18 +260,27 @@ sequenceDiagram
     participant GATE as AgentDataPersistenceGate
     participant CFG as DomainAgentSkillConfigurationService
     participant PR as DefaultDomainAgentSkillConfigurationProvider
-    participant DB as JDBC及Redis
+    participant DB as 共享DB（openGauss）
+    participant REDIS as Redis
     participant AD as Runtime适配器
     DIS->>RES: S02-D1 resolveRoute 检查owner与路由来源
     RES-->>DIS: 显式 Binding或Intent结果
     DIS->>GATE: S02-D2 dispatchResolvedRuntime执行配置Gate
     GATE->>CFG: S02-D3 数量检查后获取一次配置快照
-    CFG->>DB: 专用配置IO缓存访问 miss可并发重复
+    opt 属性缓存启用
+        CFG->>REDIS: readCache 在专用配置IO读取
+        REDIS-->>CFG: 配置命中或miss或读取失败
+    end
     opt 属性缓存未命中或关闭
         CFG->>PR: S02-D3a resolveFromProvider调用findBySkillId
         PR->>PR: S02-D3b requestConfiguration向独立URL POST skillId数组
+        PR-->>CFG: 已校验配置或错误
+        opt Provider成功且缓存启用
+            CFG->>REDIS: writeCache 在专用配置IO写回
+            REDIS-->>CFG: 完成或记录错误后保留本次配置
+        end
     end
-    CFG-->>GATE: HTTP结果 经专用IO缓存写回
+    CFG-->>GATE: 已解析配置 读取失败或miss可能并发回源
     alt ALLOW
         DIS->>DIS: S02-D4 dispatchValidatedRuntime
         DIS->>DB: S02-D5 persistResolvedRoute 同步仓储及owner guard
@@ -219,7 +295,7 @@ sequenceDiagram
         DIS->>DIS: S02-D9 cleanupUnstartedBinding及适配器dispose
     end
     Note over DIS,DB: cache关闭等组合需验证HTTP回调线程是否执行JDBC<br/>主Intent重试总期限与鉴权阻塞见R06
-    Note over PR,AD: 属性API只解析留存和附件等属性 不解析Agent目标URL<br/>ConfiguredDomainAgentClient的配置HTTP端点为Tool U<br/>RelayWebSocketRuntimeAdapter独立连接Relay
+    Note over PR,AD: 属性API只解析留存和附件等属性 不解析Agent目标URL<br/>ConfiguredDomainAgentClient的HTTP端点为agentService统一chat U<br/>RelayWebSocketRuntimeAdapter独立连接Relay
 ```
 
 | 变体/步骤 | 当前事实与风险 | 加固/验收关注 |
@@ -228,9 +304,20 @@ sequenceDiagram
 | S02-D2-D5 | 留存/附件共用配置快照；cache miss未single-flight；部分配置回调可能同步JDBC，R16/R02 | cache on/off × 有无附件 × 留存on/off线程与并发矩阵 |
 | S02-D6-D9 | 下游许可、单帧和运行期限已有；累计缓冲仍不有界，R01 | 配置服务故障不等同Runtime失败；错误/取消归还socket和许可 |
 
-边界源码：[Tool请求skillId L53](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/DomainAgentChatRequestMapper.java#L53)、[统一HTTP地址 L66](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L66)、[独立技能属性API L60](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L60)、[Relay端点 L953](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L953)。
+关键技能查询按用途分级，不能统一降级：
 
-源码：[resolveRoute L176](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L176)、[dispatchResolvedRuntime L204](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L204)、[persistResolvedRoute L304](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L304)、[技能配置L59](../../../src/main/java/com/huawei/it/ex/one/application/service/domainagentconfig/DomainAgentSkillConfigurationService.java#L59)、[Relay query L113](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L113)。出站实现继续核对[Intent流式尝试 L126](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/FinEurekaIntentStreamClient.java#L126)和[Tool HTTP query L65](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)；总期限、鉴权隔离和分类重试的整改范围见[W05](risks.md#w05)，不从主图推断已有统一总预算。
+| 查询用途/失败 | 当前Chat语义 S / 外部待验 E | 加固约束 |
+|---|---|---|
+| 留存策略启用，属性Provider不可用 | `AgentDataPersistenceGate.evaluate`保留错误，不放宽未知留存策略 | 保留失败关闭，不能因切Region或旧缓存把no-store改成FULL |
+| 仅附件校验，Provider错误 | 当前告警并跳过类型检查；与空配置/明确不支持的拒绝不同 | 如需收紧为失败关闭，另立兼容任务；不能把现状写成所有配置失败都拒绝 |
+| 留存关闭且无附件 | 当前不查属性Provider | 不应把关闭分支计成每Run必需外呼 |
+| 前端技能运行查询中的可执行性、权限、目标映射 | 由agentService提供U，具体字段/生效契约E；本仓无法证明前端降级策略 | 关键字段未知时禁止擅自选默认Agent/越权执行；展示字段是否可省略单独确认 |
+
+证据：[Gate分支 L80–127](../../../src/main/java/com/huawei/it/ex/one/application/service/agentdatapersistence/AgentDataPersistenceGate.java#L80)。配置和业务语义验收关联R16/R30/R36；MCP依赖与任务隔离另见R37。
+
+边界源码：[agentService请求skillId L53](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/DomainAgentChatRequestMapper.java#L53)、[统一HTTP地址 L66](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L66)、[独立技能属性API L60](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L60)、[Relay端点 L953](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L953)。
+
+源码：[resolveRoute L176](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L176)、[dispatchResolvedRuntime L204](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L204)、[persistResolvedRoute L304](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L304)、[技能配置L59](../../../src/main/java/com/huawei/it/ex/one/application/service/domainagentconfig/DomainAgentSkillConfigurationService.java#L59)、[Relay query L113](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L113)。出站实现继续核对[Intent流式尝试 L126](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/FinEurekaIntentStreamClient.java#L126)和[agentService HTTP query L65](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)；总期限、鉴权隔离和分类重试的整改范围见[W05](risks.md#w05)，不从主图推断已有统一总预算。
 
 <a id="flows--s03-流式输出聚合与提交"></a>
 <a id="s03"></a>
@@ -238,21 +325,26 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant DA as 第三方DomainAgent U
-    participant TOOL as ToolService ADS U
-    participant RL as 自部署Relay ADS U
-    participant C as 执行ChatService ADS U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
-    participant W as 连接ChatService ADS U
-    participant G as Jalor U
-    participant L as 区域ALB U
-    participant U as Web浏览器 U
+    participant DA as DomainAgent
+    participant AG as agentService
+    participant RL as relayService
+    participant C as ChatService（执行实例）
+    participant D as 共享DB（openGauss）
+    participant R as Redis
+    participant W as ChatService（连接实例）
+    participant G as Jalor
+    participant L as 区域ALB
+    participant U as Web浏览器
     alt DomainAgent结果
-        DA-->>TOOL: S03-C1a 第三方流式输出
-        TOOL-->>L: S03-C1 HTTP流式事件 内部文根回程
-        L-->>C: S03-C1c Tool输出
+        DA-->>AG: S03-C1a 第三方流式输出
+        AG-->>L: S03-C1 HTTP流式事件 内部文根回程
+        L-->>C: S03-C1c agentService输出
     else Relay结果
+        opt 本轮包含MCP工具结果 U
+            DA-->>AG: S03-C1e 下游工具结果
+            AG-->>L: S03-C1f MCP结果或错误
+            L-->>RL: S03-C1g MCP回程 传输与结果确认E
+        end
         RL-->>L: S03-C1b 独立WS帧 内部文根回程
         L-->>C: S03-C1d Relay输出
     end
@@ -264,7 +356,7 @@ sequenceDiagram
     G-->>L: S03-C5a 返回长连接数据
     L-->>U: S03-C5b 业务事件及终态
     alt DB慢或其他服务抢占共享资源
-        Note over TOOL,D: 入站速率大于提交速率可能积压Chat堆内存<br/>数据库压力可能来自Admin Tool Relay或Chat
+        Note over AG,D: 入站速率大于提交速率可能积压Chat堆内存<br/>数据库压力可能来自agentService relayService或Chat
     else Redis ALB 网关或消费端故障
         Note over R,U: FULL可按已存事件恢复<br/>no-store真实业务结果不可历史回放
     end
@@ -273,14 +365,14 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant AD as RelayWebSocketRuntimeAdapter或ConfiguredDomainAgentClient
-    participant N as RelayRuntimeResponseNormalizer或DomainAgentResponseNormalizer
+    participant AD as RelayWebSocketRuntimeAdapter<br/>或ConfiguredDomainAgentClient
+    participant N as RelayRuntimeResponseNormalizer<br/>或DomainAgentResponseNormalizer
     participant P as ChatEventPipeline
     participant ASM as AssistantAssembly
     participant T as ChatRunTerminalCommitService
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     participant B as RedisChatLiveEventBus
-    Note over AD,N: 本仓HTTP客户端对接Tool U WS适配器对接Relay S
+    Note over AD,N: 本仓HTTP客户端对接agentService U WS适配器对接Relay S
     AD->>AD: S03-D1 Flux.create BUFFER 内部subscribe
     AD->>N: S03-D2 normalizeFrames或DomainAgent标准化
     N->>P: S03-D3 persistAndPublish publishOn到EIO
@@ -314,15 +406,15 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant U as Web浏览器 U
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant C as ChatService ADS U
-    participant D as 四服务共享数据库 U
-    participant I as 第三方Intent U
-    participant TOOL as ToolService ADS U
-    participant DA as 第三方DomainAgent U
-    participant RL as 自部署Relay ADS U
+    participant U as Web浏览器
+    participant L as 区域ALB
+    participant G as Jalor
+    participant C as ChatService
+    participant D as 共享DB（openGauss）
+    participant I as intentService
+    participant AG as agentService
+    participant DA as DomainAgent
+    participant RL as relayService
     U->>L: S04-C1 interaction回答或候选切换
     L->>G: S04-C1a 文根路由
     G->>C: S04-C1b 请求及可信身份
@@ -334,22 +426,27 @@ sequenceDiagram
         end
         alt DomainAgent候选或替换执行
             C->>L: S04-C5 skillId及回答经HTTP
-            L->>TOOL: S04-C5c Tool内部文根
-            TOOL->>DA: S04-C5a 按mapping调用 具体幂等保证E
+            L->>AG: S04-C5c agentService内部文根
+            AG->>DA: S04-C5a 按mapping调用 具体幂等保证E
         else Relay问卷
             C->>L: S04-C5b 原profile及session WS续接
-            L->>RL: S04-C5d Relay WS文根
+            L->>RL: S04-C5d relayService WS文根
+            opt 续跑调用MCP工具 U
+                RL->>L: S04-C5e MCP调用
+                L->>AG: S04-C5f MCP入口 传输与文根E
+                AG->>DA: S04-C5g 工具调用 幂等与取消E
+            end
         end
     else 候选直接切换
         C->>C: S04-C6 活动A先执行S05两类控制链
         C->>D: S04-C7 重验来源 准入B并回放路由事件
         C->>L: S04-C8 回放持久化后按B的skillId调用
-        L->>TOOL: S04-C8b Tool内部文根
-        TOOL->>DA: S04-C8a 统一第三方执行入口
+        L->>AG: S04-C8b agentService内部文根
+        AG->>DA: S04-C8a 统一第三方执行入口
     end
     opt DomainAgent可信拒答
-        DA-->>TOOL: 拒答输出
-        TOOL-->>L: 可信协议帧
+        DA-->>AG: 拒答输出
+        AG-->>L: 可信协议帧
         L-->>C: 内部文根回程
         C->>I: S04-C9 同Run重意图 受次数及已拒目标约束
     end
@@ -357,7 +454,7 @@ sequenceDiagram
     C-->>G: 新topic及事件或状态拒绝
     G-->>L: 返回
     L-->>U: 使用新Run订阅
-    Note over C,D: claim 准入 与终态不是全过程单事务<br/>Tool映射变更与Relay会话连续性需分别验收
+    Note over C,D: claim 准入 与终态不是全过程单事务<br/>agentService映射变更与Relay会话连续性需分别验收
 ```
 
 ```mermaid
@@ -367,7 +464,9 @@ sequenceDiagram
     participant CS as CandidateDomainAgentSwitchApplicationService
     participant RT as StandardRunRuntimeCoordinator
     participant RF as DomainAgentRefusalCoordinator
-    participant DB as JDBC及Event Pipeline
+    participant PIPE as ChatEventPipeline
+    participant COM as ChatEventCommitCoordinator<br/>及DomainAgentRefusalCommitCoordinator
+    participant DB as 共享DB（openGauss）
     alt CONTINUE_INTERACTION
         IC->>IS: S04-D1 claimPreparedInteractionResponse
         IS->>IC: S04-D2 prepareResponse先校验回答与附件
@@ -377,15 +476,23 @@ sequenceDiagram
     else 直接候选切换
         CS->>CS: S04-D5 校验source并等待S05 Stop结果
         CS->>DB: S04-D6 Session锁下准入B
-        RT->>DB: S04-D7 replayBeforeRuntime 最后marker持久化
-        DB-->>RT: PersistenceAcknowledgedEvent ACK
+        RT->>PIPE: S04-D7 replayBeforeRuntime 最后marker携带PersistenceAcknowledgedEvent
+        PIPE->>COM: 单事件写入委托
+        COM->>DB: guard校验及marker持久化
+        DB-->>COM: 事务提交
+        COM-->>RT: acknowledgePersistence完成persisted信号
         RT->>RT: defer后才订阅Binding和下游
     end
     opt 收到可信拒答
         RT->>RF: S04-D8 execute及continueAfterRefusal
-        RF->>DB: S04-D9 拒答和Intent结果ACK后才放行下一步
+        RF->>PIPE: S04-D9 拒答和Intent结果携带持久化屏障
+        PIPE->>COM: 委托相应事件提交
+        COM->>DB: 拒答或Intent结果及相关状态持久化
+        DB-->>COM: 事务提交
+        COM-->>RF: 提交协调器完成ACK后放行下一步
         RF->>RF: continueAfterReroute WAIT或替换执行
     end
+    Note over PIPE,COM: ACK由应用提交处理完成 不是DB推送<br/>不代表WS或前端确认收到
     RT->>DB: S04-D10 completed或WAIT条件完成Interaction
     opt 初始化或执行失败且条件允许
         IC->>IS: S04-D11 markWaiting 条件释放 不覆盖后继claim
@@ -407,16 +514,16 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant U as Web浏览器 U
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant C as Stop所在ChatService ADS U
-    participant O as 原执行ChatService ADS U
-    participant D as 四服务共享数据库 U
-    participant RL as 自部署Relay ADS U
-    participant TOOL as ToolService ADS U
-    participant DA as 第三方DomainAgent U
-    participant R as 四服务共享Redis U
+    participant U as Web浏览器
+    participant L as 区域ALB
+    participant G as Jalor
+    participant C as ChatService（Stop实例）
+    participant O as ChatService（原执行实例）
+    participant D as 共享DB（openGauss）
+    participant RL as relayService
+    participant AG as agentService
+    participant DA as DomainAgent
+    participant R as Redis
     U->>L: S05-C1 POST stop
     L->>G: S05-C1a 文根路由
     G->>C: S05-C1b 转发
@@ -428,9 +535,9 @@ sequenceDiagram
         L-->>C: 控制结果
     else DomainAgent且配置stop-path
         C->>L: S05-C3a 独立HTTP best-effort cancel
-        L->>TOOL: S05-C3d Tool内部文根
-        TOOL->>DA: S05-C3b 实际取消转发及确认语义E
-        Note over TOOL,DA: Chat本地终态不等待远端任务物理停止
+        L->>AG: S05-C3d agentService内部文根
+        AG->>DA: S05-C3b 实际取消转发及确认语义E
+        Note over AG,DA: Chat本地终态不等待远端任务物理停止
     end
     C->>D: S05-C4 本地外部终态事务CAS
     D-->>C: CANCELLED或竞争方已提交终态
@@ -441,7 +548,7 @@ sequenceDiagram
     G-->>L: 返回
     L-->>U: 结果或连接错误
     Note over C,O: 无跨JVM直接dispose 原执行者静默保活时需治理<br/>C2之后退出可能留下CANCELLING
-    Note over C,RL: session级迟到Relay stop可影响后续Run<br/>跨Region切换也不能跳过旧写端隔离
+    Note over C,RL: session级迟到Relay stop可影响后续Run<br/>向agentService MCP及DomainAgent的取消传播需E R37
 ```
 
 ```mermaid
@@ -451,7 +558,7 @@ sequenceDiagram
     participant AD as Runtime cancel适配器
     participant REG as LocalChatRunExecutionRegistry
     participant T as ChatRunTerminalCommitService
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     ST->>RUN: S05-D1 stopActiveRun内requestStop
     RUN->>DB: CANCELLING commit
     ST->>AD: S05-D2 cancelDownstreamBeforeFinalization
@@ -466,7 +573,7 @@ sequenceDiagram
     T->>DB: 必要时Session锁 Run CAS Event及Execution同事务
     DB-->>ST: commit或已存在终态
     ST->>ST: S05-D7 publishTerminalBestEffort及缓存
-    Note over AD: DomainAgent cancel指向配置Tool地址
+    Note over AD: DomainAgent cancel指向配置agentService地址
     Note over ST,DB: WAIT走stopWaitingRun及独立等待事务<br/>自然完成或owner超时失败走S03终态管线
 ```
 
@@ -484,27 +591,28 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant DA as 第三方DomainAgent U
-    participant TOOL as ToolService ADS U
-    participant CB as 回调发送方与回程E
-    participant L as 区域ALB U
+    participant DA as DomainAgent
+    participant AG as agentService
+    participant CB as 回调发送方
+    participant L as 区域ALB
     participant G as Jalor回调入口
-    participant C as ChatService ADS U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
-    participant W as 连接ChatService ADS U
-    participant U as Web浏览器 U
-    DA-->>TOOL: S06-C1a 第三方异步启动帧
-    TOOL-->>L: S06-C1 agent.async_started 内部文根回程
+    participant C as ChatService
+    participant D as 共享DB（openGauss）
+    participant R as Redis
+    participant W as ChatService（连接实例）
+    participant U as Web浏览器
+    DA-->>AG: S06-C1a 第三方异步启动帧
+    AG-->>L: S06-C1 agent.async_started 内部文根回程
     L-->>C: S06-C1b 异步启动帧
     C->>D: S06-C2 原assistant及ASYNC_WAITING提交
     C->>R: S06-C3 run.async_running
     C->>C: 关闭原流及本机执行许可
-    Note over CB,G: 回调经区域统一入口为P 真实发送方和Tool转发需E
+    Note over CB,G: 回调经区域统一入口为P 真实发送方和agentService转发需E
     CB->>L: S06-C4 异步callback HTTP
     L->>G: S06-C4a 路由与来源ACL需E
     G->>C: S06-C4b 回调转发
     C->>C: S06-C5 入站并发 body 帧与事件预算
+    Note over CB,C: 回调发送方及回程路由待E 不由本仓证明
     alt 提前 重复 过期或已取消
         C-->>CB: 沿已验证回程返回409或accepted=false
     else 合法且仍在等待
@@ -526,10 +634,10 @@ sequenceDiagram
     participant F as CallbackAdmissionFilter
     participant CB as DomainAgentAsyncTaskCallbackApplicationService
     participant COM as DomainAgentAsyncTaskCallbackCommitService
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     AS->>DB: S06-D1 commitStarted TX保存assistant并使旧fence失效
     Note over AS,DB: Run仍RUNNING Execution为ASYNC_WAITING
-    Note over F,CB: 本仓只证明回调入口行为 发送方与Tool回程需E
+    Note over F,CB: 本仓只证明回调入口行为 发送方及agentService回程需E
     F->>F: S06-D2 反序列化前4许可和5MiB原始body检查
     F->>CB: S06-D3 callback转专用Scheduler
     CB->>CB: S06-D4 validate normalize及序列化字节累计
@@ -557,13 +665,13 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant U as Web浏览器或多页签 U
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant C as 连接ChatService ADS U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
-    participant O as Run执行ChatService ADS U
+    participant U as Web浏览器
+    participant L as 区域ALB
+    participant G as Jalor
+    participant C as ChatService（连接实例）
+    participant D as 共享DB（openGauss）
+    participant R as Redis
+    participant O as ChatService（执行实例）
     U->>L: S07-C1 WS订阅或HTTP Resume afterSeq
     L->>G: S07-C1a 文根路由 WS及SSE期限需E
     G->>C: S07-C1b 转发 WS连接与HTTP配额不同
@@ -586,16 +694,16 @@ sequenceDiagram
         G->>C: 恢复订阅
     end
     Note over L,C: AZ或Region切换会重建连接 不迁移已有socket<br/>切换入口成功不等于在途Runtime继续执行
-    Note over C,D: 多客户端恢复可放大四服务共享资源压力<br/>异步副本不能直接替代Resume事实读取
+    Note over C,D: 多客户端恢复可放大当前服务共享资源压力<br/>异步副本不能直接替代Resume事实读取
 ```
 
 ```mermaid
 sequenceDiagram
-    participant API as ChatController或ChatWebSocketProtocolService
+    participant API as ChatController<br/>或ChatWebSocketProtocolService
     participant S as ChatStreamApplicationService
     participant STORE as MyBatisChatEventStore
     participant LIVE as 本机或Redis live源
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     API->>S: S07-D1 resumeSession resumeRun或resumeRunTopic
     S->>S: S07-D2 BE身份与归属检查
     alt Run接续或WS
@@ -629,15 +737,15 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant U as Web浏览器 U
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant C as ChatService ADS U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
-    participant RL as 自部署Relay ADS U
-    participant TOOL as ToolService ADS U
-    participant DA as 第三方DomainAgent U
+    participant U as Web浏览器
+    participant L as 区域ALB
+    participant G as Jalor
+    participant C as ChatService
+    participant D as 共享DB（openGauss）
+    participant R as Redis
+    participant RL as relayService
+    participant AG as agentService
+    participant DA as DomainAgent
     U->>L: S08-C1 查询或会话管理
     L->>G: S08-C1a 文根路由
     G->>C: S08-C1b 转发
@@ -660,18 +768,19 @@ sequenceDiagram
             L->>RL: S08-C7c Relay WS文根
         else DomainAgent活动Run且配置stop-path
             C->>L: S08-C7a detached HTTP cancel 经S05
-            L->>TOOL: S08-C7d Tool内部文根
-            TOOL->>DA: S08-C7b 第三方取消语义E
+            L->>AG: S08-C7d agentService内部文根
+            AG->>DA: S08-C7b 第三方取消语义E
         end
     end
-    Note over C,D: 软删不是物理清理 也不代表下游已停<br/>Admin作业和Tool及Relay共享DB会放大等待
+    Note over RL,AG: Relay取消能否传播至MCP任务及DomainAgent需E
+    Note over C,D: 软删不是物理清理 也不代表下游已停<br/>agentService的admin作业与chat/MCP、relayService共享DB会放大等待
 ```
 
 ```mermaid
 sequenceDiagram
     participant S as SessionApplicationService
     participant REPO as Session与Message仓储
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     participant CACHE as RuntimeBindingCacheSynchronizer
     participant STOP as ChatRunStopCoordinator
     alt 读取
@@ -707,12 +816,12 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant U as Web浏览器 U
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant C as ChatService ADS U
+    participant U as Web浏览器
+    participant L as 区域ALB
+    participant G as Jalor
+    participant C as ChatService
     participant S as local卷或OBS或API Store
-    participant D as 四服务共享数据库 U
+    participant D as 共享DB（openGauss）
     U->>L: S09-C1 multipart上传
     L->>G: S09-C1a 文根路由及请求体限制E
     G->>C: S09-C1b 转发 临时文件与期限需联合核对
@@ -742,8 +851,8 @@ sequenceDiagram
 sequenceDiagram
     participant MVC as MvcDocumentUploadController
     participant DOC as DocumentApplicationService
-    participant STORE as ApiStoreDocumentStorage或ObjectStorageDocumentStorage
-    participant DB as JDBC数据库
+    participant STORE as ApiStoreDocumentStorage<br/>或ObjectStorageDocumentStorage
+    participant DB as 共享DB（openGauss）
     participant API as DocumentController
     MVC->>DOC: S09-D1 upload 在BE执行
     DOC->>STORE: S09-D2 存储许可内写入
@@ -762,12 +871,12 @@ sequenceDiagram
     Note over API,STORE: HTTP消息转换器后续消费内容流 需验证断连close
     API->>DOC: S09-D8 update或delete
     DOC->>DB: metadata全文替换或软删
-    Note over DOC,STORE: 50MiB单文件乘并发会放大堆 临时磁盘和FD<br/>超时/取消须验证底层流关闭而非只返回HTTP错误
+    Note over DOC,STORE: 默认50MiB 目标500MiB须核对有效配置<br/>整文件缓冲乘并发会放大堆 临时磁盘和FD<br/>超时/取消须验证底层流关闭而非只返回HTTP错误
 ```
 
 | 步骤 | 当前保护与风险 | 加固/验收关注 |
 |---|---|---|
-| S09-D2-D4 | 单文件及provider并发限额存在；API整份缓冲，跨存储无原子回滚，R12 | 在途字节许可、流式/临时文件、存储成功DB失败的清理对账 |
+| S09-D2-D4 | 仓库默认单文件50MB/请求60MB；500MiB工作负载会被默认入口拒绝，若生产已放宽则API整份缓冲风险同步放大；跨存储无原子回滚，R12 | 核对ALB/Jalor/Servlet/存储各跳大小与期限；按500MiB×并发预算堆和临时盘，采用在途字节许可、流式/临时文件及孤儿对账 |
 | S09-D5-D7 | 后端归属校验，preview为后端下载；许可未覆盖完整下载，R12 | 慢客户端与cancel下stream/FD/SDK连接归还；磁盘满 |
 | S09-D8 | PATCH可替换服务端providerDocument，R21；OBS当前未显式启用证书及hostname验证，R22 | metadata白名单及可信字段；受信/不受信CA与错hostname验收 |
 
@@ -779,14 +888,14 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant U as Web浏览器 U
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant C as ChatService ADS U
-    participant D as 四服务共享数据库 U
+    participant U as Web浏览器
+    participant L as 区域ALB
+    participant G as Jalor
+    participant C as ChatService
+    participant D as 共享DB（openGauss）
     participant H as 企业鉴权Provider
     participant W as WeLink
-    participant I as 第三方Intent候选服务 U
+    participant I as intentService
     U->>L: S10-C1 分享或反馈请求
     L->>G: S10-C1a 文根路由
     G->>C: S10-C1b 转发
@@ -816,7 +925,7 @@ sequenceDiagram
     participant W as WelinkChatShareDeliveryProvider
     participant FB as IntentFeedbackTaskDispatcher
     participant PREF as IntentPreferenceCorrectionApplicationService
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     SHARE->>DB: S10-D1 create读取消息快照再insert
     Note over SHARE,DB: 与Session删除撤销未共用锁 可能越过撤销
     DEL->>DB: S10-D2 deliver加载及校验share
@@ -848,15 +957,15 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant C as ChatService ADS U
-    participant L as 同区域ALB内部文根 U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
+    participant C as ChatService
+    participant L as 区域ALB（内部文根）
+    participant D as 共享DB（openGauss）
+    participant R as Redis
     participant T as 标题HTTP Provider
-    participant I as 第三方Intent U
-    participant TOOL as ToolService ADS U
-    participant DA as 第三方DomainAgent U
-    participant RL as 自部署Relay ADS U
+    participant I as intentService
+    participant AG as agentService
+    participant DA as DomainAgent
+    participant RL as relayService
     opt 短期记忆启用
         C->>R: S11-C1 读短期记忆缓存
         C->>D: S11-C2 miss查询路径及历史
@@ -865,11 +974,16 @@ sequenceDiagram
             C->>I: S11-C3a 随识别请求传递约定历史
         else DomainAgent调用
             C->>L: S11-C3b skillId及上下文
-            L->>TOOL: S11-C3e Tool内部文根
-            TOOL->>DA: S11-C3c 实际第三方请求 U 内部处理E
+            L->>AG: S11-C3e agentService内部文根
+            AG->>DA: S11-C3c 实际第三方请求 U 内部处理E
         else Relay调用
             C->>L: S11-C3d WS请求上下文
-            L->>RL: S11-C3f Relay WS文根
+            L->>RL: S11-C3f relayService WS文根
+            opt Relay调用MCP工具 U
+                RL->>L: S11-C3g MCP调用
+                L->>AG: S11-C3h MCP入口 传输与文根E
+                AG->>DA: S11-C3i 工具执行 配额重试与取消E
+            end
         end
     end
     opt RouteMemory或Intent记录启用
@@ -881,7 +995,7 @@ sequenceDiagram
         T-->>C: 标题或错误
         C->>D: S11-C7 锁后校验人工标题及版本再提交
     end
-    Note over C,R: 关闭分支无对应IO 失败开放不代表底层已取消<br/>旁路预算还须计入Admin Tool Relay共享资源总量
+    Note over C,R: 关闭分支无对应IO 失败开放不代表底层已取消<br/>旁路预算还须计入agentService relayService共享资源总量
 ```
 
 ```mermaid
@@ -890,8 +1004,22 @@ sequenceDiagram
     participant TTL as SessionTitleApplicationService
     participant PROVIDER as SessionTitleProvider
     participant COM as SessionTitleCommitService
-    participant DB as JDBC及Redis
-    MEM->>DB: S11-D1 assemble到loadForRun Cache miss回源
+    participant DB as 共享DB（openGauss）
+    participant REDIS as Redis
+    MEM->>MEM: S11-D1 assemble到loadForRun
+    opt 短期记忆启用且需要读取路径
+        opt 缓存启用
+            MEM->>REDIS: LayeredChatMessageRepository读取最近消息缓存
+            REDIS-->>MEM: 命中或miss或无效路径或读取失败
+        end
+        opt 缓存未命中或禁用 且允许DB回源
+            MEM->>DB: MyBatisChatMessageStore.findRecentMessages
+            DB-->>MEM: 路径消息或读取失败后空上下文
+            opt DB读取成功且缓存启用
+                MEM->>REDIS: replaceSessionMessages 回填或清除旧key
+            end
+        end
+    end
     MEM->>MEM: S11-D2 token与消息裁剪 序列化计算预算
     TTL->>TTL: S11-D3 schedule独立订阅 专用4线程及队列
     TTL->>DB: S11-D4 collectCandidate 查询Session 完整轻量路径及关联Run
@@ -918,14 +1046,14 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant P as ADS部署及运维 U 能力E
-    participant L as 区域ALB U
-    participant G as Jalor U
-    participant O as 原ChatService Docker U
-    participant N as 其他ChatService Docker U
-    participant SVC as Admin Tool Relay Docker U
-    participant D as 四服务共享数据库 U
-    participant R as 四服务共享Redis U
+    participant P as ADS
+    participant L as 区域ALB
+    participant G as Jalor
+    participant O as ChatService（原实例）
+    participant N as ChatService（其他实例）
+    participant SVC as agentService及relayService
+    participant D as 共享DB（openGauss）
+    participant R as Redis
     P->>L: S12-C1 发布摘流或异常移除 P 编排需E
     L->>G: S12-C1a 路由健康实例 P 文根及探针验收E
     O->>D: S12-C2 周期heartbeat owner及fence条件续租
@@ -959,7 +1087,7 @@ sequenceDiagram
     participant W as ChatRunWatchdogScheduler
     participant REC as ChatRunRecoveryOrchestrator
     participant REPO as ChatRunExecutionRepository
-    participant DB as JDBC数据库
+    participant DB as 共享DB（openGauss）
     participant REG as LocalChatRunExecutionRegistry
     participant LIFE as Spring资源关闭回调
     L->>REG: S12-D1 heartbeatActiveRuns采集当前claims
@@ -1011,11 +1139,11 @@ sequenceDiagram
 <a id="resources--资源生命周期与状态转换核对"></a>
 ## 资源生命周期与状态转换核对
 
-基线：`00abae4f80b7e7e5b4d0ddca707035f1878a8ec8`，2026-09-18。与[双层时序图](#flows)、[风险登记](risks.md#risk-register)一起使用。本表描述现状；“验收要求”是整改完成条件，不能解读为已经有保护。
+基线：`8f48d6cc084be91bcbaad90be43dac7181636cb4`，2026-09-21。与[双层时序图](#flows)、[风险登记](risks.md#risk-register)一起使用。本表描述现状；“验收要求”是整改完成条件，不能解读为已经有保护。
 
-证据标记沿用：S=本仓源码，U=用户确认架构，P=尚未实施的目标，E=平台/联合验证。用户确认Web经区域ALB静态文根取得WCM资源，API经区域ALB按文根路由到Jalor及Chat；Chat经ToolService统一调用第三方DomainAgent，独立WS调用自部署Relay，并调用第三方Intent。Admin管理mapping、作业和页面；Admin/Tool/Relay/Chat均为ADS上的Docker服务，共享DB和Redis（U）。服务间HTTP/WS也经同区域ALB内部文根（U），具体路径/目标组/有效URL属于E。其具体表、键、连接配额、跨AZ副本及Region复制机制仍需E。
+证据标记沿用：S=本仓源码，U=用户确认架构，P=尚未实施的目标，E=平台/联合验证。用户确认Web经区域ALB静态文根取得WCM资源，API经区域ALB按文根路由到Jalor及Chat；Chat经agentService的统一chat接口调用第三方DomainAgent，独立WS调用自部署Relay，并调用intentService。admin模块管理mapping、作业和页面；agentService、relayService和ChatService均为ADS上的Docker服务，共享DB和Redis（U）。服务间HTTP/WS也经同区域ALB内部文根（U），具体路径/目标组/有效URL属于E。其具体表、键、连接配额、跨AZ副本及Region复制机制仍需E。
 
-区内跨AZ、跨Region主备以及WCM/ADS容灾是P，执行入口见[DEP01–DEP06](deployment.md)。下文将共享平台资源与Chat进程资源分开列示，不能把单个Chat实例的池、fence、缓存或生命周期保护推及四服务整个部署。
+区内跨AZ、跨Region主备以及WCM/ADS容灾是P，执行入口见[DEP01–DEP06](deployment.md)。下文将共享平台资源与Chat进程资源分开列示，不能把单个Chat实例的池、fence、缓存或生命周期保护推及当前服务整个部署。
 
 <a id="resources--1-资源获取持有和释放"></a>
 ### 1. 资源获取、持有和释放
@@ -1024,14 +1152,14 @@ sequenceDiagram
 |---|---|---|---|
 | 用户速率窗口、本机租户Semaphore | `RunAdmissionControlService.acquire`在后台启动前；先记用户速率再取租户许可；默认60次/分钟、200流/租户 | `ChatRunStartCoordinator.finish`在`doFinally`关闭`RunPermitGuard`，原子防重复释放；不是HTTP返回时释放 | 本地许可随进程消失，DB仍可能RUNNING；userWindows定期清理，tenantSemaphores无对应淘汰，需测租户高基数长期占用。R02/R26 |
 | 下游执行许可/本机 | `WorkloadConcurrencyLimiter`在订阅时tryAcquire；Relay与DomainAgent各自64 | `doFinally`释放，流结束/取消/WAIT/async边界均结束本次持有 | 不包括独立Stop临时连接，不代表挂起任务总量；需验证超时后socket、timer、引用也释放。R01/R05 |
-| Hikari连接/Chat实例内共享 S | Chat业务、查询、事件、回调、心跳、Watchdog借用同一池，默认10；借用超时500ms。其他三服务及其他Chat实例另有连接消费，池配置E | 事务或数据库访问结束后归还；事务超时不等同所有阻塞Java代码可中断 | 连接断开后数据库回滚/锁释放依赖DB/驱动检测；事务内Redis、afterCommit回调都可能延长占用。全库预算须涵盖四服务。R02/R07/R23/R28 |
+| Hikari连接/Chat实例内共享 S | Chat业务、查询、事件、回调、心跳、Watchdog借用同一池，默认10；借用超时500ms。agentService与relayService及其他Chat实例另有连接消费，池配置E | 事务或数据库访问结束后归还；事务超时不等同所有阻塞Java代码可中断 | 连接断开后数据库回滚/锁释放依赖DB/驱动检测；事务内Redis、afterCommit回调都可能延长占用。全库预算须涵盖当前服务。R02/R07/R23/R28 |
 | Relay入站事件与出站队列/连接 | `RelayWebSocketRuntimeAdapter`桥接Flux、接收JSON及内部发送sink | socket/订阅终止触发清理；当前BUFFER并不提供累计字节上限 | kill后堆消失但远端任务未必停止；单帧上限不保护总回答/排队内存。R01/R05/R26 |
 | DomainAgent帧/Run正文与Parts | 网络分片拼装、normalizer、assembly、batch；单帧有上限；FULL在Assembly累计正文/Parts，placeholder/no-store跳过真实正文和业务Parts累计 | 流结束及上下文释放后对象可回收；FULL终态前可能保持累计正文/结构化内容，no-store仍有帧、标准化和队列分配 | 异常路径须验证释放；即使单帧有界，长时间输出仍可能放大堆和序列化CPU。R01/R26 |
 | Event IO Scheduler/实例 | 显式boundedElastic，默认16平台线程、每backing thread队列参数10000 | 任务执行/取消后释放位置；排队本身仍持上下文 | 大队列不等于无积压；进程退出丢失未提交任务，已提交事实可查。不能将队列容量当可承载Run数。R01/R02/R04 |
 | Chat Redis发布/接收任务 S | 发布executor及topic队列有界；listener未显式注入执行器，库默认平台线程无限并发；其他服务也访问共享Redis U | topic/连接清理释放本机状态；发布失败可提示恢复，no-store业务事件不能补回 | Pub/Sub非可靠存储；入站线程数缺口独立于发布队列。其他服务的Redis持久语义E，不能推定可全局flush后无损恢复。R04/R09/R29 |
 | WS连接/发送缓冲 | 本机每用户8、每连接8topic、每topic128订阅；Servlet发送队列256条/2MiB | 关闭/错误/超限时清理注册表、订阅及队列；发送超时须验证真实socket | 无全实例连接总预算；kill后客户端重连形成恢复压力。共享连接队列不是每topic各2MiB。R03/R09/R20 |
 | Resume回放/live衔接 | 查询持久化历史List，同时维护有界live缓冲与去重窗口 | 有限历史发送结束，或Run终态/WAIT/async/客户端取消结束订阅 | HTTP Resume不受WS注册表限额；需独立准入、分页和字节/时间预算，验证取消时无漏清理。R03 |
-| 文档上传临时文件/byte[] | MVC/Reactive适配临时落盘；API Store读取整文件byte[]；存储操作默认32许可 | 上传资源按try/finally清理；存储成功与元数据提交是两阶段 | 上传成功DB失败可能留孤儿对象，kill可能留临时文件；32×50MiB仅原始数组可达1.56GiB，不含副本。R12 |
+| 文档上传临时文件/byte[] | MVC/Reactive适配临时落盘；API Store读取整文件byte[]；存储操作默认32许可 | 上传资源按try/finally清理；存储成功与元数据提交是两阶段 | 上传成功DB失败可能留孤儿对象，kill可能留临时文件；默认50MiB下32份原始数组约1.56GiB；若放宽到500MiB，32份约15.63GiB，均未计复制/框架对象。500MiB不是当前配置已允许或已压测通过。R12 |
 | 文档下载流/FD/存储连接 | 获取InputStream时受存储许可保护；返回`InputStreamResource`后继续传输 | MVC输出转换器关闭流；构造响应异常显式close；真实断连须测试 | 现有permit在取得流后即释放，不能限制全部在途慢下载。R12 |
 | 反馈/偏好/RouteMemory任务 | 反馈专用1worker+16队列/500ms；旧偏好和RouteMemory各有独立池 | 反馈等待过期不执行；已开始DB事务按自身期限；旧队列的超时语义需分别核对 | caller timeout不能证明JDBC停止；kill丢失本机待办，不能作为可靠补偿。R10 |
 | 标题完整任务 | 候选读DB→生成许可8→标题HTTP→独立提交TX2s；功能默认关闭 | 生成Publisher结束释放8许可；前后阶段不在该许可范围 | 候选/提交排队仍争用DB及Session锁；kill后无可靠补跑承诺。R25 |
@@ -1042,33 +1170,33 @@ sequenceDiagram
 上述数量限制多数为本机作用域；多实例可分别消耗，同租户粘性和负载倾斜会导致单实例先耗尽。任何资源验收都要同时观察堆、native/direct、线程、FD、连接、锁及租约余量，不以一个指标下降证明全部释放。
 
 <a id="resources--11-四服务的职责共享资源与证据边界"></a>
-#### 1.1 四服务的职责、共享资源与证据边界
+#### 1.1 当前服务的职责、共享资源与证据边界
 
 | 服务/组件 | 已确认职责与本仓边界 | 必须补齐的资源/状态事实 E | 故障传播与目标 P |
 |---|---|---|---|
 | ChatService U/S | Run/Execution、事件、消息、Interaction、Binding与恢复；实例内池和准入见上表 | ADS每实例CPU/内存/FD、数据库实际连接及长连接数、有效开关、实例/AZ分布 | 对自身限额负责，但不能替其他服务保留DB/Redis容量；治理和控制请求必须在共享资源故障时可按预算收口，R28/R29/R33 |
-| ToolService U | 接收Chat可信skillId，按Admin配置mapping统一调用第三方DomainAgent；本仓只有HTTP客户端 | 每skill/provider限额、HTTP池、鉴权和总期限、重试与幂等、mapping版本、缓存、回调及Stop转发语义 | Tool异常可覆盖多个技能；按调用方及provider隔离并验证全链路预算，不能把Chat的64许可当Tool全局保护，R30 |
-| Relay U | 自部署WS Runtime，Chat以profile/runtimeSessionId续接 | 会话状态位于DB/Redis/内存的比例、Redis是否承载任务、跨实例续接、远端停止代次、第三方或模型依赖、资源配额 | Chat换实例不等于Relay会话被迁移；跨AZ/Region恢复需独立证据，现阶段不承诺Runtime可靠接管，R05/R29/R34/R35 |
-| AdminService U | 配置mapping、作业和页面，访问同一DB/Redis | 表/键归属、作业选主与重复执行保护、批处理连接/锁预算、配置发布/回滚/版本确认、写缓存策略 | 管理作业与大批发布可能挤占业务/治理资源；目标为有界发布、作业隔离、配置版本兼容，R28/R29/R30 |
-| 技能属性API S，服务归属E | Chat独立请求skillName/isSaveSession/attachmentType；共享同次配置快照用于留存与附件判断 | 实际URL归属Admin或Tool或其他服务、缓存更新机制、跨区版本同步及权限 | 不等同Tool的执行mapping接口；未知留存配置不能通过切Region或任意缓存降级放宽策略，R16/R30 |
-| 第三方Intent与DomainAgent U | Intent决定路由；DomainAgent经Tool执行；本仓不包含第三方内部保护 | 各Region出口白名单、鉴权、配额、会话与回调地址、可用区/地域相关限制 | 四服务和DB恢复不代表第三方可调用；故障与恢复同时核对外部副作用，R06/R30/R35 |
+| agentService一体部署 U | 同一物理服务承载admin管理、技能运行查询、统一chat与MCP service/tool；chat及MCP分别接受Chat和relayService调用并执行DomainAgent | 模块间线程/队列/池是否隔离、查询与执行配额、MCP扇出/重试、mapping版本、外部结果查询与Stop语义；本仓只含Chat客户端 | admin/查询可能拖慢chat/MCP，反向也成立；Chat的64许可不是agentService或MCP总配额。目标拆分仍需配额/合同，R30/R36/R37 |
+| relayService U | 自部署WS Runtime，Chat以profile/runtimeSessionId续接；工具执行可经agentService的MCP入口 | 会话状态位于DB/Redis/内存的比例、Redis是否承载任务、跨实例续接、远端停止代次、第三方或模型依赖、资源配额 | Chat换实例不等于Relay会话被迁移；跨AZ/Region恢复需独立证据，现阶段不承诺Runtime可靠接管，R05/R29/R34/R35 |
+| agentService的admin模块 U，同一进程 | 配置mapping、作业和页面，访问同一DB/Redis；不是当前独立adminService | 表/键归属、作业选主与重复执行保护、批处理连接/锁预算、配置发布/回滚/版本确认、写缓存策略 | 管理作业与大批发布可能挤占业务/治理资源；目标为有界发布、作业隔离、配置版本兼容，R28/R29/R30 |
+| agentService技能运行查询 U；Chat属性客户端 S | 前端与Chat均查询技能；Chat独立URL请求skillName/isSaveSession/attachmentType，同次快照决定留存/附件策略 | 前端API、Chat配置URL、字段和鉴权对应关系；关键/展示字段分类、缓存更新与跨区版本同步 | 关键配置不可统一降级；页面展示可否省略须业务确认。查询接口与chat/MCP执行mapping不等同，R16/R30/R36 |
+| intentService与DomainAgent U | Intent决定路由；DomainAgent经agentService执行；本仓不包含第三方内部保护 | 各Region出口白名单、鉴权、配额、会话与回调地址、可用区/地域相关限制 | 当前服务和DB恢复不代表第三方可调用；故障与恢复同时核对外部副作用，R06/R30/R35 |
 
-边界证据：[统一Tool请求的可信skillId](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/DomainAgentChatRequestMapper.java#L53)、[HTTP执行端点](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L66)、[Relay独立WS订阅](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)、[属性API请求](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L60)。Tool/Admin/Relay的内部实现不由这些Chat客户端源码证明。
+边界证据：[统一agentService请求的可信skillId](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/DomainAgentChatRequestMapper.java#L53)、[HTTP执行端点](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L66)、[Relay独立WS订阅](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)、[属性API请求](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L60)。agentService各模块、relayService及MCP内部实现不由这些Chat客户端源码证明；未来拆分见[DEP01目标图](deployment.md#dep01)。
 
 <a id="resources--12-平台资源生命周期与容灾验证"></a>
 #### 1.2 平台资源生命周期与容灾验证
 
 | 资源/作用域 | 已知持有关系 U/S | 目标及必须验证的切换语义 P/E | 风险/用例及部署场景 |
 |---|---|---|---|
-| 共享DB/区域写权威 | 四服务共享资源U；Chat用事务、唯一约束和owner/fence保护事实S | 四服务连接总预算及关键事务余量；跨AZ故障切换前后只有一个写权威。跨Region异步复制若丢已提交事实须按实测RPO报告，先隔离旧写端再开放新端；关键控制、权限与Resume读不能机械路由异步副本 | R28/T28；DEP02/DEP03/DEP05 |
-| 共享Redis/缓存及其他服务状态 | Chat缓存与Pub/Sub S；其他三服务用途E | 逐服务键/状态清单和容量预算；先验证哪些可重建、哪些必须迁移。切换后受控回源、重新订阅，FULL补读；no-store结果不能靠Redis切换补出 | R29/T29；DEP02/DEP03/DEP05 |
-| WCM静态资产与页面配置 | Web加载静态资源U；Admin负责页面配置U，两者发布联动机制E | 目标按版本发布完整资产并保留可回退版本；跨Region切换验证HTML、资源、API入口及前后端协议一致。发布源故障与已有版本访问分别演练；WCM不代理业务API | R31/T31；DEP01/DEP04 |
+| 共享DB/区域写权威 | 当前服务共享资源U；Chat用事务、唯一约束和owner/fence保护事实S | 当前服务连接总预算及关键事务余量；跨AZ故障切换前后只有一个写权威。跨Region异步复制若丢已提交事实须按实测RPO报告，先隔离旧写端再开放新端；关键控制、权限与Resume读不能机械路由异步副本 | R28/T28；DEP02/DEP03/DEP05 |
+| 共享Redis/缓存及其他服务状态 | Chat缓存与Pub/Sub S；agentService与relayService用途E | 逐服务键/状态清单和容量预算；先验证哪些可重建、哪些必须迁移。切换后受控回源、重新订阅，FULL补读；no-store结果不能靠Redis切换补出 | R29/T29；DEP02/DEP03/DEP05 |
+| WCM静态资产与页面配置 | Web加载静态资源U；admin模块负责页面配置U，两者发布联动机制E | 目标按版本发布完整资产并保留可回退版本；跨Region切换验证HTML、资源、API入口及前后端协议一致。发布源故障与已有版本访问分别演练；WCM不代理业务API | R31/T31；DEP01/DEP04 |
 | 区域ALB/Jalor路由及长连接 | 文根路由到Jalor、再到业务服务U；Chat同时有HTTP、SSE和WS S | 验证每文根、TLS、首字节/idle/总期限、请求体、健康检查、摘流与重连。故障或切换会断开已有socket，不承诺连接搬迁；禁止因响应未知盲重试Run或副作用请求 | R32/T32；DEP01/DEP02/DEP05/DEP06 |
-| ADS上的Docker实例与宿主故障域 | 四服务容器部署U；Chat有部分scheduler/listener关闭回调S | 验证平台跨AZ放置、重启与伸缩、镜像/配置/密钥/卷的恢复来源；有序限制准入和摘流是待落地P。不能假定ADS等同已配置反亲和、自动容灾或持久卷复制 | R33/T33；DEP02/DEP03 |
-| 单AZ剩余容量 | 实际副本/AZ分布E | 目标四服务及入口跨AZ可用，共享依赖也能承受AZ损失；容量包含故障恢复、Pub/Sub重连、缓存回源和治理负载。Admin作业先验证单次执行语义，不能直接多副本重复调度 | R34/T34；DEP02 |
-| 主备Region的整套业务单元 | 当前只有instanceId、DB owner/fence；没有Region所有权协议S | 主备目标包含WCM/ALB/Jalor、ADS四服务、DB/Redis、对象及配置、第三方网络/回调。接管和回切分别验证旧写端隔离、复制边界与依赖就绪；写权威不可同时开放，后台任务按可恢复/失败/未知结果分流 | R35/T35；DEP03/DEP05/DEP06 |
+| ADS上的Docker实例与宿主故障域 | 当前服务容器部署U；Chat有部分scheduler/listener关闭回调S | 验证平台跨AZ放置、重启与伸缩、镜像/配置/密钥/卷的恢复来源；有序限制准入和摘流是待落地P。不能假定ADS等同已配置反亲和、自动容灾或持久卷复制 | R33/T33；DEP02/DEP03 |
+| 单AZ剩余容量 | 实际副本/AZ分布E | 目标是当前服务与入口跨AZ可用，共享依赖也能承受AZ损失；容量包含故障恢复、Pub/Sub重连、缓存回源和治理负载。admin模块作业先验证单次执行语义，不能直接多副本重复调度 | R34/T34；DEP02 |
+| 主备Region的整套业务单元 | 当前只有instanceId、DB owner/fence；没有Region所有权协议S | 主备目标包含WCM/ALB/Jalor、ADS上的ChatService/relayService/当前agentService、DB/Redis、对象及配置、第三方网络/回调；服务拆分后按DEP01目标集合重新核对。接管和回切分别验证旧写端隔离、复制边界与依赖就绪；写权威不可同时开放，后台任务按可恢复/失败/未知结果分流 | R35/T35；DEP03/DEP05/DEP06 |
 
-WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E，图中部署为U不等于容灾已通过。共享数据库和Redis的拓扑、备份、复制及数据保留须按四服务共同职责验收，不能仅凭Chat FULL历史可恢复就宣称整套系统RPO为0。
+WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E，图中部署为U不等于容灾已通过。共享数据库和Redis的拓扑、备份、复制及数据保留须按当前服务共同职责验收，不能仅凭Chat FULL历史可恢复就宣称整套系统RPO为0。
 
 <a id="resources--2-状态转换及一致性要求"></a>
 ### 2. 状态转换及一致性要求
@@ -1130,9 +1258,9 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 | 状态事实 | 当前边界 S | 接管/回切必须满足的条件 P/E |
 |---|---|---|
 | Run/Execution owner及fence | DB内条件更新和唯一约束约束同一权威事实源；只有实例ID，无Region租约/epoch | 同一数据库的跨AZ切换要验证旧连接失效和新写权威；两个独立异步复制写库可能各自通过guard，必须在部署层隔离旧写端，不能以相同代码fence证明双写安全。回切在强制停写后取得或证明最终提交位点并追平，排空前水位不能作为最终屏障 |
-| Binding及runtimeSessionId | 保存provider/profile与下游session引用，不保存下游进程内上下文，也不带区域路由字段 | Tool或Relay切地址后须证明旧session可访问且属于正确业务；仅复制Binding行不足。不能为恢复悄悄替换会话或重执行未知副作用；能力不足时按既定失败/人工确认策略收口 |
+| Binding及runtimeSessionId | 保存provider/profile与下游session引用，不保存下游进程内上下文，也不带区域路由字段 | agentService或Relay切地址后须证明旧session可访问且属于正确业务；仅复制Binding行不足。不能为恢复悄悄替换会话或重执行未知副作用；能力不足时按既定失败/人工确认策略收口 |
 | Interaction WAITING/RESPONDING | claim依赖DB原子条件及continueRunId | 控制与权限判断读当前权威；切换后先对账悬挂claim，再放开续跑。不得让双Region各自接受同一等待的不同回答 |
-| Async等待与回调 | 本机许可已释放，DB保存等待期限，回调竞争同一终态 | 迁移/校验回调入口、来源ACL、Tool转发及DNS缓存；重复回调仍只在唯一权威DB竞争。已外部完成但本地事实不明的任务先对账，不因换区自动重发 |
+| Async等待与回调 | 本机许可已释放，DB保存等待期限，回调竞争同一终态 | 迁移/校验回调入口、来源ACL、agentService转发及DNS缓存；重复回调仍只在唯一权威DB竞争。已外部完成但本地事实不明的任务先对账，不因换区自动重发 |
 | FULL/no-store与实时序列 | FULL恢复已存事实；no-store仅存控制和占位。Pub/Sub没有持久交付承诺 | 以目标库实际恢复点定义可恢复范围，检查复制RPO和原客户端游标；不得将旧Region未复制事件视为已恢复，或额外存no-store正文掩盖结果缺口 |
 | 分享撤销/会话删除/文档状态 | 可访问性和外部投递资格依赖当前持久状态；部分Resume删除校验尚有R17缺口 | 接管后核对撤销和删除事实；业务对象实际恢复点、DB引用和权限共同验证，不能以静态包已同步代替附件可读。权限/控制读不能因只读API或readOnly事务自动走落后副本；主库读取也不替代R17代码整改 |
 
@@ -1153,14 +1281,81 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 
 当前关闭能力限定为S：`OperationalSchedulingConfig`配置scheduler shutdown并等待最多10秒；`RedisChatLiveEventBus`关闭listener；部分专用scheduler和存储SDK有销毁回调。`LocalChatRunExecutionRegistry`没有`@PreDestroy`、批量取消或完整Run drain协议。ADS正常停止Docker不自动补足“关准入→摘流→后台Run排空→安全退出”的业务编排；这是P且需T33/T34验证。kill、AZ丢失或Region隔离更不能依赖Java finally完成。
 
-关闭证据：[scheduler](../../../src/main/java/com/huawei/it/ex/one/application/config/OperationalSchedulingConfig.java#L37)、[Redis listener](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L126)、[本机registry](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/LocalChatRunExecutionRegistry.java#L25)。其他三服务的退出、作业选主与Runtime恢复能力均由其负责人提供E，不能复用Chat的检查结果作为通过证据。
+关闭证据：[scheduler](../../../src/main/java/com/huawei/it/ex/one/application/config/OperationalSchedulingConfig.java#L37)、[Redis listener](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L126)、[本机registry](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/LocalChatRunExecutionRegistry.java#L25)。agentService与relayService的退出、作业选主与Runtime恢复能力均由其负责人提供E，不能复用Chat的检查结果作为通过证据。
+
+<a id="transaction-lock-order"></a>
+<a id="transaction-locks"></a>
+### 4. 事务与锁顺序：显式行锁、隐式写锁及跨事务边界
+
+下表是**源码中的调用顺序**，不是数据库已复现的死锁图。`→`表示同一事务内先后调用；`｜commit｜`表示前一事务已经结束，不应把两段持锁区间拼成一个循环。`UPDATE/INSERT/DELETE`、唯一约束及索引维护也可能等待；`EXISTS/JOIN`读取不是对每个被读表都加写锁。需在真实openGauss上记录SQL、事务ID、等待链、锁释放和失败码，关闭[R38](risks.md#r38)。本仓看不到agentService/relayService的事务；共享库检查必须由其负责人补充SQL证据。
+
+| 路径与场景 | 已核对事务/锁访问顺序 | 已有保护 | 剩余验证及隐式等待 | 源码证据 |
+|---|---|---|---|---|
+| 准入/显式专家 S01/S02 | Session `FOR UPDATE`→消息/附件关联和leaf写入→Run INSERT；专家切换分支再取消Interaction/Binding、更新scope；TX默认10s | 锁后重读Session、活动Run唯一约束、外呼在后续运行阶段 | Message/Session UPDATE、Run/Binding唯一索引、批量取消行顺序；不能仅搜索FOR UPDATE | [commit L53](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunAdmissionCommitService.java#L53)、[commitRun L162](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunAdmissionCommitService.java#L162)、[Session锁SQL L103](../../../src/main/resources/mapper/session/ChatSessionMapper.opengauss.xml#L103) |
+| 兼容创建/pinned专家中的事务内Redis S01/S02 | `createRunning/createInteractionRunning`：Session锁→Run INSERT（续跑还核对Interaction claim）→`cache.putActive`，TX10s；pinned专家：Run/Execution guard→Binding更新/取消→`cache.put`，TX2s | 标准准入已使用`insertRunning/insertInteractionRunning`并在提交后同步缓存；删除取DB active事实也已避免此处Redis | 仅对仍可达分支验证持锁等待Redis；不能把标准准入全写成持锁外呼，也不能假定所有Binding事务纯DB。R07/W04/T07 | [兼容创建 L115](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunApplicationService.java#L115)、[pinned专家 L144](../../../src/main/java/com/huawei/it/ex/one/application/service/runtime/RuntimeBindingApplicationService.java#L144)、[缓存写入 L191](../../../src/main/java/com/huawei/it/ex/one/application/service/runtime/RuntimeBindingApplicationService.java#L191)、[删除DB查询 L564](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunApplicationService.java#L564) |
+| 最终路由/Binding S02 | 最终路由：Run `FOR UPDATE`→Execution行锁→Run route UPDATE，仓储TX默认2s；Binding guard按Run→Execution读锁后执行Binding写入 | owner/fence、Run先于Execution的显式顺序 | Guard JOIN读取与Binding UPDATE/唯一索引分开计；调用者已有外层事务时核对真实事务范围 | [路由仓储 L73](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatRunRepository.java#L73)、[路由锁SQL L158](../../../src/main/resources/mapper/persistence/ChatRunMapper.opengauss.xml#L158)、[Binding guard L108](../../../src/main/resources/mapper/runtime/RuntimeBindingMapper.opengauss.xml#L108) |
+| 普通事件/批次/no-store序号 S03 | Run `FOR SHARE NOWAIT`→Execution `FOR SHARE`→sequence分配→Event INSERT（no-store相应业务事件仅分配序号）；TX默认10s | Run锁竞争快速拒绝、owner/fence、批次有界 | Execution等待、sequence/INSERT/索引成本、外层终态事务加入情况；不能为消除等待删除guard | [append L132](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatEventStore.java#L132)、[事件guard SQL L68](../../../src/main/resources/mapper/persistence/ChatEventMapper.opengauss.xml#L68)、[no-store L227](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatEventStore.java#L227) |
+| owner完成/WAIT S03/S04 | Session锁→Run UPDATE终态fence→Event guard/INSERT→assistant/Parts/Session水位→Run/Binding/Interaction更新→Execution终态；TX默认10s | 终态与正文/延迟Binding原子提交；已统一Session先于Run | 消息写入、Binding/Interaction UPDATE及Run锁模式变化；与删除/WAIT Stop并发 | [completed L136](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunTerminalCommitService.java#L136)、[WAIT L162](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunTerminalCommitService.java#L162)、[Run fence SQL L268](../../../src/main/resources/mapper/persistence/ChatRunMapper.opengauss.xml#L268) |
+| owner仅失败/取消 S03/S05 | 不保存正文的`commitTerminalOnly`先Run fence→Event→Run/Interaction/Execution及适用Binding更新；不沿用完成路径的Session首锁 | 同一Run条件写入，迟到owner不可覆盖终态 | 与同Run普通事件、Stop、Interaction对账的锁模式/更新竞争；无Session锁不是已发生死锁的证据 | [terminalOnly L185](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunTerminalCommitService.java#L185) |
+| 活动Stop S05 | `tryMarkCancelling`的Run UPDATE短TX10s｜commit｜Redis标记及Relay控制等待｜独立外部终态TX10s；有partial或async先Session锁→Run CAS，否则直接Run CAS；随后按分支保存assistant/Parts→Event→Run最终状态→Interaction→Execution | CANCELLING阻止同会话新准入；远端控制等待不持前一Run锁；取消本机生产后竞争终态 | 终态前进程退出仍可能遗留CANCELLING；远端MCP取消E；不把两次事务和网络等待串成“持锁外呼” | [Stop编排 L164](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStopCoordinator.java#L164)、[短TX L179](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatRunRepository.java#L179)、[外部终态 L230](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunTerminalCommitService.java#L230)、[可选Session锁 L419](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunTerminalCommitService.java#L419) |
+| WAIT Stop S04/S05 | Session锁→若有continuation则Run锁/标CANCELLING→Interaction `FOR UPDATE`及取消→引用Binding、RouteMemory更新；TX10s｜commit｜下游取消/活动Run Stop | 当前continueRunId、状态重查，历史WAIT Run不被强行改成活动Run | 初始claim可能独立提交；迟到回答与取消之间核对最终claim及新Run，不做全流程大事务 | [cancelWaiting L65](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatWaitingStopCommitService.java#L65)、[Run先锁 L117](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatWaitingStopCommitService.java#L117) |
+| Interaction claim与续跑 S04 | 答案/附件准备→Interaction条件UPDATE claim（独立SQL边界）｜后续准入TX：Session锁→消息准备→Interaction claim行锁→新Run INSERT；完成/等待/挂起时条件ANSWERED | 原子claim；续跑插入再次核对claim；失败释放限定continueRunId | claim成功但准入未提交的进程退出窗口；消息/Interaction/Run隐式索引等待；需核对Spring代理与仓储事务实际生效 | [claim L117](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatInteractionApplicationService.java#L117)、[续跑插入 L120](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatRunRepository.java#L120)、[claim UPDATE L119](../../../src/main/resources/mapper/persistence/ChatInteractionRequestMapper.opengauss.xml#L119) |
+| async挂起 S06 | Session锁→事件Run/Execution读锁及INSERT→assistant/Parts→Run UPDATE ASYNC_WAITING元数据→Execution UPDATE撤销owner/增fence→复用Interaction ANSWERED；TX10s | 挂起快照与旧owner失效原子提交 | 本事务持有读锁后更新相关行的锁转换；与Stop/心跳/提前回调交错需验证 | [commitStarted L59](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskApplicationService.java#L59) |
+| async callback S06 | Session锁→Run外部终态CAS（条件读取Execution/lease）→Event INSERT→assistant/Parts修改→Run最终状态→Execution UPDATE→Session水位；TX10s | 同一Session先锁，重复/过期回调拒绝；APPEND/REPLACE同事务 | REPLACE删除Parts与写回、事件批次和unique索引等待；不要把CAS中EXISTS视作持有Execution写锁 | [callback commit L63](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskCallbackCommitService.java#L63)、[CAS SQL L294](../../../src/main/resources/mapper/persistence/ChatRunMapper.opengauss.xml#L294) |
+| 单删/批删 S08 | 所有Session按ID升序锁并重读→查询活动Run计划→逐Session软删→Binding取消→Share撤销→Interaction取消｜commit｜调度缓存清理及Stop | 去重、最多100、先按稳定顺序锁Session、事务原子；外部Stop不在删除事务内 | 无显式事务期限；后续集合UPDATE与索引访问还需执行计划/等待证据。响应保留请求顺序不等于锁按请求顺序 | [delete L407](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java#L407)、[排序锁 L437](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java#L437)、[afterCommit L466](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java#L466) |
+| 心跳 S12 | 本机claim按runId排序→分批Execution UPDATE；每批独立TX2s；部分命中后回查有效claim | 已有排序、批次及短TX；异常不盲目取消仍可能合法的owner | 应用排序不能证明SQL `IN`更新的物理加锁顺序；在真实执行计划下验证，不声称顺序未处理 | [排序 L147](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunLeaseApplicationService.java#L147)、[批次仓储 L105](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatRunExecutionRepository.java#L105)、[UPDATE SQL L127](../../../src/main/resources/mapper/persistence/ChatRunExecutionMapper.opengauss.xml#L127) |
+| Watchdog/懒恢复 S07/S12 | 扫描/Redis恢复锁→Execution CAS claim（当前同步仓储SQL）｜后续独立外部终态TX：async先Session，非消息路径直接Run CAS；之后按分支保存消息→Event→Run/Interaction/Execution；其他孤儿/Interaction分支独立治理 | fencing、恢复许可、终态CAS；数据库权威不依赖Redis锁 | 原编排无覆盖整轮的大事务；不同分支的DB等待、连接预算与进程退出需分别测。不能推断持Execution锁跨到终态事务 | [recover L341](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L341)、[claim与终态 L371](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L371)、[claim仓储 L154](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatRunExecutionRepository.java#L154) |
+
+隐式SQL补充证据：[Message UPDATE/Parts INSERT](../../../src/main/resources/mapper/memory/ChatMessageMapper.opengauss.xml#L122)、[Binding UPDATE](../../../src/main/resources/mapper/runtime/RuntimeBindingMapper.opengauss.xml#L46)、[Session UPDATE](../../../src/main/resources/mapper/session/ChatSessionMapper.opengauss.xml#L59)。批量SQL涉及的实际行集合、唯一键冲突及隔离级别均需取证；这些状态不构成已证实死锁结论。异步订阅切线程之后，不能仅凭上层`@Transactional`推断整条Flux持有同一事务；检查代理进入点、SQL连接和提交时间。整改/实验统一挂[W04](risks.md#w04)、T38，不在此声明发生过死锁。
+
+<a id="jvm-locks"></a>
+#### JVM锁、同步回调与等待环复核
+
+JVM锁与数据库锁分开建图；下表记录锁对象和锁内操作，**没有取得可证明的反向锁环**。锁内`tryEmit`或`dispose`不意味着一定网络阻塞，也不能假定回调已异步化：需要跟踪实际订阅、取消、cleanup和线程切换。现有短临界区、锁外发送/释放的保护保留，关联R38/W04/T38/RB02/D02；局部慢回调可能造成线程停滞，即使没有死锁也应验收。
+
+| 锁对象/场景 | 源码中的持有与调用 | 已有保护与条件性风险 | 必须取得的证据 |
+|---|---|---|---|
+| 用户窗口Deque；S01 | [acquire/cleanup L72/L95](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/RunAdmissionControlService.java#L72)按用户窗口加monitor，清理/计数 | 锁内仅内存访问，租户`tryAcquire`不排队；未发现此处持锁外呼或多锁反序 | 热点用户竞争与清理耗时；不把所有`synchronized`登记为死锁 |
+| 本机与Redis TopicSink；S03/S07 | [本机emit L145](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/LocalChatEventStreamRegistry.java#L145)、[Redis emit L780](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L780)在每topic monitor内`tryEmitNext/Complete/Error` | sink/去重缓冲已有界；订阅回调可能同步执行，取消清理也可能触及listener。其他topic是否独立须实测，不能假定锁内没有用户回调 | slow subscriber、同步取消、重入/关闭交错时的实际monitor与回调栈；源码显示emit不等于证明慢IO一定在锁内 |
+| WS连接注册表实例；S07 | [register/subscribe/unregister L49](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)持同一monitor；扫描连接计数、替换/注销中调用[close/dispose L236](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L236)；句柄执行[取消信号 L350](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java#L350) | 每用户/topic限额和缺连接拒绝已有；全实例扫描成本、锁内取消/cleanup若慢可阻塞其他连接管理。未确认反向锁序，不声称已死锁 | 不同连接并发注册/换订阅/注销；线程dump标明monitor身份、owner及回调链；改为锁内摘除/锁外dispose时保留计数与竞态语义 |
+| SubscriptionState去重；S07 | [markDelivered L290](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L290)锁内维护有界序号窗口 | 发送在返回决定之后执行，不把此锁误描述成持锁发送；仍需验证热点竞争 | 重复/乱序及取消交错下窗口大小、临界区耗时、保序结果 |
+| Relay ShortRunExchange；S02/S05 | [send/completeSending L1343](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1343)和[close L1420](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1420)锁内emit；close的subscription dispose在锁外 | `interrupt`先同步send，之后才返回带ACK timeout的Mono；该ACK timer不覆盖此前monitor获取/同步emit耗时。锁外dispose保护保留，不能推断Stop始终最多等5秒 | 发送/关闭/取消交错、锁内同步回调的线程与持续时间；ACK期限、总调用期限、真实远端停止分别测 |
+| Servlet发送队列/Redis TopicPublisher；S03/S07 | [Servlet队列 L29](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ServletWebSocketOutboundQueue.java#L29)和[发布队列 L668](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L668)锁内仅队列/标记；[sendMessage L213](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L213)、[publishWithRetry L465](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L465)在poll返回后调用 | 字节/条数与单drainer已有；慢网络会占发送worker，但不是这些queue monitor跨网络持有的证明 | 入队/出队/close竞态、worker饥饿、拒绝和回压；区分queue monitor与实际socket等待 |
+
+对`submit→get/block`另核对执行器身份；例如[RouteMemory readSafely](../../../src/main/java/com/huawei/it/ex/one/application/service/memory/RouteMemoryApplicationService.java#L280)在独立readExecutor提交后限时get，未据此确认同池自等待死锁，但调用者超时不证明底层SQL退出。虚拟线程也须以实际JDK和栈/JFR验证承载线程、monitor与阻塞IO，不凭配置开关排除线程饥饿。
+
+<a id="wait-budgets"></a>
+### 5. 全链路等待预算与取消后的真实释放
+
+当前只有若干阶段预算，**没有由一个绝对截止时间覆盖所有入口、排队、鉴权、重试、SQL、控制和结果交付的实现**。下表数字是该提交的默认配置，环境覆盖、平台参数和下游合同需E；`idle`表示两次观测之间的间隔，`total`也仅覆盖其包裹的Publisher。不得简单相加这些值作为端到端SLO；重试、重路由和嵌套MCP会重复部分等待。W05的目标是传播剩余预算、明确每段失败语义，并预留终态/取消治理能力。
+
+| 等待阶段/场景 | 当前计时与默认值 | 没有覆盖或未知的部分 | 超时/取消后的验收 | 证据与任务 |
+|---|---|---|---|---|
+| 浏览器→ALB→Jalor及身份 S01/S07/S09 | ALB/Jalor请求体、排队、鉴权、首字节/idle/总期限未提供E | 入口等待在Chat方法计时之前；重试可能使Run受理未知；500MiB上传需核对全部层 | 入口断开后确认后台是否已受理，按事实查询；不得盲重发 | [入口默认配置 L1](../../../src/main/resources/application.yml#L1)、S01；W05/W12 |
+| Servlet接入/MVC异步 | Tomcat配置连接8192、线程max200、accept200、连接期限20s；MVC异步30m；启用虚拟线程 | 配置值不等于实际生效并发；20s连接期限不是业务总期限；BE排队及下游执行另计 | 请求结束不意味着后台Run结束；记录实际线程、队列、FD和容器边界 | [配置 L1–22](../../../src/main/resources/application.yml#L1)；R02/W09 |
+| Run准入与首个持久化事件 S01 | 准入非等待许可：60次/用户/分钟、200订阅/租户；后台调度BE；首事件30s | 身份/此前请求排队不在首事件预算；首事件后任务继续；多个独立事务/cache等待 | 超时补偿并查询Run/Execution；permit/registry/socket最终释放分别取证 | [startStandard L57](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStartCoordinator.java#L57)、[首事件timeout L213](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStartCoordinator.java#L213)；W05/W07 |
+| Scheduler排队 S01/S03/S06/S11 | EIO默认16线程、队列参数10000；反馈1worker/16队列/500ms等待；其他BE/专用队列各自配置 | 不能把队列上限当排队期限；标题候选和提交不全在8生成许可内 | 超时后排队任务不得迟到产生未经允许副作用；执行中任务与排队项分别观察 | [EIO L281](../../../src/main/resources/application.yml#L281)、[反馈 L159](../../../src/main/resources/application.yml#L159)、S11；W04/W08 |
+| intentService流式鉴权 S02 | 专用鉴权调度器4线程/128队列、5s应用timeout，随后才开始HTTP流 | 阻塞token resolver可能继续占线程；每次尝试重复鉴权 | 调用方超时后测底层鉴权退出和线程归还，不以Mono错误为凭 | [resolveAuthHeaders L154](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/FinEurekaIntentStreamClient.java#L154)；R06/W05 |
+| HTTP DNS/TLS/连接建立/连接池等待 | 普通WebClient调用未在这些客户端统一显式配置DNS、连接池获取与connect阶段预算；Relay WS单独设置connect | 框架/平台实际默认值、连接复用、半开连接、企业定制Builder E；外层timeout不等于逐阶段有独立诊断 | 注入DNS黑洞/池满/TLS故障；错误需标识阶段并确认连接回收 | [agent chat L65](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)、[Relay连接构造 L1455](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1455)；W05/W11 |
+| intentService响应及重试 S02/S04 | HTTP流首帧5s、帧间idle30s、每次请求流total120s；max-retries默认3（首次之外，受策略判定）；阻塞模式timeout5s | 流total从鉴权后的请求开始，未合并全部尝试；业务重路由再调用也需计总量 | 首帧、空帧/无有效业务结果、断流、429分别注入；计真实尝试和最终状态 | [requestStream L140](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/FinEurekaIntentStreamClient.java#L140)、[重试 L311](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/FinEurekaIntentStreamClient.java#L311)、[默认 L145](../../../src/main/resources/application.yml#L145)；W05 |
+| 技能运行属性查询 S02 | Provider调用2s；缓存默认10m；专用IO缓存访问；cache miss可能重复回源 | Redis与排队未合并成统一2s；关键策略不能因服务慢统一放行；前端查询预算E | 缓存失效风暴、留存开启/关闭、附件Gate各语义分别验收，保留拒绝或失败边界 | [Provider L54](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L54)、[配置 L99](../../../src/main/resources/application.yml#L99)、S02；R16/R36/W05/W11 |
+| agentService统一chat S02/S03 | 原始HTTP chunk的idle默认300s、订阅起total15m、单待解析帧256KiB；本地DomainAgent许可64 | 有字节不等于有有效业务事件；不含前置路由/技能查询；agentService内部队列、mapping、DomainAgent重试E | 慢首字节、持续无效字节、超大帧、断流；timer/upstream dispose与远端实际停止分别核对 | [query L65](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)、[total L180](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L180)、[配置 L438](../../../src/main/resources/application.yml#L438)；R01/R06/R36/W05/W11 |
+| relayService WS与MCP S02/S04 | connect5s、config握手10s、普通运行heartbeat响应90s、max-run30m；interrupt ACK5s；临时Stop连接idle60s | ACK timer不含interrupt此前同步send/monitor等待，见JVM锁表；Relay→agentService MCP→DomainAgent没有本仓可证明的总期限/扇出限制 | 联合注入每跳，记录工具数×尝试数；取消后MCP任务/远端副作用不持续增长，未知状态可对账 | [Relay配置 L358](../../../src/main/resources/application.yml#L358)、S02-C8e–C8g；R37/W11 |
+| JDBC连接借用及执行 S01–S12 | Hikari默认10、借用500ms；部分查询TX2s；准入/事件/终态/回调TX10s；心跳2s；批删未显式TX期限 | 连接池借用期限不等于SQL/锁/网络读取期限；MyBatis无统一default-statement-timeout配置；驱动/DB级lock/statement/socket限制E | 分别池耗尽、锁等待、慢SQL、DB切换；检查应用错误后库端SQL终止、回滚和连接归还 | [DB配置 L25](../../../src/main/resources/application.yml#L25)、[锁表](#transaction-lock-order)；R02/R07/R23/R38/W04 |
+| Redis命令/连接及提交后处理 | 命令和连接各500ms默认；发布重试默认2、backoff20ms；发布executor队列参数4096个任务；另每topic事件队列1024条/8MiB | executor任务数不是全实例累计事件/字节上限；缓存调用、重连/回源和其他模块没有一个总期限；提交后失败不回滚DB | 验证超时、拒绝、断网后队列/线程收敛；FULL补读，no-store业务缺口可观测 | [Redis L60](../../../src/main/resources/application.yml#L60)、[发布 L292](../../../src/main/resources/application.yml#L292)；W02/W11 |
+| 文档上传/下载 S09 | API Store HTTP block30s；huawei-s3/OBS SDK connect10s/socket30s（不适用于local provider）；默认50MB/60MB入口；存储许可32 | `readAllBytes`在API HTTP等待前；500MiB要求需扩大兼容配置并限制总在途字节；慢下载许可不覆盖全程 | 大文件+慢存储+客户端断开下检查heap/临时盘/FD/连接，超时结果未知先查对象与登记 | [整读 L206](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206)、[HTTP L95](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L95)、[存储配置 L389](../../../src/main/resources/application.yml#L389)；R12/W06 |
+| 外部投递及可选标题 S10/S11 | WeLink单次HTTP5s、20许可；标题timeout须显式配置、生成许可8、提交TX2s | WeLink鉴权、结果记录不由HTTP期限完整覆盖；标题候选/排队/commit独立；任务重试可能重复副作用 | 不将响应超时等同未送达；人工标题和迟到生成并发不覆盖，底层任务退出单独测 | [WeLink L62](../../../src/main/java/com/huawei/it/ex/one/infrastructure/share/WelinkChatShareDeliveryProvider.java#L62)、S11；R19/R25/W05/W08 |
+| Stop与取消释放 S05/S06/S09 | Relay按控制阶段预算；agentService stop-path默认空，配置后HTTP timeout默认120s；本地终态10s；dispose触发本机清理 | 不支持/失败的下游cancel可best-effort完成；本地响应、事务收口、远端停止是三件事；MCP取消合同E | 记录取消发起、本地终态、底层连接/任务停止各时间；迟到旧Stop不得伤害下一Run；无法确认则UNKNOWN | [cancel L110](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L110)、[Stop L164](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStopCoordinator.java#L164)；R05/R14/R37/W07/W11 |
+| live消费、Resume和后台收口 S07/S12 | WS idle10m、live/发送队列有界；lease90s、heartbeat15s、Watchdog30s+抖动，初始孤儿宽限2m | 这些不是Resume端到端期限或最坏恢复时间；SQL阻塞/积压会延后扫描；无全局Run drain | 保留Stop/心跳/终态资源，压测恢复风暴后排队和租约回落；服务恢复与遗留任务收口分别量化 | [WS L300](../../../src/main/resources/application.yml#L300)、[租约 L230](../../../src/main/resources/application.yml#L230)、S07/S12；W03/W04/W13/W14 |
+
+每个逻辑操作需记录入口开始、各阶段排队/执行时间、attempt、剩余预算和终止原因；跨`ChatService→agentService→DomainAgent`及`ChatService→relayService→agentService MCP→DomainAgent`分别计算，不把两条链的许可或期限互相替代。此项为待实施合同与观测任务，当前不得宣称已有完整透传deadline或跨服务trace。
 
 <a id="interfaces"></a>
 
 <a id="interfaces--全接口与前后端交互索引"></a>
 ## 全接口与前后端交互索引
 
-2026-09-18在 `00abae4f` 重新核对：45个Controller handler、44个唯一HTTP操作与本文及OpenAPI集合一致。接口按下表关联本页S01–S12；默认容量仍须核对有效配置。风险编号统一指当前R项，源码复核与Binding语义差异见[当前风险登记](risks.md#risk-register)和[资源状态表](#resources)。
+2026-09-21在 `8f48d6cc` 重新核对：45个Controller handler、44个唯一HTTP操作与本文及OpenAPI集合一致。接口按下表关联本页S01–S12；默认容量仍须核对有效配置；500MiB文档工作负载的入口兼容和字节预算见S09。风险编号统一指当前R项，源码复核与Binding语义差异见[当前风险登记](risks.md#risk-register)和[资源状态表](#resources)。
 
 <a id="interfaces--口径"></a>
 ### 口径

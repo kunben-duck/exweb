@@ -204,3 +204,38 @@ git diff --check
 | `/tmp/financeex-ha-stability/render-manifest.json` | 最终图源摘要与产物检查，区分图修改后的复渲染 |
 
 本次分支提交/推送只发布方案，不表示W01–W14已实现或T/D已通过。后续关闭风险须补修复版本、有效参数、双方契约、资源与业务断言、测试/演练证据和具名复核。
+
+<a id="convergence-review-20260922"></a>
+## 9. 运行视图与关键依赖风险收敛（2026-09-22）
+
+本轮从文档提交`975db46668c069a22c2f4323c142d9b52632c9d3`继续更新现有`codex/ha-stability-hardening`分支。源码基线仍为`8f48d6cc084be91bcbaad90be43dac7181636cb4`；核对`src`、`pom.xml`与联调前端相对该基线无变更。本轮只修改7份高可用文档及2份相关架构摘要，不修改业务代码、配置、SQL或部署。第1–8节原文逐字保留，以下为新一轮文档检查，不重算历史实验结果。
+
+| 检查 | 本轮结果 | 证明范围与限制 |
+|---|---|---|
+| 文档与视图收敛 | 保持7份主文档，无archive；S01–S12由24张双层图改为12张服务级时序图，部署保持7图，主图共19张 | 删除代码级图，参与者只展示服务/入口/中间件/存储；稳定步骤统一为Sxx-01…，旧C/D步骤引用已替换 |
+| 命名与架构 | 当前视图统一saas gateway（SaaS统一网关）、ALB、共享DB（openGauss）、Redis及intentService（第三方）；目录外两个当前架构入口同步 | 真实源码文件名不改名；当前一体agentService与未来admin/tool/agent拆分分开。各Region独立ALB与ADS运行/控制面为P设计约束，实际能力仍E，未冒充已部署事实 |
+| 依赖策略核对 | 对照调用方源码/默认配置，核对Intent主路由即时重试及Relay兜底、统一chat原始chunk期限、Relay连接/握手/空闲/Run期限、技能、取消、存储、用例库、WeLink与标题调用 | 均为仓库默认，不是生产有效参数或下游SLA。补充WeLink首次+3次失败重试无退避，标题配置期限涵盖鉴权+HTTP；强调HTTP期限不含整文件读取、本地停止不证明远端停止 |
+| 风险及追踪 | 21项活跃R/T、13个活跃W/RB、12组D；21行矩阵全部关联责任角色、措施、测试、预案及演练 | 新增R39/T39 DomainAgent、R40/T40 intentService、R41/T41 relayService；合并/移出编号仅保留去向，移出不等于整改。W10/RB10安全专项移出主清单 |
+| 入口覆盖 | 45个Controller handler对应44个唯一HTTP操作，与场景索引及重新解析的OpenAPI集合一致；317个本地OpenAPI引用可解析 | WS、后台任务及前端技能查询/admin/MCP外部入口继续有归属；图和风险精简未删入口 |
+| 文档引用与范围 | 659处本地链接（含230处源码行号引用）、标题/显式锚点、编号和步骤检查通过；`git diff --check`通过；变更限9份相关Markdown | 源码行号存在不替代语义核对；真实第三方内部策略保持待联合确认。历史内容作为原样前缀校验，不用当前数量覆盖旧数量 |
+| Mermaid与可读性 | 12场景+7部署图全部由本地Mermaid CLI重新生成SVG，19张主图逐张查看PNG；修改的目录外架构/时序图另渲染2张 | 为长说明分行，复查复杂S02及依赖重试/旁路/部署图；最终图源与产物摘要、步骤ID存在性均校验。长图需按完整宽度或可缩放视图阅读；未上传第三方制图服务 |
+| 交叉复核 | 独立只读复核数量、编号去向、R39–R41闭环及现状/目标界限，无阻断问题 | 修正事务配置期限与真实释放保证的混淆、Stop发送完成/paused语义、仅提前回调409的Retry-After、Run/WS可选live衔接及删除后清理的适用分支 |
+
+本轮没有执行Java业务测试、压力测试、真实依赖故障注入或容灾演练，活跃T/D仍为**NOT_RUN**。19张图成功渲染只证明文档可解析和可读，不能证明高可用加固已经实现。仍待验证：真实openGauss锁等待/死锁/切换、Redis故障与恢复、下游SLA和逐跳重试/取消、混合负载及恢复放量、500MiB直传/隔离转发、JVM与容器资源上界，以及WCM/ALB/ADS/AZ/Region容灾；数值SLO/RTO/RPO和容量未冻结前不能签署上线验收。
+
+本轮临时校验材料只用于本机复核，不是持久故障证据库：
+
+| 本机临时证据 | 内容 |
+|---|---|
+| `/tmp/financeex-ha-convergence-check.py`、`/tmp/financeex-ha-convergence/check.json` | 当前文档链接/源码行、稳定编号/步骤、21行追踪、重新解析OpenAPI、历史原文前缀及改动范围检查 |
+| `/tmp/financeex-ha-convergence/scenarios-render.log`、`deployment-render.log`、`architecture-render.log`、`architecture-sequence-render.log` | 最终19张主图及目录外2图的渲染记录 |
+| `/tmp/financeex-ha-convergence/scenarios-{1..12}.svg`、`deployment-{1..7}.svg`及同名PNG | 最终服务级运行图和部署图；PNG用于视觉检查，Markdown/Mermaid为维护源 |
+| `/tmp/financeex-ha-convergence/render-manifest.json` | 图源/产物SHA256、图中稳定步骤、产物晚于最终图源编辑的检查 |
+
+当前路径可按以下方式重新渲染；输出目录需预先创建。本轮分支提交和普通推送只发布文档，不代表风险关闭或平台验收通过。
+
+```sh
+mmdc -i docs/architecture/high-availability/scenarios.md -o /tmp/financeex-ha-convergence/scenarios.md -e svg -j 2
+mmdc -i docs/architecture/high-availability/deployment.md -o /tmp/financeex-ha-convergence/deployment.md -e svg -j 2
+git diff --check
+```

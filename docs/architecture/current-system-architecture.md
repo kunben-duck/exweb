@@ -2,7 +2,7 @@
 
 > 全接口运行视图、Servlet有效默认容量、依赖超时、风险与验证记录见[高可用审计文档集](high-availability/README.md)（以当前基线为准，不代表加固建议已经实施）。
 
-> 当前场景、资源状态和接口索引见[场景与资源](high-availability/scenarios.md)。Run链路按[受理与启动](high-availability/scenarios.md#s01)、[路由](high-availability/scenarios.md#s02)、[流式输出](high-availability/scenarios.md#s03)、[交互](high-availability/scenarios.md#s04)、[Stop](high-availability/scenarios.md#s05)及[异步回调](high-availability/scenarios.md#s06)阅读，标题见[旁路场景](high-availability/scenarios.md#s11)。物理入口为ALB→Jalor→Chat，实际策略和容量仍需环境验收。
+> 当前场景、资源状态和接口索引见[场景与资源](high-availability/scenarios.md)。Run链路按[受理与启动](high-availability/scenarios.md#s01)、[路由](high-availability/scenarios.md#s02)、[流式输出](high-availability/scenarios.md#s03)、[交互](high-availability/scenarios.md#s04)、[Stop](high-availability/scenarios.md#s05)及[异步回调](high-availability/scenarios.md#s06)阅读，标题见[旁路场景](high-availability/scenarios.md#s11)。物理入口为ALB→saas gateway（SaaS统一网关）→Chat，实际策略和容量仍需环境验收。
 
 > 当前代码架构快照。实线表示同步或严格有序调用，粗线表示流式消息，虚线表示异步或 best-effort；橙色节点为周期治理任务。
 
@@ -17,7 +17,7 @@ flowchart TB
         PC["PC Web<br/>全量会话与实时续接"]
         Mobile["移动端<br/>channel=mobile"]
         ALB["ALB<br/>统一文根与流式连接路由"]
-        Gateway["Jalor<br/>身份、Trace、Cookie配置待验"]
+        Gateway["saas gateway（SaaS统一网关）<br/>身份、Trace、Cookie配置待验"]
         PC --> ALB
         Mobile --> ALB
         ALB --> Gateway
@@ -223,7 +223,7 @@ sequenceDiagram
     autonumber
     box rgb(245,248,252) 客户端与接口
         participant FE as "PC / Mobile"
-        participant Gateway as "Jalor网关"
+        participant Gateway as "saas gateway（SaaS统一网关）"
         participant API as "Chat REST + WS/SSE"
     end
     box rgb(235,244,252) FinanceEXChatService 主执行

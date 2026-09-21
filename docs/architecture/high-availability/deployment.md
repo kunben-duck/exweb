@@ -124,7 +124,7 @@ flowchart LR
 |---|---|---|
 | 前端静态文根 | WCM主源/独立备用源；原域名及base path保持；故障切换只作用于静态路径 | HTTPS源站接入、Host/SNI、私有访问、深层路由、MIME、缓存；API前缀优先于SPA兜底 |
 | Chat HTTP/Resume/SSE | ALB → saas gateway（SaaS统一网关） → Chat；连接、首字节、idle、总期限分别登记；预算与应用一致 | SSE不被缓冲到终态，错误码透传；受理/Stop/回调等非幂等操作不做入口透明重试 |
-| 前端WS | ALB → saas gateway（SaaS统一网关） → Chat；Upgrade、心跳、idle及摘流策略显式配置 | 正常长流、半开连接、断连后退避、跨实例恢复、DNS旧缓存 |
+| 前端WS | ALB → saas gateway（SaaS统一网关） → Chat；实例/租户连接、握手与控制消息速率、Upgrade/心跳/idle/摘流及重连预算分别登记；实际入口限制E | R22/T22：大量空闲/活跃连接、慢消费、跨实例配额与集中重连；W12入口配额同W03在第一轮联调，不能只依赖应用单用户8连接 |
 | ChatService → 执行接口 | 当前内部文根 → agentService → DomainAgent；目标为toolService；逐跳分配总期限 | skillId/请求标识透传、流式背压、取消路由、未知执行结果查询；各跳重试次数合并计入预算 |
 | ChatService → relayService | 内部WS文根 → Relay；不能轮流把同一运行会话发给不持有状态的副本 | 会话归属、重连/Stop同目标、专家跨Run会话及迟到Stop；粘性路由本身不证明故障接管 |
 | 管理文根 | 当前agentService管理模块，目标adminService；经既有鉴权边界，权限和内部暴露范围保持 | 配置发布一致性、作业单执行权、页面配置缺失的降级边界；不自行新增公网管理入口 |

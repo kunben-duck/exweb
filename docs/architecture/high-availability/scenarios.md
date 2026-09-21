@@ -17,16 +17,16 @@ HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应�
 |---|---|---|
 | [S01 受理](#s01)；01 | NEXT/EDIT/REGENERATE；身份、会话、附件、受理未知 | WCM/ALB/网关/DB；有准入许可、Session锁、首持久化事件期限；入口总预算E，DB争抢R09，入口故障R11/R12 |
 | [S02 路由执行](#s02)；01/02、X01–03 | Binding续接、显式技能、专家、用例库、Intent、Relay兜底；技能查询命中/失效 | agentService/用例库/intentService/relayService/DomainAgent、DB/Redis；有阶段超时与许可，关键配置不能统一降级；R03/R16/R17/R19/R20/R21 |
-| [S03 流式输出](#s03)；运行事件 | delta/snapshot/card/控制；FULL/no-store；完成/等待/错误 | 有单帧、批次和发送队列保护；累计正文、桥接缓冲、CPU和Redis接收仍需约束；R01/R04/R07/R09/R10 |
+| [S03 流式输出](#s03)；运行事件 | delta/snapshot/card/控制；FULL/no-store；完成/等待/错误 | 有单帧、批次和发送队列保护；累计正文、桥接缓冲、CPU和Redis接收仍需约束；R01/R04/R07/R09/R10/R22 |
 | [S04 人机交互](#s04)；01续跑/02 | 澄清、问卷、候选确认/拒绝、拒答重路由、候选切换、重复回答 | DB有claim及回放持久化屏障；重路由再用下游资源、锁等待与远端取消需联合验证；R03/R16/R18/R20/R21 |
 | [S05 Stop](#s05)；03 | 本机/跨实例、WAIT、超时/异常、重复、下游取消失败 | 先提交CANCELLING再远端控制；ACK/本地终态不保证远端已停；R03/R17/R18/R19/R21 |
 | [S06 异步](#s06)；29 | 关闭/启用、提前/并发/重复/过期回调、大结果 | 有回调并发/body/标准化上限及事务CAS；挂起规模、回调洪峰和收口资源需测；R01/R07/R09/R18/R19 |
-| [S07 连接恢复](#s07)；06–08、WS | SSE/WS、断线、多页签、跨实例、慢消费、恢复风暴 | live有界；历史全量物化、HTTP恢复无独立配额；R02/R04/R09/R10/R12 |
+| [S07 连接恢复](#s07)；06–08、WS | SSE/WS、大量空闲/活跃连接、控制帧洪峰、重复订阅、跨实例、慢消费和集中重连 | 单用户/连接与live有界；缺应用实例/租户总连接及控制/订阅前置校验限额，历史全量物化；R02/R04/R09/R10/R12/R22 |
 | [S08 会话历史](#s08)；09–24 | 分页/搜索/树/版本/path/分支/归档/删除 | 部分页数及事务有界，批删按Session ID排序；全树、集合SQL、删除期限与共享池压力；R05/R09/R18 |
 | [S09 文档](#s09)；37–44 | 上传/登记/附件、local/OBS/API Store、慢下载、取消、孤儿对象 | 默认50MB/60MB、存储并发32；500MiB需求下整读、在途字节、FD/磁盘与全程下载许可缺口；R06 |
 | [S10 分享反馈](#s10)；04/05、25–28、30–36 | 快照/投递、候选查询、普通/意图反馈、旧偏好 | 快照/候选/反馈有各自限额；旁路共享DB与外部等待仍可能拖累聊天；R03/R05/R09/R20 |
 | [S11 可选旁路](#s11)；随Run/反馈触发 | 记忆、标题、路由记忆、识别记录分别开/关 | 有开关及部分隔离，候选查询/排队/提交不全在生成许可内；R05/R07/R09 |
-| [S12 后台部署](#s12)；定时、08、平台 | 心跳/Watchdog/缓存、发布/退出、依赖切换、AZ/Region故障 | 有租约/fencing及部分关闭回调；无全量Run排空或可靠Runtime接管；R08/R09/R10/R13/R14/R15 |
+| [S12 后台部署](#s12)；定时、08、平台 | 心跳/Watchdog/缓存、发布/退出、依赖切换、AZ/Region故障 | 有租约/fencing及部分关闭回调；无全量Run排空或可靠Runtime接管；R08/R09/R10/R13/R14/R15/R22 |
 | X01前端技能查询、X02 admin配置 | 前端和Chat属性契约、mapping/作业/页面变更 | 同一agentService部署U；前端API、资源隔离、配置生效及回滚E；R09/R10/R16 |
 | X03 Relay MCP | 工具扇出、多层重试、取消与任务查询 | Relay→agentService→DomainAgent为U；内部预算/全局并发/取消协议E，Chat许可不约束全部工具；R17 |
 
@@ -55,6 +55,7 @@ HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应�
 | API Store上传 | 先readAllBytes，再HTTP等待30s；存储操作许可32 | 无应用重试；30s不含整文件读取。远端成功/登记失败可能留孤儿；有效文件大小与在途字节需联合限制 | [整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206)、[HTTP](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L95) |
 | OBS / local文档 | 仅huawei-s3/OBS：connect10s、socket30s、连接200；入口默认单文件50MB/请求60MB | SDK重试及完整总期限E；不把SDK设置套到local。下载许可在取得流后归还，不覆盖慢客户端全部传输 | [配置](../../../src/main/resources/application.yml#L19)、[配置](../../../src/main/resources/application.yml#L389)、[下载](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L192) |
 | WeLink / 标题等旁路 | WeLink默认关闭，启用后单次HTTP5s、首次+3次失败重试无退避、并发20；标题默认关闭、生成并发8、提交TX2s，生成期限须配置且≤30s | WeLink鉴权与结果登记另计，当前循环可重复失败投递，须加固UNKNOWN处理及总预算；标题生成期限涵盖鉴权与HTTP，无应用重试，候选/排队/提交另计 | [WeLink](../../../src/main/java/com/huawei/it/ex/one/infrastructure/share/WelinkChatShareDeliveryProvider.java#L62)、[标题](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleApplicationService.java#L110) |
+| 前端WS（当前Servlet） | 每用户每JVM8连接、每连接8订阅、每topic本机128；入站16KiB；发送队列256条/2MiB、发送线程4/16；idle10m、60s扫描 | 发送配置10s、decorator缓冲512KiB不证明底层及时中断；队列溢出/发送执行器拒绝关闭连接。无应用实例/租户总连接及控制帧速率上限；ALB/网关配额与前端重连策略E | [配置](../../../src/main/resources/application.yml#L300)、[发送](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L147)、[执行器](../../../src/main/java/com/huawei/it/ex/one/application/config/ChatServletWebSocketSendExecutorConfiguration.java#L29) |
 | 恢复、治理及取消释放 | WS idle10m；lease90s、心跳15s、Watchdog30s+抖动；初始化孤儿宽限2m | 这些不是最坏恢复时间；排队、SQL、扫描积压、dispose后底层IO退出需测。普通HTTP的DNS/TLS/连接池获取期限未统一明确 | [配置](../../../src/main/resources/application.yml#L230)、[配置](../../../src/main/resources/application.yml#L300)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L116) |
 
 各阶段排队、鉴权、DNS/TLS、HTTP连接池、JDBC、Redis、idle、total和取消释放均纳入T03/T09/T16–T21；底层任务是否退出由连接、线程、SQL和远端任务证据判断。SLO数值在真实容量测量后确定，不能由这些默认timeout相加得到。
@@ -218,7 +219,7 @@ actor WEB as 前端
     end
 ```
 
-稳定性关注：R01/R04/R07/R09/R10。
+稳定性关注：R01/R04/R07/R09/R10/R22。
 
 源码：[流式桥接](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)、[事件处理](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatEventPipeline.java#L76)、[正文累计](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/AssistantAssembly.java#L27)、[实时广播](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L86)。
 
@@ -355,27 +356,30 @@ actor WEB as 前端
     participant DB as 共享DB（openGauss）
     participant REDIS as Redis
     WEB->>ALB: S07-01 WS连接/订阅、Resume或stream-status
-    ALB->>GW: S07-02 长连接文根；idle/摘流策略E
-    GW->>CHAT: S07-03 身份及订阅请求
-    opt Run Resume或WS订阅需要衔接live
-        CHAT->>REDIS: S07-04 先衔接实时源，暂存live事件
-    end
-    CHAT->>DB: S07-05 读取afterSeq历史；Session Resume只返回有限历史，仍全量物化
-    alt FULL且历史/实时源可用
-        CHAT-->>WEB: S07-06 经入口补读；Run/WS按需衔接live
-        Note over CHAT,WEB: WS有连接/topic/发送队列限额，idle10m；<br/>HTTP恢复无独立配额
-    else Redis断开、慢DB、慢客户端或缓冲超限
-        CHAT-->>WEB: S07-07 恢复/失败信号或实时缺口；客户端策略E
-        WEB->>ALB: S07-08 退避后查询状态/重连，禁止紧密循环
-        Note over CHAT,DB: 恢复洪峰可耗尽堆和DB连接，拖累正常Run、Stop与心跳
-    end
-    opt no-store
-        CHAT-->>WEB: S07-09 只恢复可留存控制事实；丢失正文无法历史补回
+    ALB->>GW: S07-02 长连接文根；握手速率、idle/摘流策略E
+    GW->>CHAT: S07-03 身份及控制/订阅请求
+    Note over CHAT,WEB: 当前每用户本机8连接、每连接8订阅；<br/>无应用实例总连接/控制速率保护，入口配额E
+    opt 已受理订阅或Resume；空闲WS不补读
+        opt Run Resume或WS订阅需要衔接live
+            CHAT->>REDIS: S07-04 先衔接实时源，暂存live事件
+        end
+        CHAT->>DB: S07-05 读取afterSeq历史；Session Resume只返回有限历史，仍全量物化
+        alt FULL且历史/实时源可用
+            CHAT-->>WEB: S07-06 经入口补读；Run/WS按需衔接live
+            Note over CHAT,WEB: Servlet发送队列256条/2MiB，idle10m；<br/>16个发送线程不等于16条连接，底层释放需验
+        else Redis断开、慢DB、慢客户端或缓冲超限
+            CHAT-->>WEB: S07-07 恢复/错误/关闭或实时缺口；发送拥塞可断连
+            WEB->>ALB: S07-08 客户端查询/重连；退避策略E
+            Note over CHAT,DB: 恢复洪峰可耗尽堆和DB连接，拖累正常Run、Stop与心跳
+        end
+        opt no-store
+            CHAT-->>WEB: S07-09 只恢复可留存控制事实；丢失正文无法历史补回
+        end
     end
     Note over CHAT,DB: stream-status可能触发懒恢复；<br/>现无可靠Runtime跨实例接管保证
 ```
 
-稳定性关注：R02/R04/R09/R10/R12。
+稳定性关注：R02/R04/R09/R10/R12/R22。第一轮待实施：W03在昂贵鉴权/订阅查库之前分阶段准入并隔离恢复，W01限制实例累计字节，W04减少全表扫描/锁内释放，W12联调入口配额；客户端复用连接并退避抖动。队列字节按实际消息增长，2MiB既非建连预分配，也非完整连接内存上限。
 
 源码：[Session补读](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L251)、[Run补读](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L298)、[live缓冲](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L350)、[WS注册](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)。
 
@@ -577,7 +581,7 @@ participant ADS
     Note over CHAT,RELAY: 无全量Run drain/可靠Runtime接管保证；<br/>本库fence不能约束独立异步写库
 ```
 
-稳定性关注：R08/R09/R10/R13/R14/R15。
+稳定性关注：R08/R09/R10/R13/R14/R15/R22。
 
 源码：[心跳](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunLeaseApplicationService.java#L147)、[Watchdog](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunWatchdogScheduler.java#L55)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L116)、[实例身份](../../../src/main/java/com/huawei/it/ex/one/infrastructure/id/GeneratedApplicationInstanceIdProvider.java#L25)。
 
@@ -591,7 +595,8 @@ participant ADS
 | 准入/下游许可、Run本机登记 | 每用户速率、每租户200；Relay/DomainAgent各实例64 | 正常/异常/取消按guard及doFinally释放；进程退出不等于远端停止，无全量Run排空 | [准入](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/RunAdmissionControlService.java#L55)、[许可](../../../src/main/java/com/huawei/it/ex/one/application/service/runtime/WorkloadConcurrencyLimiter.java#L60)、[运行登记](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/LocalChatRunExecutionRegistry.java#L25) |
 | 流式帧、累计正文、异步事件 | 有单帧/批次上限；FULL累计正文/Parts，no-store跳过真实业务正文累计及持久化 | 两种模式仍有帧/队列分配；桥接BUFFER和FULL累计量需加总界；清理必须跟随源任务结束 | [桥接](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)、[聚合](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/AssistantAssembly.java#L27) |
 | DB连接、事务和行锁 | 每Chat实例池10、借用500ms；部分事务2s/10s | 提交/回滚后归还，提交后回调仍可能延长调用占用；SQL/锁/驱动总期限及所有服务预算E | [配置](../../../src/main/resources/application.yml#L25)、[锁表](#transaction-locks) |
-| Redis发布/接收、WS/Resume | 每topic发布1024条/8MiB，WS输出256条/2MiB；接收执行器未显式有界 | topic和订阅需解除；恢复历史仍全量，局部队列上限不是全实例内存上限；FULL/no-store补偿不同 | [Redis生命周期](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L86)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L298) |
+| Redis发布/接收、WS/Resume | 每topic发布1024条/8MiB，Servlet默认WS输出256条/2MiB；接收执行器未显式有界 | topic和订阅需解除；恢复历史仍全量，局部队列上限不是全实例内存上限；FULL/no-store补偿不同 | [Redis生命周期](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L86)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L298) |
+| 前端WS连接及控制任务（Servlet默认） | 单用户本机8连接/连接8订阅，发送任务最多16（发送虚拟线程默认关闭）；控制帧16KiB | 关闭释放队列/订阅；实例总连接、累计字节和控制帧速率未有应用总预算。Servlet每帧独立异步处理，8订阅上限不限制校验前的DB排队；两栈长度与发送差异见[R22](risks.md#r22) | [注册](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)、[控制处理](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L100)、[订阅校验](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java#L182) |
 | 文件、临时盘、存储连接/FD | 默认入口50MB/60MB，存储操作32；API Store整读 | 下载许可不覆盖完整流；500MiB要求在途字节和临时盘预算；取消须关流、对账孤儿 | [文档流](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L192)、[整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206) |
 | 异步挂起与回调 | 挂起撤销owner/fence；回调并发4和body/标准化上限 | 挂起总量、过期扫描和恢复后回调峰值需测；终态与旧owner拒写保持 | [挂起](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskApplicationService.java#L60)、[回调准入](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/DomainAgentAsyncTaskCallbackAdmissionFilter.java#L85) |
 | 旁路、后台及容器生命周期 | 部分独立执行器/开关；调度器及Redis listener有关闭逻辑 | 无证据证明所有任务都在统一期限退出；本机Run registry无统一PreDestroy排空 | [调度关闭](../../../src/main/java/com/huawei/it/ex/one/application/config/OperationalSchedulingConfig.java#L37)、[listener关闭](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L126) |

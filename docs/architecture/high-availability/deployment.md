@@ -11,7 +11,7 @@
 | P | 待实施目标 | agentService拆分为adminService、toolService、agentService；文档管理迁移；跨AZ、跨Region主备、各Region独立ALB与ADS运行/控制面、静态备用源和区域执行屏障 |
 | E | 待平台/联合验证 | 生效URL、文根、ADS资源、外部服务内部实现、MCP协议与取消、共享数据用途、复制及真实容灾能力 |
 
-用户最新确认的一体agentService架构替代旧文档“Admin/Tool已经独立部署”的描述。后文“参与服务”按阶段计算：当前是ChatService、relayService、agentService；拆分后是ChatService、relayService、adminService、toolService、agentService，文档转发worker计入对应服务实例预算。拆分后数据库和Redis第一阶段继续共享。
+当前采用一体agentService架构。后文“参与服务”按阶段计算：当前是ChatService、relayService、agentService；拆分后是ChatService、relayService、adminService、toolService、agentService，文档转发worker计入对应服务实例预算。拆分后数据库和Redis第一阶段继续共享。
 
 U不等于生产验收；不假定ADS等同Kubernetes、ALB等同某公有云产品。图中资源统一为**共享DB（openGauss）**和**Redis**，实际Redis拓扑、HA和持久化设置为E，不从名称推断。对象存储的静态产物与业务附件分别管理。
 

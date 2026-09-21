@@ -3,25 +3,22 @@
 本轮聚焦OOM、CPU、线程/锁停滞、洪峰和依赖失效引起的服务不稳定，收敛为 **21项主风险、13个待实施工作包**。每项按“触发 → 故障传播 → 资源/服务影响 → 已有保护与缺口 → 措施验收”记录。[唯一追踪矩阵](#traceability)连接风险、工作包、测试、运行册和演练；源码细节见本页，调用关系见[场景图](scenarios.md#flows)。
 
 <a id="risk-register"></a>
-<a id="risk-register--当前实现高可用风险登记"></a>
 ## 当前风险与证据边界
 
-复核日期 **2026-09-22**；文档修改起点 `975db466`，代码基线 `8f48d6cc084be91bcbaad90be43dac7181636cb4`。本轮只修订落地方案，未改业务代码、未执行大文件/OOM或故障注入。默认值不是生产有效配置；容量阈值和真实故障行为均待验证，已执行检查见[证据](evidence.md)。
+复核日期 **2026-09-22**；代码基线 `8f48d6cc084be91bcbaad90be43dac7181636cb4`。本轮只修订落地方案，未改业务代码、未执行大文件/OOM或故障注入。默认值不是生产有效配置；容量阈值和真实故障行为均待验证，已执行检查见[证据](evidence.md)。
 
-<a id="risk-register--证据状态与关闭规则"></a>
 ### 证据与范围
 
 - **S源码确认**：实现/默认配置可定位；不能仅凭模式认定已经OOM、死锁或泄漏。**E环境待验**：有效配置、容量、外部实现/协议及故障行为未验。本轮没有新增故障复现证据。**OPEN/ENV**均未关闭；P1是在相应功能/容量启用前的阻断项，P2为条件性优化/治理项，可由实际影响上调。
 - **U用户确认现状**：ChatService、relayService、agentService三服务运行于ADS，共享DB（openGauss）及Redis；agentService含admin技能管理、运行时技能查询、统一chat转发DomainAgent、供Relay调用的MCP。Chat直接调用Relay和agentService，intentService（第三方）可选。WCM托管静态资源，ALB管理文根，上游包括saas gateway（SaaS统一网关）。
 - **P目标/措施**：未来adminService/toolService/agentService拆分，加Chat/Relay共五服务；文档管理迁agentService，内容直传合适存储或独立worker。各Region ADS控制/运行面与ALB独立、至少双AZ多副本、双Region预部署热备单写、DB区域内HA/跨区异步复制、GSLB/DNS受控切流、独立非ADS静态备用源均须实施/验证，不能作为已存在保护；不默认全面读写分离。
-- 资源收口需要终态、取消、恢复及防双主边界，但本轮不展开纯业务完整性、通用幂等/副作用补偿或安全专项。移出的旧编号**不代表已整改或接受风险**，去向见[编号变更](#risk-dispositions)。
+- 资源收口需要终态、取消、恢复及防双主边界，但本轮不展开纯业务完整性、通用幂等/副作用补偿或安全专项。
 - 全盘范围由[场景及资源覆盖](scenarios.md)衡量，不能证明不存在未知风险。源码确认、真实依赖实验、生产证据分别保存；关闭需修复提交/有效配置、关联T/D结果、资源曲线、复核人与日期。未完成项须具名接受、容量/功能限制、监控及到期日，当前无已签认接受记录。
 
 <a id="traceability"></a>
-<a id="risk-register--场景风险措施测试运行册演练追踪矩阵"></a>
 ### 唯一追踪矩阵
 
-S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deployment.md)；不借用旧版步骤号。T/RB/D分别定位[测试](tests.md)及[运行册/演练](operations.md)。主责以角色登记，实施前须补具名负责人。
+S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deployment.md)。T/RB/D分别定位[测试](tests.md)及[运行册/演练](operations.md)。主责以角色登记，实施前须补具名负责人。
 
 | 风险 | 状态/优先级 | 场景 | 工作包 | 主责 | 测试 | 运行册 | 演练 |
 |---|---|---|---|---|---|---|---|
@@ -47,10 +44,8 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 | [R20](#r20) Intent重试/兜底放大 | OPEN/P1启用条件 | [S02](scenarios.md#s02) | [W05](#w05)/[W11](#w11) | 应用、Intent、Relay | [T20](tests.md#t20) | [RB05](operations.md#rb05) | [D04](operations.md#d04) |
 | [R21](#r21) Relay连接/取消残留 | OPEN+ENV/P1条件性 | [S02](scenarios.md#s02)、[S03](scenarios.md#s03)、[S05](scenarios.md#s05) | [W05](#w05)/[W07](#w07)/[W11](#w11) | 应用、Relay | [T21](tests.md#t21) | [RB05](operations.md#rb05) | [D04](operations.md#d04) |
 
-<a id="risk-register--风险复核明细"></a>
 ## 风险明细
 
-<a id="risk-register--r01-流式桥接队列和累计正文缺少总量边界"></a>
 <a id="r01"></a>
 #### R01 流式桥接队列和累计正文缺少总量边界
 
@@ -60,7 +55,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W01](#w01)；验收条件见下。
 - **关闭证据（待取得）**：T01/D01 在快流＋慢 DB、长正文、取消/异常下证明内存和队列有界、超限可解释地收口、正常事件不丢；提供队列字节、堆/GC、许可与残留订阅曲线。
 
-<a id="risk-register--r02-resume-全量物化且-http-恢复缺少独立配额"></a>
 <a id="r02"></a>
 #### R02 历史全量恢复与重连洪峰放大资源占用
 
@@ -69,7 +63,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **已有保护/缺口**：归属检查、先订阅live、有界实时缓冲、去重/短窗口重排已有；历史总量、恢复并发与客户端退避仍需约束。sequence是全局游标，不能按每topic的seq+1等待。FULL可补读实际已存事件；no-store不可恢复正文，不能因恢复需求增加正文持久化。
 - **措施/验收**：[W03](#w03)。T02/D05覆盖长历史、提交后退出、HTTP/WS混合恢复、跨实例与Redis重连；证明历史及衔接缓冲有界、无循环补读，取消归还资源且新Run/Stop达标。阈值、生产前端和容量证据待取得。
 
-<a id="risk-register--r03-鉴权重试与业务期限不组成总预算"></a>
 <a id="r03"></a>
 #### R03 鉴权、排队及同步外呼未组成完整等待预算
 
@@ -78,26 +71,23 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **已有保护/缺口**：多个provider有bulkhead、HTTP超时，流式鉴权有独立有界资源，候选查询有自己的退避策略；这些不能限制所有前置等待，也不证明不可中断resolver/JDBC/SDK已停止。单次HTTP、单Run与一次逻辑请求的时钟不同，依赖专项事实见R19–R21。
 - **措施/验收**：[W05](#w05)，残留清理协同[W07](#w07)。T03/D04分别阻塞鉴权、排队和网络，记录总耗时、实际尝试及超时后线程/连接/许可；证明底层有界退出或进入受限治理，不只验收调用方收到timeout。有效配置与实测待取得。
 
-<a id="risk-register--r04-redis-入站-listener-没有显式有界执行器"></a>
 <a id="r04"></a>
 #### R04 Redis 入站 listener 没有显式有界执行器
 
-- **证据 S**：[构造器](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L73)手工创建 listener，仅设 connectionFactory；前次对本地 Spring Data Redis 3.4.6 `createDefaultTaskExecutor` 及 Spring Core 6.2.7 字节码复核：默认 `SimpleAsyncTaskExecutor`，concurrencyLimit=-1，未设置 virtual delegate。属于静态依赖确认，不是本轮消息压力实验。
+- **证据 S**：[构造器](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L73)手工创建 listener，仅设 connectionFactory；当前依赖 Spring Data Redis 3.4.6 的 `createDefaultTaskExecutor` 使用 Spring Core 6.2.7 的 `SimpleAsyncTaskExecutor`，默认 concurrencyLimit=-1，未设置 virtual delegate。源码和本地依赖字节码可确认该默认路径，实际线程增长及生产依赖版本仍须由T04验证。
 - **触发与影响**：突发 Pub/Sub fanout 或 handler 解析变慢，默认逐任务线程模型可能大量创建平台线程，消耗 native memory/CPU，影响整个 JVM 和跨实例实时链路。
 - **已有保护/剩余缺口**：[发布端](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L152)有排队/恢复标记，前端 WS 发送端也有界；不能保护 Redis 接收执行器。
 - **加固措施**：[W02](#w02)；验收条件见下。
 - **关闭证据（待取得）**：T04/D03 阻塞 handler 后高 fanout，线程/队列有界、顺序/去重正确、FULL 可补读、no-store 丢失信号明确；配置有效值必须纳入证据。
 
-<a id="risk-register--r05-长历史版本及摘要查询随数据增长"></a>
 <a id="r05"></a>
 #### R05 长历史查询与可选旁路抢占CPU、线程和数据库
 
-- **证据 S**：[版本递归](../../../src/main/resources/mapper/memory/ChatMessageMapper.opengauss.xml#L402)、[首assistant](../../../src/main/resources/mapper/memory/ChatMessageMapper.opengauss.xml#L472)读取完整列；[列表](../../../src/main/java/com/huawei/it/ex/one/infrastructure/session/MyBatisSessionRepository.java#L169)页上限200仍有count/offset/匹配成本；[最后Run](../../../src/main/resources/mapper/persistence/ChatRunMapper.opengauss.xml#L524)返回完整metadata。旧[偏好写](../../../src/main/java/com/huawei/it/ex/one/application/service/routing/IntentPreferenceCorrectionApplicationService.java#L85)仅subscribeOn，读侧[timeout](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/IntentPreferenceCorrectionLoader.java#L66)不证明JDBC取消。标题[schedule/collectCandidate](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleApplicationService.java#L84)在生成许可前读取完整轻量路径及Run（L164–211）。
+- **证据 S**：[版本递归](../../../src/main/resources/mapper/memory/ChatMessageMapper.opengauss.xml#L402)、[首assistant](../../../src/main/resources/mapper/memory/ChatMessageMapper.opengauss.xml#L472)读取完整列；[列表](../../../src/main/java/com/huawei/it/ex/one/infrastructure/session/MyBatisSessionRepository.java#L169)页上限200仍有count/offset/匹配成本；[最后Run](../../../src/main/resources/mapper/persistence/ChatRunMapper.opengauss.xml#L524)返回完整metadata。[偏好写](../../../src/main/java/com/huawei/it/ex/one/application/service/routing/IntentPreferenceCorrectionApplicationService.java#L85)仅subscribeOn，读侧[timeout](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/IntentPreferenceCorrectionLoader.java#L66)不证明JDBC取消。标题[schedule/collectCandidate](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleApplicationService.java#L84)在生成许可前读取完整轻量路径及Run（L164–211）。
 - **触发→传播→影响**：深树/多版本、大正文、模糊搜索、深分页或启用旁路后的突发，使扫描、递归、序列化、排队及锁等待增长；主聊天、Stop和治理争共享CPU、worker与DB连接，过期任务仍执行又加剧恢复积压。
 - **已有保护/缺口**：关键字短查询、最后Run先索引字段后回表、旧偏好[有界池](../../../src/main/java/com/huawei/it/ex/one/application/config/IntentPreferenceExecutorConfiguration.java#L28)、新[反馈dispatcher](../../../src/main/java/com/huawei/it/ex/one/application/service/routing/IntentFeedbackTaskDispatcher.java#L30)的排队期限须保留。标题默认关闭，生成8许可/timeout、[提交2s事务](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleCommitService.java#L26)、[4线程/128排队](../../../src/main/java/com/huawei/it/ex/one/infrastructure/sessiontitle/SessionTitleProviderConfiguration.java#L31)已有；“前三问”不限制前置读取规模，生成许可不覆盖候选/提交全程。有行数上限不等于SQL成本或响应字节有界。
 - **措施/验收**：[W08](#w08)。T05/D08覆盖长历史/深树/大metadata/搜索，以及旧旁路worker阻塞、标题候选/生成/提交分别变慢；记录计划、扫描量、队列龄、CPU、连接与首事件，保证旁路启用/关闭均符合预算、过期未启动任务不再执行。执行计划与阈值待验证。
 
-<a id="risk-register--r06-上传堆占用下载许可生命周期及孤儿对象"></a>
 <a id="r06"></a>
 #### R06 上传堆占用、下载许可生命周期及孤儿对象
 
@@ -107,7 +97,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W06](#w06)；验收条件见下。
 - **关闭证据（待取得）**：T06/D06 在批准容量下测试500MiB及边界、未知长度/分块、慢上传/下载、取消、DB失败/进程退出；分别测堆/native/临时盘/FD/连接，不在生产尝试OOM。准入发生于昂贵接收/复制前，许可和临时文件最终归还，孤儿可对账且不误删历史引用。
 
-<a id="risk-register--r07-高频-json序列化与长对象造成条件性-cpu分配压力"></a>
 <a id="r07"></a>
 #### R07 高频 JSON、序列化与长对象造成条件性 CPU/分配压力
 
@@ -117,7 +106,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W01](#w01)、[W08](#w08)；验收条件见下。
 - **关闭证据（待取得）**：T07/D01 合法最大值和超限值、细碎帧、高频控制帧/长正文、旁路叠加，给出热点前后对比及资源上界，拒绝发生在昂贵操作前，正常结果不改变。
 
-<a id="risk-register--r08-已确认拓扑的部署参数探针和运营行为未获环境验证"></a>
 <a id="r08"></a>
 #### R08 已确认拓扑的部署参数、探针和运营行为未获环境验证
 
@@ -127,7 +115,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W09](#w09)；验收条件见下。
 - **关闭证据（待取得）**：T08/D07 单实例终止、滚动发布/回滚、依赖切换、配置/证书轮换和容量/磁盘告警演练；同时证明服务恢复与遗留任务收口，提供批准的 SLI/SLO/RTO/RPO 和真实部署值。
 
-<a id="risk-register--r09-四服务共享-db-的争用会跨服务传播"></a>
 <a id="r09"></a>
 #### R09 三服务共享DB、洪峰准入与治理争用
 
@@ -137,7 +124,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **已有保护/缺口**：Chat本机bulkhead、短事务、借用超时、Watchdog jitter/single-flight/fencing和常规恢复限额已有；不能推成全集群预算或所有治理分支均受同一许可/次数限制。借用超时不限制已借到连接的SQL，虚拟线程不增加DB容量；账号隔离不能隔离底层资源。HA、性能索引和外部池均需环境取证。
 - **措施/验收**：[W04](#w04)落实Chat准入/公平治理/索引，[W11](#w11)落实三服务总预算。T09/D09逐服务及agent模块施压，含失败尝试积压、扩缩容、恢复回压、索引有效性；证明DB总额不被实例数绕过、控制链路不饥饿、下一轮治理按期完成、连接和准入表回到预算。
 
-<a id="risk-register--r10-四服务共享-redis-的资源竞争与重建风暴"></a>
 <a id="r10"></a>
 #### R10 当前三服务共享 Redis 的资源竞争与重建风暴
 
@@ -147,7 +133,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W11](#w11)；验收条件见下。
 - **关闭证据（待取得）**：T10/D09逐服务热key/内存/订阅洪峰和Redis切换，确认其他服务响应、DB回源限额、恢复后无旧锁控制新执行；各类数据恢复均有owner和证据，no-store正文缺口明确。
 
-<a id="risk-register--r11-wcm备用静态源可能缺失陈旧或共享故障域"></a>
 <a id="r11"></a>
 #### R11 WCM备用静态源可能缺失、陈旧或共享故障域
 
@@ -157,7 +142,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W12](#w12)；验收条件见下。
 - **关闭证据（待取得）**：T11/D10在WCM与ADS相关路径不可用时，仅用已预发布备用源完成首页/静态资源加载、登录跳转及目标API连通性核对；故障前已有版本清单，回切无混版/缓存污染，API本身失败单独报告。
 
-<a id="risk-register--r12-alb文根路由流式连接和区域入口切换不一致"></a>
 <a id="r12"></a>
 #### R12 ALB文根路由、流式连接和区域入口切换不一致
 
@@ -167,7 +151,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W12](#w12)；验收条件见下。
 - **关闭证据（待取得）**：T12/D10测试嵌套文根、静态资源与API错误路由、静默流/WS、目标摘流、故意缓存旧DNS/保持旧连接及恢复风暴；实际Region落点、写拒绝、首事件与补读结果可核对。
 
-<a id="risk-register--r13-ads控制面故障与运行面故障需要分别应对"></a>
 <a id="r13"></a>
 #### R13 ADS控制面故障与运行面故障需要分别应对
 
@@ -177,7 +160,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W13](#w13)；验收条件见下。
 - **关闭证据（待取得）**：T13/D11分别隔离控制面和运行面，证明控制故障时服务能力及限制、备用Region可由独立入口运维、预部署版本/配置可用；禁止以单一控制探针自动切Region。
 
-<a id="risk-register--r14-az失效后剩余容量和依赖拓扑可能不足"></a>
 <a id="r14"></a>
 #### R14 AZ失效后剩余容量和依赖拓扑可能不足
 
@@ -187,7 +169,6 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **加固措施**：[W13](#w13)；验收条件见下。
 - **关闭证据（待取得）**：T14/D11完整AZ隔离并保持峰值或经批准故障期负载，统计参与服务成功率、队列/连接/CPU、控制与恢复时延；故障AZ恢复后的放量也通过，不能只停止一个Pod代替AZ演练。
 
-<a id="risk-register--r15-region失效网络分区复制滞后与回切导致双写丢失"></a>
 <a id="r15"></a>
 #### R15 Region失效、网络分区、复制滞后与回切导致双写/丢失
 
@@ -218,7 +199,7 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 
 - **证据 S/E**：[事件追加SQL](../../../src/main/resources/mapper/persistence/ChatEventMapper.opengauss.xml#L63)对Run `FOR SHARE NOWAIT`再Execution共享锁；[owner终态](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunTerminalCommitService.java#L136)先Session再执行权校验，后续写事件/消息/Binding/Interaction；[异步回调](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskCallbackCommitService.java#L63)先Session再外部终态CAS并组装/落库；[批量删除](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java#L400)先排序锁Session，再更新Session/Binding/分享/Interaction。显式锁之外还涉及UPDATE、唯一索引及关联写入产生的隐式锁，真实openGauss锁图、隔离级别和受害事务处理为E。
 - **多资源持有证据 S**：[兼容createRunning/续跑](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunApplicationService.java#L115)锁Session后L121/L142写Redis；[固定专家Binding](../../../src/main/java/com/huawei/it/ex/one/application/service/runtime/RuntimeBindingApplicationService.java#L144)在短事务中L191写缓存，Redis变慢会延长DB锁/连接占用。标准insertRunning为DB-only，删除缓存已移提交后；删除入口虽按Session ID排序，普通@Transactional仍未声明自身期限，不能用借用500ms代替。
-- **JVM锁内回调证据 S**：[WS连接注册表](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)的register/subscribe/unregister（L49/L99/L146）共用实例monitor，锁内扫描连接、替换/释放旧订阅；L236–261经L302调用dispose，实际[取消句柄](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java#L350)同步`tryEmitEmpty`。[本机TopicSink](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/LocalChatEventStreamRegistry.java#L145)和[Redis TopicSink](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L780)均持每topic monitor调用`tryEmitNext/Complete/Error`；既有本地Reactor 3.7.6静态字节码检查确认`SinkManyEmitterProcessor.tryEmitNext→drain→subscriber.onNext`可以在当前调用栈执行，不能假定signal就是异步边界。Redis[订阅doFinally](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L209)还会调用listener注销，实际传播线程和库内等待需E。
+- **JVM锁内回调证据 S**：[WS连接注册表](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)的register/subscribe/unregister（L49/L99/L146）共用实例monitor，锁内扫描连接、替换/释放旧订阅；L236–261经L302调用dispose，实际[取消句柄](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java#L350)同步`tryEmitEmpty`。[本机TopicSink](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/LocalChatEventStreamRegistry.java#L145)和[Redis TopicSink](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L780)均持每topic monitor调用`tryEmitNext/Complete/Error`；当前Reactor 3.7.6依赖的静态字节码显示`SinkManyEmitterProcessor.tryEmitNext→drain→subscriber.onNext`可以在当前调用栈执行，不能假定signal就是异步边界。Redis[订阅doFinally](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L209)还会调用listener注销，实际传播线程和库内等待需E。
 - **Relay锁证据 S**：[ShortRunExchange](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1319)（ActiveRelayWebSocketExchange实现）在L1343/L1355/L1420的对象monitor内发出outbound/interrupt终止信号；`interrupt`先同步send再于L1402返回带ACK timeout的Mono，该期限不能限制此前获取monitor或同步signal耗时。`close`在L1439已把subscription.dispose移到锁外，不能描述为所有清理都持锁执行。
 - **触发与影响**：终态、回调、WAIT后Stop、删除及Watchdog并发，大回调/长事务/外部持锁延长锁占用；若某条新增或遗漏路径反向获取重叠锁，可能形成锁环，锁等待也可能在没有死锁时耗尽池并阻塞治理。WS重连/替换订阅/终止洪峰叠加慢取消或同步订阅回调，可能使topic或Relay发送/终止等待；WS实例级monitor内释放变慢还会影响无关连接的注册/订阅/注销。实际有无反向锁序、耗时回调或跨线程互等尚未复现；同线程重入可重入monitor不是死锁。同步内存/CPU工作、嵌套事务或异步切换也可能把资源保留到调用方超时之后。
 - **已有保护/剩余缺口**：Session排序、同会话Session锁串行、Run NOWAIT、短事务、CAS/fencing均须保留；不能只看局部“Binding与Interaction顺序不同”就认定死锁，因为共同先持Session可能已消除并发环。当前未取得反向锁环或故障复现，状态ENV表示需要验证该条件性路径，不表示源码已证明死锁。标准化在回调事务前、发布在事务后；[Stop](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStopCoordinator.java#L164)也分开提交CANCELLING、远端取消、最终提交，不能误写成远端等待全在DB事务内。
@@ -250,134 +231,11 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **已有保护/缺口**：[Stop](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStopCoordinator.java#L164)分段提交并执行取消；[ACK](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1379)默认5s，L1412只要求发送完成或paused任一，不代表所有远端任务停止，且不包含此前monitor等待。既有清理、fencing、[过期恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L306)有效，但健康续租可能不进入stale扫描。session级迟到Stop仍可能打断后续复用Run并诱发重提/重连；真实Relay代次/命令顺序为E，mock不能关闭。
 - **措施/验收**：[W05](#w05)分阶段隔离/期限，[W07](#w07)清理残留，[W11](#w11)签认Relay/MCP取消边界。T21/D04覆盖握手黑洞、半开/心跳无进展、慢消费、Stop超时/迟到及停止方退出；证明连接/timer/许可回落、残留任务受限治理，后续Run和其他session仍可用。不得把flushed/paused或本地terminal当成远端全停证据。
 
-<a id="risk-renumbering"></a>
-### 连续编号对照
-
-以文档提交`871ca17f`为调整起点，保持21项风险原顺序，连续编号为R01–R21，测试同步为T01–T21；内容、优先级和状态不变。当前文档使用新编号，历史验证记录仍按其原提交和旧编号解释。S/DEP/W/RB/D编号不变。
-
-| 旧风险 / 测试 | 当前风险 / 测试 |
-|---|---|
-| 旧R01 / 旧T01 | [R01](#r01) / [T01](tests.md#t01) |
-| 旧R03 / 旧T03 | [R02](#r02) / [T02](tests.md#t02) |
-| 旧R06 / 旧T06 | [R03](#r03) / [T03](tests.md#t03) |
-| 旧R09 / 旧T09 | [R04](#r04) / [T04](tests.md#t04) |
-| 旧R11 / 旧T11 | [R05](#r05) / [T05](tests.md#t05) |
-| 旧R12 / 旧T12 | [R06](#r06) / [T06](tests.md#t06) |
-| 旧R26 / 旧T26 | [R07](#r07) / [T07](tests.md#t07) |
-| 旧R27 / 旧T27 | [R08](#r08) / [T08](tests.md#t08) |
-| 旧R28 / 旧T28 | [R09](#r09) / [T09](tests.md#t09) |
-| 旧R29 / 旧T29 | [R10](#r10) / [T10](tests.md#t10) |
-| 旧R31 / 旧T31 | [R11](#r11) / [T11](tests.md#t11) |
-| 旧R32 / 旧T32 | [R12](#r12) / [T12](tests.md#t12) |
-| 旧R33 / 旧T33 | [R13](#r13) / [T13](tests.md#t13) |
-| 旧R34 / 旧T34 | [R14](#r14) / [T14](tests.md#t14) |
-| 旧R35 / 旧T35 | [R15](#r15) / [T15](tests.md#t15) |
-| 旧R36 / 旧T36 | [R16](#r16) / [T16](tests.md#t16) |
-| 旧R37 / 旧T37 | [R17](#r17) / [T17](tests.md#t17) |
-| 旧R38 / 旧T38 | [R18](#r18) / [T18](tests.md#t18) |
-| 旧R39 / 旧T39 | [R19](#r19) / [T19](tests.md#t19) |
-| 旧R40 / 旧T40 | [R20](#r20) / [T20](tests.md#t20) |
-| 旧R41 / 旧T41 | [R21](#r21) / [T21](tests.md#t21) |
-
-新编号复用了部分旧编号，当前`#rxx/#txx`统一表示新编号；旧书签须按本表、下方去向或原提交定位，不能直接按同名短锚点解释旧风险。合并/移出条目统一标“旧Rxx/旧Txx”，使用`legacy-rxx/legacy-txx`锚点，不属于当前21项清单，也不代表已整改。
-
-<a id="risk-dispositions"></a>
-### 合并或移出的旧编号去向
-
-以下旧编号沿用`871ca17f`中的含义；正文链接指向当前连续编号。不属于主清单，不表示已关闭；被移出部分后续另行排期。
-
-<a id="risk-register--legacy-r02-共享数据库竞争及实例总预算缺口"></a>
-<a id="legacy-r02"></a>
-**旧R02**：共享连接、准入及租户表增长并入[R09](#r09)。
-
-<a id="risk-register--legacy-r04-db-commit-到客户端消费之间没有可靠交付承诺"></a>
-<a id="legacy-r04"></a>
-**旧R04**：提交后缺通知引起的恢复流量并入[R02](#r02)；可靠投递/消费承诺专项移出本轮。
-
-<a id="risk-register--legacy-r05-relay-session-级迟到-stop-可能影响后续-run"></a>
-<a id="legacy-r05"></a>
-**旧R05**：Relay迟到Stop对连续服务及重试负载的影响并入[R21](#r21)；不另设纯执行正确性工作包。
-
-<a id="risk-register--legacy-r07-仍有部分事务包含-redis-调用"></a>
-<a id="legacy-r07"></a>
-**旧R07**：事务内Redis持有多种资源并入[R18](#r18)。
-
-<a id="risk-register--legacy-r08-commandid-字段存在但不足以保证端到端幂等"></a>
-<a id="legacy-r08"></a>
-**旧R08**：重复受理造成的流量放大纳入[R02](#r02)/[R17](#r17)的配额与受控恢复；通用受理幂等专项移出。
-
-<a id="risk-register--legacy-r10-旧偏好及旁路缺少完整排队和-sql-期限"></a>
-<a id="legacy-r10"></a>
-**旧R10**：旧旁路排队/SQL期限并入[R05](#r05)。
-
-<a id="risk-register--legacy-r13-watchdog-所有分支尚未共用完整治理预算"></a>
-<a id="legacy-r13"></a>
-**旧R13**：后台治理预算并入[R09](#r09)。
-
-<a id="risk-register--legacy-r14-停止方退出后-cancelling-或删除后的-run-收口延迟"></a>
-<a id="legacy-r14"></a>
-**旧R14**：取消/删除后的资源残留并入[R21](#r21)/[R17](#r17)，发布退出归[R08](#r08)；非资源类状态完整性专项移出。
-
-<a id="risk-register--legacy-r15-性能索引迁移是未确认的上线依赖"></a>
-<a id="legacy-r15"></a>
-**旧R15**：性能索引有效性及迁移门槛并入[R09](#r09)。
-
-<a id="risk-register--legacy-r16-配置并发-miss-放大及非默认组合线程风险"></a>
-<a id="legacy-r16"></a>
-**旧R16**：技能回源/线程及失败边界并入[R16](#r16)。
-
-<a id="risk-register--legacy-r17-删除会话仍可能通过历史恢复访问"></a>
-<a id="legacy-r17"></a>
-**旧R17**：删除后恢复访问的业务/权限完整性专项移出本轮，未整改。
-
-<a id="risk-register--legacy-r18-分支创建非原子及分享创建越过删除撤销"></a>
-<a id="legacy-r18"></a>
-**旧R18**：分支/分享原子性专项移出本轮，未整改。
-
-<a id="risk-register--legacy-r19-welink-投递未知结果被再次发送"></a>
-<a id="legacy-r19"></a>
-**旧R19**：同步投递阻塞/重试资源放大并入[R03](#r03)；可靠送达及未知结果补偿专项移出。
-
-<a id="risk-register--legacy-r20-联调样例忽略恢复建议游标和业务错误"></a>
-<a id="legacy-r20"></a>
-**旧R20**：联调样例恢复游标/重连放大并入[R02](#r02)；HTTP200业务错误展示专项移出。
-
-<a id="risk-register--legacy-r21-可编辑-metadata-能改变可信附件引用"></a>
-<a id="legacy-r21"></a>
-**旧R21**：文档可信引用安全专项移出本轮，未整改。
-
-<a id="risk-register--legacy-r22-huawei-s3-配置未开启证书和-hostname-验证"></a>
-<a id="legacy-r22"></a>
-**旧R22**：OBS TLS信任校验专项移出本轮，未整改；证书失效造成的可用性仍由W09/W12验证。
-
-<a id="risk-register--legacy-r23-删除事务缺少显式本地期限"></a>
-<a id="legacy-r23"></a>
-**旧R23**：删除事务期限及锁等待并入[R18](#r18)。
-
-<a id="risk-register--legacy-r24-active-path-选择与准入完成并发覆盖"></a>
-<a id="legacy-r24"></a>
-**旧R24**：活动路径并发完整性专项移出本轮，未整改。
-
-<a id="risk-register--legacy-r25-标题生成许可不覆盖候选和提交完整生命周期"></a>
-<a id="legacy-r25"></a>
-**旧R25**：标题完整生命周期预算并入[R05](#r05)。
-
-<a id="risk-register--legacy-r30-admin映射变更及toolda执行未知结果缺少联合保证"></a>
-<a id="legacy-r30"></a>
-**旧R30**：技能映射/配置及统一chat故障传播并入[R16](#r16)/[R19](#r19)；跨服务通用exactly-once专项移出。
-
-<a id="risk-register--静态依赖复核的可重复命令"></a>
-### 静态依赖证据
-
-R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor 3.7.6同步发射结论来自既有本地字节码检查；只能证明实现可能执行的路径，不能证明生产线程数或死锁。复核版本及命令保存在[验证记录](evidence.md)，运行验收分别由T04/T18承担。
-
 <a id="hardening"></a>
-<a id="hardening--高可用加固任务清单与发布门槛"></a>
 ## 加固任务与实施顺序
 
 13个活跃工作包为 **W01–W09、W11–W14**，均待实施。新增限额/开关/协议须注明单位、作用域（请求/用户/租户/实例/集群）、生效方式和拒绝行为，不虚构配置名或已有能力。
 
-<a id="hardening--实施顺序与公共验收"></a>
 | 阶段 | 工作 | 前置及出口 |
 |---|---|---|
 | A 基线与定位 | W09有效配置、资源预算、SLI/观测 | 具名负责人、真实规格/峰值/配额和隔离环境；签认数值目标后才能判定通过 |
@@ -389,7 +247,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 
 预算同时覆盖堆/native、CPU、线程、FD、临时盘、队列字节/年龄、连接及下游速率。各类“并发×单任务高分位驻留字节＋队列字节”之和须留足框架/缓存/GC余量，不能从默认许可数推定最大安全用户数。验收要求资源回落、控制可用、负载恢复后积压收敛，并保留既有事件/留存语义。每包按独立可评审提交实施，修复合并不自动关闭风险。
 
-<a id="hardening--w01-流式队列累计正文与-cpu-保护"></a>
 <a id="w01"></a>
 ### W01 流式队列、累计正文与 CPU 保护
 
@@ -401,7 +258,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：队列事件/字节、草稿/Parts字节、拒绝、线程/堆/GC、event-loop lag、取消后残留订阅；测试慢 DB＋高速流、接近上限/超限、timeout/stop/kill，验证 timer/socket/permit 清理。
 - **发布/回滚**：先隔离环境后单实例小流量，观察完整 Run 与恢复周期。回退旧版本会重新暴露无界队列，因此须同时收紧已验证的入口配额或摘流；不能把“关闭保护”当正常兜底。
 
-<a id="hardening--w02-redis-接收执行器与拒绝恢复"></a>
 <a id="w02"></a>
 ### W02 Redis 接收执行器与拒绝恢复
 
@@ -412,7 +268,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：消息执行线程/队列、拒绝率、回调耗时、重连/恢复速率、topic积压；多个 topic 高 fanout、handler阻塞、Redis断网/实际拓扑故障切换、重排和销毁重建。
 - **发布/回滚**：进程级灰度而非混用同一容器内两套无协调执行器。回退须限制扇出并保留恢复告警，确认连接容器关闭无残留线程。
 
-<a id="hardening--w03-恢复分页预算与客户端协同"></a>
 <a id="w03"></a>
 ### W03 恢复分页、预算与客户端协同
 
@@ -425,7 +280,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：恢复在途/排队/拒绝、页大小/总字节、补读与 live 重叠、缺口/重连次数；长历史、高并发取消、跨实例、Redis恢复风暴及丢响应。
 - **发布/回滚**：新旧服务均读同一事实源，先部署兼容客户端再启新错误/游标行为；回滚服务器时保留网关已验证恢复并发限制，不回到无限恢复流量。
 
-<a id="hardening--w04-db事务连接公平治理与索引"></a>
 <a id="w04"></a>
 ### W04 事务/JVM锁、等待预算与Chat侧DB保护
 
@@ -442,7 +296,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：借用等待/超时、active/pending、锁等待图/死锁受害事务/慢SQL、事务龄、任务排队龄、线程dump、治理上次完成时间/尝试/积压和事务内Redis检测；确定性并发屏障覆盖主Run/事件/终态/回调/WAIT Stop/删除/Watchdog，并覆盖WS注册/替换/注销、topic并发emit/终止和Relay interrupt/close的同步慢回调，再进行突发混合负载。证明控制链路达标、超时整体回滚、锁/连接/线程释放且无迟到提交；真实openGauss行为不可用H2/PostgreSQL结果替代。
 - **发布/回滚**：期限/配额逐步收紧，灰度按业务成功率与治理时延判定；代码回滚保留兼容索引。删除索引必须由 DBA确认新旧查询均可接受，不自动回滚DDL。
 
-<a id="hardening--w05-逻辑总期限鉴权隔离重试与配置查询"></a>
 <a id="w05"></a>
 ### W05 依赖隔离、逻辑总期限、有限重试与受控降级
 
@@ -456,7 +309,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/验收**：记录阶段耗时/剩余预算、重试原因/实际次数、拒绝/降级量、Relay增量负载、取消后真实线程/socket/许可/任务数。T03/T19–T21覆盖慢、黑洞、半开、断流、429/5xx、异常/高频响应及两种失败策略，并与T16/T17联合验证其他模块及Stop不受拖累；只返回timeout不算通过。
 - **接口/发布/回滚**：先取得提供方真实期限、限额、取消/重试与错误来源合同；新增字段/错误码独立更新OpenAPI及前端兼容。按provider小流量发布；回滚后保留已验证的入口/依赖配额，必要时暂停对应功能，不能通过加重试、绕过鉴权或关闭留存恢复吞吐。
 
-<a id="hardening--w06-文档在途字节流生命周期与对账"></a>
 <a id="w06"></a>
 ### W06 文档在途字节、流生命周期与对账
 
@@ -471,7 +323,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：在途文件/实际字节、接收与转发速率、队列龄、堆/native/临时盘、FD/连接/许可、取消残留及孤儿年龄；500MiB及边界/未知长度、慢两端/断连/DB失败/kill、重复完成、worker退出和迁移双版本兼容。证据必须证明Chat及agent管理/运行时主链路不受大文件拖累。
 - **发布/回滚**：先小文件/单provider与少量租户灰度；新增操作记录向旧版本兼容，旧版本不得误删新对象。若500MiB新路径失败，阻断新大文件或摘流，已受理文件继续按操作记录收口；不能把大文件重新送回原`readAllBytes`路径。路由回滚保持文档事实单写、历史引用和未完成上传可查询。
 
-<a id="hardening--w07-状态收敛提交未知结果与外部副作用"></a>
 <a id="w07"></a>
 ### W07 取消残留与完整资源生命周期收口
 
@@ -483,7 +334,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **验收**：关联T03/T17/T19/T21和发布T08分别在创建资源后、取消前后及清理时注入断线/kill；记录资源回落时间、未释放原因与受控残留数量。跨实例保持旧owner心跳验证治理可进展，真Relay/DA/MCP核对远端任务；本地mock只验本地路径。
 - **前置/兼容/回滚**：先约定各资源owner和远端状态/取消契约，新增查询、残留状态和代次字段保持旧客户端/旧实例兼容。按执行链灰度；回滚先摘流并有界排空，保留残留任务记录和限制，不能重新放开未知任务或自动重跑。
 
-<a id="hardening--w08-高成本查询与可选旁路隔离"></a>
 <a id="w08"></a>
 ### W08 高成本查询与可选旁路隔离
 
@@ -496,7 +346,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：队列年龄、排队过期/执行中、SQL实际时长、摘要字节、标题candidate/generated/applied/skipped、主Run首事件；慢worker/长历史/深树/锁竞争及多功能突发混合负载。
 - **发布/回滚**：优先独立旁路灰度；标题等已具备开关的功能可按既有配置禁用并确认需重启，未实现的入口不能在运行册写成可用开关。回退查询实现必须保持容量配额，防止旧路径压垮DB。
 
-<a id="hardening--w09-部署可观测性业务目标与交接"></a>
 <a id="w09"></a>
 ### W09 部署、可观测性、业务目标与交接
 
@@ -509,7 +358,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **测试/交接**：使用真实openGauss，以及与实际Redis部署拓扑和有效配置等价的环境，演练依赖切换、单实例退出、滚动发布/回滚、证书轮换、告警和备份恢复；生产若采用Redis Cluster，必须使用真实Cluster验证，不能用standalone替代。值班人员按运行册独立定位/止血/核对，联系人升级链和停止注入条件明确。
 - **回滚**：冻结已知好版本/配置/协议/数据库兼容矩阵，触发门槛到达即停扩大发布；新增指标/运行册不要求回退。恢复依赖后逐步放量并观察积压和资源回落，不能仅以HTTP健康为成功。
 
-<a id="hardening--w11-四服务共享依赖与admintoolda联合契约"></a>
 <a id="w11"></a>
 ### W11 三服务共享预算、agent职责拆分与联合契约
 
@@ -524,7 +372,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **SLA与定位**：双方签认受理、首有效事件、空闲/进展、完成、Stop真实停止、恢复的SLI及数值目标、错误来源和升级联系人。统一可信trace/operation/run/session/message/parent-call/remote-task、服务/模块/实例/Region/skill/配置版本、阶段耗时/尝试/剩余预算；[trace占位](../../../src/main/java/com/huawei/it/ex/one/infrastructure/trace/JalorTraceContextProvider.java#L13)及未透传字段为待实施协议任务，优先复用现有可信ID。脱敏日志，不用高基数ID做指标label；观察到超时不直接当作已确定根因。
 - **验收/发布/回滚**：T09/T10/T16/T17逐服务/模块施压和共享依赖故障，联合T19–T21核对两链资源/重试/取消和定位时间。先预算/观测/契约，后拆分迁流；无提供方证据的子项BLOCKED。回滚保持schema兼容、同一事实唯一写者及Run稳定归属，先核对在途量与旧模块容量，不自动重放未知任务。
 
-<a id="hardening--w12-wcm独立静态备用源与alb区域入口"></a>
 <a id="w12"></a>
 ### W12 WCM独立静态备用源与ALB区域入口
 
@@ -538,7 +385,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：版本/hash、静态资源失败率、文根命中、WS/SSE连接/断流、真实Region落点、DNS缓存及重连量。D10隔离WCM/ADS相关路径后测试独立备用、故意保留旧DNS/socket、文根嵌套、idle流和恢复风暴，分别报告页面与业务恢复。
 - **发布/回滚**：先完成主备同版本预发布/验证再变更入口；保留上一不可变静态版本，回切先核对目标健康和缓存兼容再逐步切回。API写Region不可随静态源回滚自动变化；ALB错误路由回退后核对未误重放POST。
 
-<a id="hardening--w13-ads故障域隔离和az失效容量"></a>
 <a id="w13"></a>
 ### W13 ADS故障域隔离和AZ失效容量
 
@@ -551,7 +397,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：控制API与业务请求分别监测，按AZ观察副本/目标、成功率、队列/许可/连接/CPU/FD、回源和恢复积压。D11分别控制面隔离、运行面失效、完整AZ网络隔离，并覆盖AZ恢复后的重连/放量，不能用单Pod退出代替AZ演练。
 - **发布/回滚**：先单服务验证故障域策略，再参与服务混合负载与共享依赖组合演练；错误调度策略回退时仍保留跨AZ最低分布。故障AZ恢复先验证副本/依赖健康后分批纳入目标组，避免重连和建连同时冲击数据库。
 
-<a id="hardening--w14-region故障接管防双写与受控回切"></a>
 <a id="w14"></a>
 ### W14 Region故障接管、防双写与受控回切
 
@@ -566,11 +411,6 @@ R04的Spring Data Redis 3.4.6、Spring Core 6.2.7默认执行器与R18的Reactor
 - **观测/测试**：统一故障时间线，记录复制水位/延迟、隔离后最终提交位点及追平证据、业务附件对象恢复点和引用/权限缺口、各侧写入探针、入口实际落点、DNS/连接残留、UNKNOWN操作、Run/Interaction/Binding和队列对账、实际服务RTO/遗留任务RTO/数据及附件RPO。D12覆盖Region失效、网络分区、复制滞后、保持旧DNS/socket/回调、提升失败、回切预收集后隔离前迟到提交、附件落后/权限不一致、回切中断和恢复后负载；每阶段证明最多一个写权威，并验证损失超界/无法核对时阻断以及已批准损失下的功能隔离。
 - **失败与回退**：提升前失败不自动撤销已经执行的隔离；只有重新证明原权威有效、备用仍无写权且数据/外部任务可核对，才能恢复原侧服务，否则保持受控不可写。提升后不得直接恢复旧主写或仅切回DNS，须按同样单写/同步/对账原则重新决策。保留切换证据、潜在丢失和外部执行清单；服务恢复、数据核对及积压收敛全部满足才结束容灾，不以ALB健康200结案。
 
-<a id="hardening--w10-文档信任边界与-obs-tls"></a>
-<a id="w10"></a>
-**W10去向**：文档信任边界与OBS TLS专项移出本轮，未实施、未关闭；不计入13个活跃工作包。
-
-<a id="hardening--统一关闭与未完成项移交"></a>
 ### 关闭与交接
 
 每项提交修复/配置版本、T用例与D演练、规模/注入/持续时间、CPU/内存/线程/连接/队列曲线、清理/恢复结果及复核人；与S/E/U/P对应，不以本地mock、HTTP200或注入撤销代替验收。未完成项登记责任人、功能/容量限制、监控、接受人及到期日。数值SLO/RTO/RPO、有效平台配置或真实下游合同缺失时保持OPEN/ENV，对应用例标明BLOCKED/NOT_RUN，不能宣布上线验收完成。

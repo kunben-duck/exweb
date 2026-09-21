@@ -2,14 +2,13 @@
 
 阅读顺序：[场景覆盖](#coverage-matrix) → [公共依赖策略](#dependency-policies) → [12张服务级时序图](#flows) → [关键资源与锁](#resources) → [44个HTTP操作及其他入口](#interfaces)。风险、加固、测试和预案分别见[风险登记](risks.md#risk-register)、[测试](tests.md)、[运行册](operations.md)。
 
-代码基线 `8f48d6cc084be91bcbaad90be43dac7181636cb4`；本轮文档起点 `975db466`；核对日期 **2026-09-22**。本轮只改文档。**S**为本仓源码，**U**为用户确认的现状，**E**为需要环境/联合验证，**P**为尚未实施的目标。源码缺口不等于已复现事故；配置值是当前默认值，生产覆盖需另核对。
+代码基线 `8f48d6cc084be91bcbaad90be43dac7181636cb4`；核对日期 **2026-09-22**。本轮只改文档。**S**为本仓源码，**U**为用户确认的现状，**E**为需要环境/联合验证，**P**为尚未实施的目标。源码缺口不等于已复现事故；配置值是当前默认值，生产覆盖需另核对。
 
 现状是Web经ALB获取WCM静态资源，API经**ALB → saas gateway（SaaS统一网关）→ ChatService**。ChatService按`skillId`调用一体`agentService`，独立WS调用`relayService`，并可调用`intentService（第三方）`。agentService包含admin技能管理、前端/Chat技能运行查询、统一chat和供Relay使用的MCP；relayService经agentService MCP访问下游DomainAgent（U）。当前服务以Docker运行在ADS，并共享DB和Redis；具体表/键职责、内部路由、鉴权和平台超时为E。图中的ALB是同一路由层的逻辑视图。
 
 Chat以DB为持久化事实源，Redis承担派生缓存和实时分发；其他服务使用共享Redis的持久语义未核实，不能全库清空。未来三服务拆分及跨AZ/跨Region部署只在[部署方案](deployment.md)表达为P。本页12张图只画当前服务边界，步骤统一为`Sxx-01…`，源码细节集中于表和链接；不再维护代码层时序图。
 
 <a id="coverage-matrix"></a>
-<a id="flows--场景目录与覆盖规则"></a>
 ## 场景与故障覆盖
 
 HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应、失败和恢复后的资源回落；“有保护”仅表示S证据，仍需测试。X01–X03是外部服务入口，不计入Chat的44个HTTP操作。
@@ -61,7 +60,6 @@ HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应�
 各阶段排队、鉴权、DNS/TLS、HTTP连接池、JDBC、Redis、idle、total和取消释放均纳入T03/T09/T16–T21；底层任务是否退出由连接、线程、SQL和远端任务证据判断。SLO数值在真实容量测量后确定，不能由这些默认timeout相加得到。
 
 <a id="flows"></a>
-<a id="flows--按功能场景的双层运行时序图"></a>
 ## 服务级运行时序图
 
 每场景一张图。`->>`为请求/调用，`-->>`为响应或异步事件；流式/异步在箭头中写明。图中timeout/retry/fallback沿用上表；E分支表示外部契约或平台策略待验证。源码链接用于追溯，不把类、线程池和锁画成服务。
@@ -584,8 +582,6 @@ participant ADS
 源码：[心跳](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunLeaseApplicationService.java#L147)、[Watchdog](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunWatchdogScheduler.java#L55)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L116)、[实例身份](../../../src/main/java/com/huawei/it/ex/one/infrastructure/id/GeneratedApplicationInstanceIdProvider.java#L25)。
 
 <a id="resources"></a>
-<a id="resources--资源生命周期与状态转换核对"></a>
-<a id="resources--1-资源获取持有和释放"></a>
 ## 关键资源、状态与释放边界
 
 正常结束、异常、超时、取消、实例退出五类路径都要检查实际资源回落。响应成功/失败、`dispose`调用或容器被替换，均不单独证明DB连接、FD、下游任务和副作用已清理。下表只保留能扩大故障影响的资源。
@@ -600,15 +596,8 @@ participant ADS
 | 异步挂起与回调 | 挂起撤销owner/fence；回调并发4和body/标准化上限 | 挂起总量、过期扫描和恢复后回调峰值需测；终态与旧owner拒写保持 | [挂起](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskApplicationService.java#L60)、[回调准入](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/DomainAgentAsyncTaskCallbackAdmissionFilter.java#L85) |
 | 旁路、后台及容器生命周期 | 部分独立执行器/开关；调度器及Redis listener有关闭逻辑 | 无证据证明所有任务都在统一期限退出；本机Run registry无统一PreDestroy排空 | [调度关闭](../../../src/main/java/com/huawei/it/ex/one/application/config/OperationalSchedulingConfig.java#L37)、[listener关闭](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L126) |
 
-<a id="resources--11-四服务的职责共享资源与证据边界"></a>
-<a id="resources--12-平台资源生命周期与容灾验证"></a>
 当前一体agentService的admin/查询/chat/MCP共用进程故障域（U），内部线程、连接、作业和限额为E；Chat的64许可不限制MCP全局扇出。relayService管理自己的会话和工具任务（U/E）。全部服务对共享DB/Redis的连接、热点与清理需合并核对。WCM发布、ALB摘流、ADS容器/宿主机、AZ/Region资源属于平台证据；见[部署方案](deployment.md)，不能以Chat单实例检查替代。
 
-<a id="resources--2-状态转换及一致性要求"></a>
-<a id="resources--21-run和execution分开核对"></a>
-<a id="resources--22-interaction"></a>
-<a id="resources--23-runtimebinding"></a>
-<a id="resources--24-azregion切换不能替代业务状态转换"></a>
 ### 影响资源回收的状态边界
 
 | 对象 | 必须保留的稳定性语义 | 依据 |
@@ -617,7 +606,6 @@ participant ADS
 | Interaction | claim、续跑Run与最终回答有独立边界；重复/过期回答不能不断产生新执行。孤立claim需治理，不能用长期大事务包住人机等待 | [claim/对账](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatInteractionApplicationService.java#L117) |
 | Binding / Runtime | ACTIVE绑定续接与远端Runtime存活分别判断；默认业务TTL0不自动过期，Redis TTL不承担任务收口；Region切换不保证原会话能接管 | [绑定解析](../../../src/main/java/com/huawei/it/ex/one/application/service/runtime/RuntimeBindingApplicationService.java#L129)、[绑定生命周期](../../../src/main/java/com/huawei/it/ex/one/application/service/runtime/RuntimeBindingApplicationService.java#L587) |
 
-<a id="resources--3-五类退出路径的核对表"></a>
 正常结束验证许可、正文及订阅释放；异常/超时验证底层IO和远端任务是否退出；取消验证Stop与自然结束交错；实例退出验证租约、残留任务和客户端恢复。FULL只承诺恢复已持久化内容；no-store不得通过新增正文持久化“补齐”恢复能力。
 
 <a id="transaction-lock-order"></a>
@@ -641,13 +629,10 @@ JVM只保留三条关键等待链：WS注册表在monitor内关闭/取消订阅�
 证据：[WS注册/取消](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)、[topic emit](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L780)、[Relay同步发送](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1343)、[锁外dispose](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1420)。
 
 <a id="interfaces"></a>
-<a id="interfaces--全接口与前后端交互索引"></a>
-<a id="interfaces--口径"></a>
 ## 全入口索引
 
 本仓有44个唯一HTTP操作、45个Controller处理方法；文档上传Servlet/Reactive实现互斥。同一路径不同方法分开计数。下表保持完整归属，资源默认值和失败策略以场景/公共策略为准；外部服务及Actuator不混入44项。
 
-<a id="interfaces--44个操作逐项覆盖"></a>
 | ID | HTTP操作 | 场景 | 稳定性检查重点 |
 |---|---|---|---|
 | 01 | `POST /v1/chat/runs` | [S01](#s01) / [S02](#s02) / [S03](#s03) / [S11](#s11) | 受理准入、首事件和未知响应；路由/输出及可选旁路 |
@@ -695,7 +680,6 @@ JVM只保留三条关键等待链：WS注册表在monitor内关闭/取消订阅�
 | 43 | `GET /v1/documents/{documentId}/preview-url` | [S09](#s09) | 后端下载URL；并非预签名传输 |
 | 44 | `GET /v1/documents/{documentId}/download` | [S09](#s09) | 完整流生命周期中的FD/连接/取消 |
 
-<a id="interfaces--非rest入口"></a>
 ### 非REST及外部入口
 
 | 入口/触发 | 场景 | 归属与稳定性边界 |
@@ -711,5 +695,4 @@ JVM只保留三条关键等待链：WS注册表在monitor内关闭/取消订阅�
 | X03 relayService MCP service/tool | [S02](#s02)/[S05](#s05) | agentService调用DomainAgent（U）；扇出/多层重试/取消/任务查询E |
 | WCM静态发布、ADS及AZ/Region事件 | [S01](#s01)/[S12](#s12) | 平台依赖；目标与演练见[DEP01–DEP06](deployment.md) |
 
-<a id="interfaces--前端统一约束"></a>
 前端需分别呈现受理、首事件、最终收口与恢复状态；恢复/轮询采用退避，避免把断线直接变为新Run重试。500MiB文档必须核对每层入口限制。具体退避参数及ALB/saas gateway失败透传属于联合验收E，不能假定本仓已经实现。

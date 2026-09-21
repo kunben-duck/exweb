@@ -239,3 +239,20 @@ mmdc -i docs/architecture/high-availability/scenarios.md -o /tmp/financeex-ha-co
 mmdc -i docs/architecture/high-availability/deployment.md -o /tmp/financeex-ha-convergence/deployment.md -e svg -j 2
 git diff --check
 ```
+
+<a id="renumber-review-20260922"></a>
+## 10. 风险与测试连续编号检查（2026-09-22）
+
+本轮以文档提交`871ca17f70826651d898b6d89aebf2f9074c165b`为调整起点，在`codex/ha-stability-hardening`将21项活跃风险及对应测试按原内容顺序改为R01–R21、T01–T21。唯一新旧对照维护于`risks.md#risk-renumbering`；历史记录仍使用当时编号，不能按同名新编号解释。第1–9节原文作为字节不变前缀保留。
+
+| 检查 | 本轮结果 |
+|---|---|
+| 连续性与对应 | 风险矩阵、21项风险明细、21项测试均按01–21顺序排列且唯一；风险与同号测试一一对应，R→W→T→RB→D关联完整 |
+| 内容等价 | 按指定映射逐项对照基线：风险内容、优先级、状态、措施、测试、场景及预案语义不变；独立只读复核通过。W/RB/D/S/DEP编号序列均未改变 |
+| 旧编号隔离 | 20个合并/移出的旧风险及旧测试编号使用legacy锚点并标明“旧”；去向链接指向当前编号，无重复显式锚点，不将移出项标为已整改 |
+| 引用检查 | 703处本地链接（含230处源码行号引用）及Markdown锚点检查通过；目录外受控Markdown未发现需要同步的风险/测试编号引用 |
+| 入口与文档数量 | 保持7份主文档、13个工作包、13份运行册、12组演练；45个Controller handler对应44个唯一HTTP操作，与场景索引及重新解析OpenAPI一致，317个本地OpenAPI引用有效 |
+| 图形检查 | 12张场景图和7张部署图均重新渲染为SVG，XML解析和稳定步骤ID检查通过；19张Mermaid源与基线逐张摘要一致，编号引用变化发生在图外说明，未改变图布局 |
+| 范围与格式 | 仅修改本目录7份Markdown，无新增归档；`git diff --check`通过。没有修改业务代码、配置、SQL或部署，没有执行新的业务测试或故障注入 |
+
+本机临时校验材料位于`/tmp/financeex-ha-renumber/`：`mapping.json`记录编号及14处范围表达检查，`check.py/check.json`记录链接和结构检查，`semantic-check.json`记录内容等价，`scenarios-render.log`和`deployment-render.log`记录本轮19张图渲染，`render-manifest.json`记录图源和产物摘要。临时材料不是持久故障证据库；T/D继续保持NOT_RUN，历史业务验证结论未改写，编号整理不代表风险关闭。

@@ -16,20 +16,20 @@ HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应�
 
 | 场景/入口 | 必查变体 | 资源、已有保护与主要稳定性缺口 |
 |---|---|---|
-| [S01 受理](#s01)；01 | NEXT/EDIT/REGENERATE；身份、会话、附件、受理未知 | WCM/ALB/网关/DB；有准入许可、Session锁、首持久化事件期限；入口总预算E，DB争抢R28，入口故障R31/R32 |
-| [S02 路由执行](#s02)；01/02、X01–03 | Binding续接、显式技能、专家、用例库、Intent、Relay兜底；技能查询命中/失效 | agentService/用例库/intentService/relayService/DomainAgent、DB/Redis；有阶段超时与许可，关键配置不能统一降级；R06/R36/R37/R39/R40/R41 |
-| [S03 流式输出](#s03)；运行事件 | delta/snapshot/card/控制；FULL/no-store；完成/等待/错误 | 有单帧、批次和发送队列保护；累计正文、桥接缓冲、CPU和Redis接收仍需约束；R01/R09/R26/R28/R29 |
-| [S04 人机交互](#s04)；01续跑/02 | 澄清、问卷、候选确认/拒绝、拒答重路由、候选切换、重复回答 | DB有claim及回放持久化屏障；重路由再用下游资源、锁等待与远端取消需联合验证；R06/R36/R38/R40/R41 |
-| [S05 Stop](#s05)；03 | 本机/跨实例、WAIT、超时/异常、重复、下游取消失败 | 先提交CANCELLING再远端控制；ACK/本地终态不保证远端已停；R06/R37/R38/R39/R41 |
-| [S06 异步](#s06)；29 | 关闭/启用、提前/并发/重复/过期回调、大结果 | 有回调并发/body/标准化上限及事务CAS；挂起规模、回调洪峰和收口资源需测；R01/R26/R28/R38/R39 |
-| [S07 连接恢复](#s07)；06–08、WS | SSE/WS、断线、多页签、跨实例、慢消费、恢复风暴 | live有界；历史全量物化、HTTP恢复无独立配额；R03/R09/R28/R29/R32 |
-| [S08 会话历史](#s08)；09–24 | 分页/搜索/树/版本/path/分支/归档/删除 | 部分页数及事务有界，批删按Session ID排序；全树、集合SQL、删除期限与共享池压力；R11/R28/R38 |
-| [S09 文档](#s09)；37–44 | 上传/登记/附件、local/OBS/API Store、慢下载、取消、孤儿对象 | 默认50MB/60MB、存储并发32；500MiB需求下整读、在途字节、FD/磁盘与全程下载许可缺口；R12 |
-| [S10 分享反馈](#s10)；04/05、25–28、30–36 | 快照/投递、候选查询、普通/意图反馈、旧偏好 | 快照/候选/反馈有各自限额；旁路共享DB与外部等待仍可能拖累聊天；R06/R11/R28/R40 |
-| [S11 可选旁路](#s11)；随Run/反馈触发 | 记忆、标题、路由记忆、识别记录分别开/关 | 有开关及部分隔离，候选查询/排队/提交不全在生成许可内；R11/R26/R28 |
-| [S12 后台部署](#s12)；定时、08、平台 | 心跳/Watchdog/缓存、发布/退出、依赖切换、AZ/Region故障 | 有租约/fencing及部分关闭回调；无全量Run排空或可靠Runtime接管；R27/R28/R29/R33/R34/R35 |
-| X01前端技能查询、X02 admin配置 | 前端和Chat属性契约、mapping/作业/页面变更 | 同一agentService部署U；前端API、资源隔离、配置生效及回滚E；R28/R29/R36 |
-| X03 Relay MCP | 工具扇出、多层重试、取消与任务查询 | Relay→agentService→DomainAgent为U；内部预算/全局并发/取消协议E，Chat许可不约束全部工具；R37 |
+| [S01 受理](#s01)；01 | NEXT/EDIT/REGENERATE；身份、会话、附件、受理未知 | WCM/ALB/网关/DB；有准入许可、Session锁、首持久化事件期限；入口总预算E，DB争抢R09，入口故障R11/R12 |
+| [S02 路由执行](#s02)；01/02、X01–03 | Binding续接、显式技能、专家、用例库、Intent、Relay兜底；技能查询命中/失效 | agentService/用例库/intentService/relayService/DomainAgent、DB/Redis；有阶段超时与许可，关键配置不能统一降级；R03/R16/R17/R19/R20/R21 |
+| [S03 流式输出](#s03)；运行事件 | delta/snapshot/card/控制；FULL/no-store；完成/等待/错误 | 有单帧、批次和发送队列保护；累计正文、桥接缓冲、CPU和Redis接收仍需约束；R01/R04/R07/R09/R10 |
+| [S04 人机交互](#s04)；01续跑/02 | 澄清、问卷、候选确认/拒绝、拒答重路由、候选切换、重复回答 | DB有claim及回放持久化屏障；重路由再用下游资源、锁等待与远端取消需联合验证；R03/R16/R18/R20/R21 |
+| [S05 Stop](#s05)；03 | 本机/跨实例、WAIT、超时/异常、重复、下游取消失败 | 先提交CANCELLING再远端控制；ACK/本地终态不保证远端已停；R03/R17/R18/R19/R21 |
+| [S06 异步](#s06)；29 | 关闭/启用、提前/并发/重复/过期回调、大结果 | 有回调并发/body/标准化上限及事务CAS；挂起规模、回调洪峰和收口资源需测；R01/R07/R09/R18/R19 |
+| [S07 连接恢复](#s07)；06–08、WS | SSE/WS、断线、多页签、跨实例、慢消费、恢复风暴 | live有界；历史全量物化、HTTP恢复无独立配额；R02/R04/R09/R10/R12 |
+| [S08 会话历史](#s08)；09–24 | 分页/搜索/树/版本/path/分支/归档/删除 | 部分页数及事务有界，批删按Session ID排序；全树、集合SQL、删除期限与共享池压力；R05/R09/R18 |
+| [S09 文档](#s09)；37–44 | 上传/登记/附件、local/OBS/API Store、慢下载、取消、孤儿对象 | 默认50MB/60MB、存储并发32；500MiB需求下整读、在途字节、FD/磁盘与全程下载许可缺口；R06 |
+| [S10 分享反馈](#s10)；04/05、25–28、30–36 | 快照/投递、候选查询、普通/意图反馈、旧偏好 | 快照/候选/反馈有各自限额；旁路共享DB与外部等待仍可能拖累聊天；R03/R05/R09/R20 |
+| [S11 可选旁路](#s11)；随Run/反馈触发 | 记忆、标题、路由记忆、识别记录分别开/关 | 有开关及部分隔离，候选查询/排队/提交不全在生成许可内；R05/R07/R09 |
+| [S12 后台部署](#s12)；定时、08、平台 | 心跳/Watchdog/缓存、发布/退出、依赖切换、AZ/Region故障 | 有租约/fencing及部分关闭回调；无全量Run排空或可靠Runtime接管；R08/R09/R10/R13/R14/R15 |
+| X01前端技能查询、X02 admin配置 | 前端和Chat属性契约、mapping/作业/页面变更 | 同一agentService部署U；前端API、资源隔离、配置生效及回滚E；R09/R10/R16 |
+| X03 Relay MCP | 工具扇出、多层重试、取消与任务查询 | Relay→agentService→DomainAgent为U；内部预算/全局并发/取消协议E，Chat许可不约束全部工具；R17 |
 
 <a id="fault-dimensions"></a>
 跨组验收统一检查十类故障：**内存、CPU/GC、线程/连接/FD、SQL/锁、Redis、网络/鉴权/重试、失控或残留任务、文件/磁盘、恢复/发布/故障域、配置/证书**。正文保留会扩大资源占用或中断业务的状态边界；低影响展示正确性不单独扩展为活跃高可用风险。未列直接依赖的场景仍可能受共享资源事故影响。
@@ -58,7 +58,7 @@ HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应�
 | WeLink / 标题等旁路 | WeLink默认关闭，启用后单次HTTP5s、首次+3次失败重试无退避、并发20；标题默认关闭、生成并发8、提交TX2s，生成期限须配置且≤30s | WeLink鉴权与结果登记另计，当前循环可重复失败投递，须加固UNKNOWN处理及总预算；标题生成期限涵盖鉴权与HTTP，无应用重试，候选/排队/提交另计 | [WeLink](../../../src/main/java/com/huawei/it/ex/one/infrastructure/share/WelinkChatShareDeliveryProvider.java#L62)、[标题](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleApplicationService.java#L110) |
 | 恢复、治理及取消释放 | WS idle10m；lease90s、心跳15s、Watchdog30s+抖动；初始化孤儿宽限2m | 这些不是最坏恢复时间；排队、SQL、扫描积压、dispose后底层IO退出需测。普通HTTP的DNS/TLS/连接池获取期限未统一明确 | [配置](../../../src/main/resources/application.yml#L230)、[配置](../../../src/main/resources/application.yml#L300)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L116) |
 
-各阶段排队、鉴权、DNS/TLS、HTTP连接池、JDBC、Redis、idle、total和取消释放均纳入T06/T28/T36–T41；底层任务是否退出由连接、线程、SQL和远端任务证据判断。SLO数值在真实容量测量后确定，不能由这些默认timeout相加得到。
+各阶段排队、鉴权、DNS/TLS、HTTP连接池、JDBC、Redis、idle、total和取消释放均纳入T03/T09/T16–T21；底层任务是否退出由连接、线程、SQL和远端任务证据判断。SLO数值在真实容量测量后确定，不能由这些默认timeout相加得到。
 
 <a id="flows"></a>
 <a id="flows--按功能场景的双层运行时序图"></a>
@@ -100,7 +100,7 @@ actor WEB as 前端
     Note over WEB,CHAT: ALB/网关排队、重试和总期限E；<br/>后续路由S02、输出S03
 ```
 
-稳定性关注：R28/R31/R32。
+稳定性关注：R09/R11/R12。
 
 源码：[HTTP入口](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatController.java#L126)、[启动与首事件](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStartCoordinator.java#L57)、[受理事务](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunAdmissionCommitService.java#L53)。
 
@@ -177,7 +177,7 @@ sequenceDiagram
     Note over CHAT,DA: 等待期间可长占许可；<br/>Intent降级与MCP扇出可叠加放大，不能由本地收口推定远端已停
 ```
 
-稳定性关注：R06/R36/R37/R39/R40/R41。关键技能配置不是可统一丢弃的旁路；外部服务及前端策略仍为E。
+稳定性关注：R03/R16/R17/R19/R20/R21。关键技能配置不是可统一丢弃的旁路；外部服务及前端策略仍为E。
 
 源码：[用例库HTTP](../../../src/main/java/com/huawei/it/ex/one/infrastructure/usecase/HttpUseCaseLibraryClient.java#L50)、[首轮路由及降级](../../../src/main/java/com/huawei/it/ex/one/application/service/routing/RouteSignalApplicationService.java#L139)、[路由](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L176)、[属性Gate](../../../src/main/java/com/huawei/it/ex/one/application/service/agentdatapersistence/AgentDataPersistenceGate.java#L80)、[统一chat](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)、[Relay](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L113)。
 
@@ -220,7 +220,7 @@ actor WEB as 前端
     end
 ```
 
-稳定性关注：R01/R09/R26/R28/R29。
+稳定性关注：R01/R04/R07/R09/R10。
 
 源码：[流式桥接](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)、[事件处理](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatEventPipeline.java#L76)、[正文累计](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/AssistantAssembly.java#L27)、[实时广播](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L86)。
 
@@ -261,7 +261,7 @@ actor WEB as 前端
     Note over INTENT,RELAY: 外部排队/取消及切换前旧任务退出E；<br/>慢依赖与锁等待会占用聊天资源
 ```
 
-稳定性关注：R06/R36/R38/R40/R41。
+稳定性关注：R03/R16/R18/R20/R21。
 
 源码：[交互续跑](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/InteractionContinuationCoordinator.java#L122)、[候选准入](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunAdmissionCommitService.java#L186)、[回放屏障](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/StandardRunRuntimeCoordinator.java#L172)、[拒答重路由](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentRefusalCoordinator.java#L259)。
 
@@ -303,7 +303,7 @@ actor WEB as 前端
     end
 ```
 
-稳定性关注：R06/R37/R38/R39/R41。
+稳定性关注：R03/R17/R18/R19/R21。
 
 源码：[Stop编排](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunStopCoordinator.java#L160)、[终态事务](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunTerminalCommitService.java#L230)、[Relay中断](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1380)、[DomainAgent取消](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L110)。
 
@@ -339,7 +339,7 @@ participant DA as DomainAgent（第三方）
     Note over DA,CHAT: 回调方的退避、总尝试数及远端任务清理E；<br/>无界重试可挤占共享DB
 ```
 
-稳定性关注：R01/R26/R28/R38/R39。
+稳定性关注：R01/R07/R09/R18/R19。
 
 源码：[挂起提交](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskApplicationService.java#L60)、[回调准入](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/DomainAgentAsyncTaskCallbackAdmissionFilter.java#L85)、[标准化](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskCallbackApplicationService.java#L177)、[回调提交](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskCallbackCommitService.java#L64)。
 
@@ -377,7 +377,7 @@ actor WEB as 前端
     Note over CHAT,DB: stream-status可能触发懒恢复；<br/>现无可靠Runtime跨实例接管保证
 ```
 
-稳定性关注：R03/R09/R28/R29/R32。
+稳定性关注：R02/R04/R09/R10/R12。
 
 源码：[Session补读](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L251)、[Run补读](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L298)、[live缓冲](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L350)、[WS注册](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)。
 
@@ -416,7 +416,7 @@ actor WEB as 前端
     Note over WEB,GW: 客户端防抖、网关重试和总请求期限E
 ```
 
-稳定性关注：R11/R28/R38。
+稳定性关注：R05/R09/R18。
 
 源码：[会话查询](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java#L216)、[删除及排序锁](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java#L407)、[历史SQL](../../../src/main/resources/mapper/memory/ChatMessageMapper.opengauss.xml#L402)。
 
@@ -459,7 +459,7 @@ actor WEB as 前端
     end
 ```
 
-稳定性关注：R12。默认32个存储许可不是在途字节上限；32×500MiB仅原始数组即15.625GiB，不能把该估算当已复现OOM。
+稳定性关注：R06。默认32个存储许可不是在途字节上限；32×500MiB仅原始数组即15.625GiB，不能把该估算当已复现OOM。
 
 源码：[上传](../../../src/main/java/com/huawei/it/ex/one/application/service/document/DocumentApplicationService.java#L74)、[API Store整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206)、[下载流](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L192)、[配置](../../../src/main/resources/application.yml#L389)。
 
@@ -499,7 +499,7 @@ actor WEB as 前端
     end
 ```
 
-稳定性关注：R06/R11/R28/R40。
+稳定性关注：R03/R05/R09/R20。
 
 源码：[分享](../../../src/main/java/com/huawei/it/ex/one/application/service/share/ChatShareApplicationService.java#L62)、[投递](../../../src/main/java/com/huawei/it/ex/one/application/service/share/ChatShareDeliveryApplicationService.java#L65)、[反馈隔离](../../../src/main/java/com/huawei/it/ex/one/application/service/routing/IntentFeedbackTaskDispatcher.java#L50)、[候选](../../../src/main/java/com/huawei/it/ex/one/infrastructure/intent/FinEurekaIntentCandidateProvider.java#L70)。
 
@@ -540,7 +540,7 @@ participant CHAT as ChatService
     end
 ```
 
-稳定性关注：R11/R26/R28。
+稳定性关注：R05/R07/R09。
 
 源码：[标题任务](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleApplicationService.java#L84)、[标题提交](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleCommitService.java#L27)、[短期缓存/回源](../../../src/main/java/com/huawei/it/ex/one/infrastructure/memory/LayeredChatMessageRepository.java#L155)、[路由记忆等待](../../../src/main/java/com/huawei/it/ex/one/application/service/memory/RouteMemoryApplicationService.java#L280)。
 
@@ -579,7 +579,7 @@ participant ADS
     Note over CHAT,RELAY: 无全量Run drain/可靠Runtime接管保证；<br/>本库fence不能约束独立异步写库
 ```
 
-稳定性关注：R27/R28/R29/R33/R34/R35。
+稳定性关注：R08/R09/R10/R13/R14/R15。
 
 源码：[心跳](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunLeaseApplicationService.java#L147)、[Watchdog](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunWatchdogScheduler.java#L55)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L116)、[实例身份](../../../src/main/java/com/huawei/it/ex/one/infrastructure/id/GeneratedApplicationInstanceIdProvider.java#L25)。
 
@@ -624,7 +624,7 @@ participant ADS
 <a id="transaction-locks"></a>
 ### 关键事务与等待链
 
-下表是源码调用顺序，**不是已复现死锁**。`｜提交｜`表示持锁区间已结束。除显式行锁，UPDATE/INSERT、唯一约束及索引维护也会等待；SQL中的EXISTS/JOIN不等于对所有读取表加写锁。真实openGauss的事务ID、等待链、执行计划和失败码属于T38证据，外部服务SQL由其负责人补充。
+下表是源码调用顺序，**不是已复现死锁**。`｜提交｜`表示持锁区间已结束。除显式行锁，UPDATE/INSERT、唯一约束及索引维护也会等待；SQL中的EXISTS/JOIN不等于对所有读取表加写锁。真实openGauss的事务ID、等待链、执行计划和失败码属于T18证据，外部服务SQL由其负责人补充。
 
 | 场景 | 已有顺序/保护 | 高影响缺口与证据 |
 |---|---|---|
@@ -636,7 +636,7 @@ participant ADS
 | 心跳/恢复 S12 | 心跳claim按runId排序、每批TX2s；恢复Execution CAS提交后，再独立终态事务 | 排序不证明SQL IN物理加锁顺序；不把恢复两次事务串成持锁网络调用。[心跳排序](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunLeaseApplicationService.java#L147)、[恢复边界](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java#L341) |
 
 <a id="jvm-locks"></a>
-JVM只保留三条关键等待链：WS注册表在monitor内关闭/取消订阅；每topic sink在monitor内emit，回调是否同步需实测；Relay中断在ACK计时前先同步发送。尚无反向锁环证据，不宣称死锁。Servlet/Redis发送队列的网络发送在出队后，Relay关闭的subscription dispose在锁外，这些已有保护须保留。调用方超时后底层SQL/IO是否仍占线程，纳入R38/T38。
+JVM只保留三条关键等待链：WS注册表在monitor内关闭/取消订阅；每topic sink在monitor内emit，回调是否同步需实测；Relay中断在ACK计时前先同步发送。尚无反向锁环证据，不宣称死锁。Servlet/Redis发送队列的网络发送在出队后，Relay关闭的subscription dispose在锁外，这些已有保护须保留。调用方超时后底层SQL/IO是否仍占线程，纳入R18/T18。
 
 证据：[WS注册/取消](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)、[topic emit](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L780)、[Relay同步发送](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1343)、[锁外dispose](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1420)。
 

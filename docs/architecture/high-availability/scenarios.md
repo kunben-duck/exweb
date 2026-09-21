@@ -4,7 +4,7 @@
 
 代码基线 `8f48d6cc084be91bcbaad90be43dac7181636cb4`；核对日期 **2026-09-22**。本轮只改文档。**S**为本仓源码，**U**为用户确认的现状，**E**为需要环境/联合验证，**P**为尚未实施的目标。源码缺口不等于已复现事故；配置值是当前默认值，生产覆盖需另核对。
 
-现状是Web经ALB获取WCM静态资源，API经**ALB → saas gateway（SaaS统一网关）→ ChatService**。ChatService按`skillId`调用一体`agentService`，独立WS调用`relayService`，并可调用`intentService（第三方）`。agentService包含admin技能管理、前端/Chat技能运行查询、统一chat和供Relay使用的MCP；relayService经agentService MCP访问下游DomainAgent（U）。当前服务以Docker运行在ADS，并共享DB和Redis；具体表/键职责、内部路由、鉴权和平台超时为E。图中的ALB是同一路由层的逻辑视图。
+现状是Web经ALB获取WCM静态资源，API经**ALB → saas gateway（SaaS统一网关）→ ChatService**。ChatService按`skillId`调用一体`agentService`，独立WS调用`relayService`，并可调用`intentService（第三方）`。agentService包含admin技能管理、前端/Chat技能运行查询、统一chat、供Relay使用的MCP及文档上传；relayService经agentService MCP访问下游DomainAgent（U）。文档api-store适配器调用agentService上传接口，后者分片上传EDM（U）；该内部链路期限和资源策略仍需E。当前服务以Docker运行在ADS，并共享DB和Redis；具体表/键职责、内部路由、鉴权和平台超时为E。图中的ALB是同一路由层的逻辑视图。
 
 Chat以DB为持久化事实源，Redis承担派生缓存和实时分发；其他服务使用共享Redis的持久语义未核实，不能全库清空。未来三服务拆分及跨AZ/跨Region部署只在[部署方案](deployment.md)表达为P。本页12张图只画当前服务边界，步骤统一为`Sxx-01…`，源码细节集中于表和链接；不再维护代码层时序图。
 
@@ -23,7 +23,7 @@ HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应�
 | [S06 异步](#s06)；29 | 关闭/启用、提前/并发/重复/过期回调、大结果 | 有回调并发/body/标准化上限及事务CAS；挂起规模、回调洪峰和收口资源需测；R01/R07/R09/R18/R19 |
 | [S07 连接恢复](#s07)；06–08、WS | SSE/WS、大量空闲/活跃连接、控制帧洪峰、重复订阅、跨实例、慢消费和集中重连 | 单用户/连接与live有界；缺应用实例/租户总连接及控制/订阅前置校验限额，历史全量物化；R02/R04/R09/R10/R12/R22 |
 | [S08 会话历史](#s08)；09–24 | 分页/搜索/树/版本/path/分支/归档/删除 | 部分页数及事务有界，批删按Session ID排序；全树、集合SQL、删除期限与共享池压力；R05/R09/R18 |
-| [S09 文档](#s09)；37–44 | 上传/登记/附件、local/OBS/API Store、慢下载、取消、孤儿对象 | 默认50MB/60MB、存储并发32；500MiB需求下整读、在途字节、FD/磁盘与全程下载许可缺口；R06 |
+| [S09 文档](#s09)；37–44 | 上传/登记/附件、local/OBS、agentService→EDM分片、慢下游、取消、孤儿文档 | 默认50MB/60MB、存储并发32；500MiB需求下整读、在途字节、FD/磁盘与全程下载许可缺口；R06 |
 | [S10 分享反馈](#s10)；04/05、25–28、30–36 | 快照/投递、候选查询、普通/意图反馈、旧偏好 | 快照/候选/反馈有各自限额；旁路共享DB与外部等待仍可能拖累聊天；R03/R05/R09/R20 |
 | [S11 可选旁路](#s11)；随Run/反馈触发 | 记忆、标题、路由记忆、识别记录分别开/关 | 有开关及部分隔离，候选查询/排队/提交不全在生成许可内；R05/R07/R09 |
 | [S12 后台部署](#s12)；定时、08、平台 | 心跳/Watchdog/缓存、发布/退出、依赖切换、AZ/Region故障 | 有租约/fencing及部分关闭回调；无全量Run排空或可靠Runtime接管；R08/R09/R10/R13/R14/R15/R22 |
@@ -52,7 +52,7 @@ HTTP编号对应[完整入口表](#interfaces)。每组覆盖正常、慢响应�
 | relayService Stop | 临时Stop连接idle60s；活跃连接Stop的ACK等待5s | 5s不含此前同步发送/锁等待，也不是远端全部停止期限；session级迟到Stop、MCP任务残留需联合验证 | [临时控制](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L359)、[活跃中断](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L1380) |
 | 共享DB（openGauss） | Chat每实例Hikari10、借用500ms；准入/事件/终态/回调常用TX10s，心跳2s；删除无显式TX期限 | 借用timeout不限制SQL/行锁/网络读；无统一MyBatis statement期限；驱动/DB限制及所有服务总连接预算E | [配置](../../../src/main/resources/application.yml#L25)、[锁表](#transaction-locks) |
 | Redis | 命令/连接各500ms；发布重试2、退避20ms；每topic事件队列1024条/8MiB | 发布执行器4096是任务队列，非全实例事件/字节上限；重连、listener调度和其他服务键语义E。发布失败不回滚DB | [配置](../../../src/main/resources/application.yml#L60)、[配置](../../../src/main/resources/application.yml#L292)、[发布队列](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L653) |
-| API Store上传 | 先readAllBytes，再HTTP等待30s；存储操作许可32 | 无应用重试；30s不含整文件读取。远端成功/登记失败可能留孤儿；有效文件大小与在途字节需联合限制 | [整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206)、[HTTP](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L95) |
+| Chat→agentService文档上传（api-store） | Chat先整文件读入，再HTTP等待30s；存储操作许可32 | Chat无应用重试；30s不含入口接收/整读。agent→EDM分片为U，分片/合并/重试/取消及期限E；超时不证明远端停止。当前不支持经Chat下载或EDM远端状态查询 | [整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206)、[HTTP](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L95) |
 | OBS / local文档 | 仅huawei-s3/OBS：connect10s、socket30s、连接200；入口默认单文件50MB/请求60MB | SDK重试及完整总期限E；不把SDK设置套到local。下载许可在取得流后归还，不覆盖慢客户端全部传输 | [配置](../../../src/main/resources/application.yml#L19)、[配置](../../../src/main/resources/application.yml#L389)、[下载](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L192) |
 | WeLink / 标题等旁路 | WeLink默认关闭，启用后单次HTTP5s、首次+3次失败重试无退避、并发20；标题默认关闭、生成并发8、提交TX2s，生成期限须配置且≤30s | WeLink鉴权与结果登记另计，当前循环可重复失败投递，须加固UNKNOWN处理及总预算；标题生成期限涵盖鉴权与HTTP，无应用重试，候选/排队/提交另计 | [WeLink](../../../src/main/java/com/huawei/it/ex/one/infrastructure/share/WelinkChatShareDeliveryProvider.java#L62)、[标题](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/SessionTitleApplicationService.java#L110) |
 | 前端WS（当前Servlet） | 每用户每JVM8连接、每连接8订阅、每topic本机128；入站16KiB；发送队列256条/2MiB、发送线程4/16；idle10m、60s扫描 | 发送配置10s、decorator缓冲512KiB不证明底层及时中断；队列溢出/发送执行器拒绝关闭连接。无应用实例/租户总连接及控制帧速率上限；ALB/网关配额与前端重连策略E | [配置](../../../src/main/resources/application.yml#L300)、[发送](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L147)、[执行器](../../../src/main/java/com/huawei/it/ex/one/application/config/ChatServletWebSocketSendExecutorConfiguration.java#L29) |
@@ -425,7 +425,7 @@ actor WEB as 前端
 <a id="s09"></a>
 ### S09 文档与附件
 
-覆盖local、OBS、API Store上传/登记、状态、预览/下载、附件引用、软删和孤儿对象。用户500MiB文件需求与源码默认50MB/60MB需分开验收。
+覆盖local、OBS、经agentService上传EDM、文档登记/本地状态、附件引用、软删和孤儿对象。`api-store`是Chat侧适配器及配置名称，实际上传接口属于当前唯一agentService；其内部向EDM分片上传为U，分片大小、并发、期限、重试和取消为E。现行合同不传skillId时仍可由agentService上传S3，不将该兼容分支改写为EDM。用户500MiB目标与源码默认50MB/60MB需分开验收。
 
 ```mermaid
 sequenceDiagram
@@ -434,7 +434,9 @@ actor WEB as 前端
     participant GW as saas gateway（SaaS统一网关）
     participant CHAT as ChatService
     participant DISK as 临时盘/本地存储
-    participant STORE as OBS/API Store
+    participant AGENT as agentService
+    participant EDM as EDM文档服务
+    participant STORE as 对象存储（OBS/S3）
     participant DB as 共享DB（openGauss）
     WEB->>ALB: S09-01 上传文件或请求下载
     ALB->>GW: S09-02 入口体积/上传期限E
@@ -443,27 +445,50 @@ actor WEB as 前端
         CHAT->>DISK: S09-04 接收/临时落盘；入口默认50MB/60MB
         alt local provider
             CHAT->>DISK: S09-05 写入本地存储
-        else OBS或API Store
-            CHAT->>STORE: S09-06 API Store先整读再HTTP30s；OBS connect10s/socket30s
-            STORE-->>CHAT: S09-07 返回存储标识；SDK重试/完整总期限E
+        else huawei-s3 provider
+            CHAT->>STORE: S09-06 流式上传；connect10s/socket30s，总期限及重试E
+            STORE-->>CHAT: S09-07 返回存储标识
+        else api-store适配器
+            CHAT->>AGENT: S09-08 经ALB上传完整multipart；整读后HTTP30s，无应用重试
+            alt skillId指向EDM
+                AGENT->>EDM: S09-09 分片上传（U）；并发、合并、期限与重试E
+                EDM-->>AGENT: S09-10 文档标识或失败；取消及未知结果查询E
+            else 未传skillId的兼容合同
+                AGENT->>STORE: S09-11 上传S3；内部期限与重试E
+                STORE-->>AGENT: S09-12 返回URL或失败
+            end
+            AGENT-->>CHAT: S09-13 docId或URL，或错误/响应未知
+            Note over CHAT,EDM: agentService分片不消除Chat整文件内存；<br/>Chat超时不证明EDM任务已停止
         end
-        CHAT->>DB: S09-08 登记文档，供后续附件引用
+        opt 上传返回有效标识
+            CHAT->>DB: S09-14 登记文档及可信下游属性，供附件引用
+        end
     else 下载/预览
-        CHAT->>DB: S09-09 读取文档及存储信息
-        CHAT->>STORE: S09-10 取得内容流；local改读本地存储
-        CHAT-->>WEB: S09-11 经网关/ALB持续传输；当前许可未覆盖完整流
+        CHAT->>DB: S09-15 读取文档及存储信息
+        alt local或huawei-s3支持内容下载
+            alt local
+                CHAT->>DISK: S09-16 读取本地内容流
+            else huawei-s3
+                CHAT->>STORE: S09-17 取得OBS内容流
+            end
+            CHAT-->>WEB: S09-18 经入口持续传输；许可未覆盖完整流
+        else api-store托管内容
+            CHAT-->>WEB: S09-19 拒绝经Chat内容下载；当前无EDM远端状态查询
+        end
     end
     alt 成功或客户端正常关闭
-        CHAT->>CHAT: S09-12 关闭流、归还资源；记录状态
-    else 存储慢、客户端取消、磁盘满或登记失败
-        CHAT-->>WEB: S09-13 错误响应；核对在途资源和孤儿对象后再重试
-        Note over CHAT,STORE: API Store无应用重试；<br/>500MiB整读叠加并发可推高堆/GC，慢下载可积累FD/连接
+        CHAT->>CHAT: S09-20 关闭本地流并清理临时资源
+    else EDM或存储慢、取消、磁盘满或登记失败
+        CHAT-->>WEB: S09-21 错误或超时响应；远端结果可能未知
+        Note over CHAT,EDM: 堆、临时盘与分片积压可能拖累Chat及agent其他模块；<br/>EDM成功但登记失败、取消残留需联合对账
     end
 ```
 
-稳定性关注：R06。默认32个存储许可不是在途字节上限；32×500MiB仅原始数组即15.625GiB，不能把该估算当已复现OOM。
+稳定性关注：[R06](risks.md#r06)，agentService共进程传播关联[R16](risks.md#r16)。默认32个存储许可不是在途字节上限；32×500MiB仅原始数组即15.625GiB，不能把该估算当已复现OOM。Chat的30s不覆盖入口接收和整读；agent→EDM各阶段策略必须另取证。
 
-源码：[上传](../../../src/main/java/com/huawei/it/ex/one/application/service/document/DocumentApplicationService.java#L74)、[API Store整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206)、[下载流](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L192)、[配置](../../../src/main/resources/application.yml#L389)。
+**目标P**：按[W06](risks.md#w06)，前端经agentService取得受限授权后直接向EDM分片上传，文件正文不进入Chat/agent进程；agentService核验EDM结果并管理元数据，Chat只引用。直传能力、浏览器网络/入口、续传及清理合同未确认前不放开500MiB。独立worker仅作为已验证的过渡路径，不自动回退到Chat整读；当前图不表示目标已实现。
+
+源码：[上传](../../../src/main/java/com/huawei/it/ex/one/application/service/document/DocumentApplicationService.java#L74)、[api-store整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206)、[托管内容能力](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L169)、[下载边界](../../../src/main/java/com/huawei/it/ex/one/application/service/document/DocumentApplicationService.java#L169)、[配置](../../../src/main/resources/application.yml#L389)。
 
 <a id="s10"></a>
 ### S10 分享、投递与反馈
@@ -597,7 +622,7 @@ participant ADS
 | DB连接、事务和行锁 | 每Chat实例池10、借用500ms；部分事务2s/10s | 提交/回滚后归还，提交后回调仍可能延长调用占用；SQL/锁/驱动总期限及所有服务预算E | [配置](../../../src/main/resources/application.yml#L25)、[锁表](#transaction-locks) |
 | Redis发布/接收、WS/Resume | 每topic发布1024条/8MiB，Servlet默认WS输出256条/2MiB；接收执行器未显式有界 | topic和订阅需解除；恢复历史仍全量，局部队列上限不是全实例内存上限；FULL/no-store补偿不同 | [Redis生命周期](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L86)、[恢复](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java#L298) |
 | 前端WS连接及控制任务（Servlet默认） | 单用户本机8连接/连接8订阅，发送任务最多16（发送虚拟线程默认关闭）；控制帧16KiB | 关闭释放队列/订阅；实例总连接、累计字节和控制帧速率未有应用总预算。Servlet每帧独立异步处理，8订阅上限不限制校验前的DB排队；两栈长度与发送差异见[R22](risks.md#r22) | [注册](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)、[控制处理](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L100)、[订阅校验](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java#L182) |
-| 文件、临时盘、存储连接/FD | 默认入口50MB/60MB，存储操作32；API Store整读 | 下载许可不覆盖完整流；500MiB要求在途字节和临时盘预算；取消须关流、对账孤儿 | [文档流](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L192)、[整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206) |
+| 文件、临时盘、存储连接/FD | 默认入口50MB/60MB，存储操作32；Chat转发agentService前整读，后者分片上传EDM | 下载许可不覆盖完整流；500MiB要求在途字节和临时盘预算；取消须关流、对账孤儿 | [文档流](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L192)、[整读](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L206) |
 | 异步挂起与回调 | 挂起撤销owner/fence；回调并发4和body/标准化上限 | 挂起总量、过期扫描和恢复后回调峰值需测；终态与旧owner拒写保持 | [挂起](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/DomainAgentAsyncTaskApplicationService.java#L60)、[回调准入](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/DomainAgentAsyncTaskCallbackAdmissionFilter.java#L85) |
 | 旁路、后台及容器生命周期 | 部分独立执行器/开关；调度器及Redis listener有关闭逻辑 | 无证据证明所有任务都在统一期限退出；本机Run registry无统一PreDestroy排空 | [调度关闭](../../../src/main/java/com/huawei/it/ex/one/application/config/OperationalSchedulingConfig.java#L37)、[listener关闭](../../../src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java#L126) |
 

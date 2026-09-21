@@ -2,7 +2,7 @@
 
 源码基线：`8f48d6cc084be91bcbaad90be43dac7181636cb4`；日期：2026-09-22。本文收敛为22项高影响运行风险的测试规格，全部为 **NOT_RUN**，不表示整改或演练已完成。当前检查结果与待验证边界见[验证证据](evidence.md)。唯一风险/工作包/责任追踪表见[风险登记](risks.md#risk-register)，本文不再复制一套矩阵。
 
-当前ChatService、relayService、agentService共用共享DB（openGauss）和Redis；agentService同时承载管理、技能查询、统一chat与MCP。两条执行链分别为`ChatService→agentService统一chat→DomainAgent`和`ChatService→relayService→agentService MCP→下游`；intentService（第三方）独立。adminService/toolService/agentService拆分、文件worker及跨AZ/Region目标未落地前，不能当成已有隔离能力。
+当前ChatService、relayService、agentService共用共享DB（openGauss）和Redis；agentService同时承载管理、技能查询、统一chat、MCP和文档上传；api-store实际调用agentService，由其分片上传EDM（U），该内部策略仍待联合验证。两条执行链分别为`ChatService→agentService统一chat→DomainAgent`和`ChatService→relayService→agentService MCP→下游`；intentService（第三方）独立。adminService/toolService/agentService拆分、文件worker及跨AZ/Region目标未落地前，不能当成已有隔离能力。
 
 ## 1. 公共执行合同
 
@@ -72,12 +72,13 @@ FULL仅承诺实际恢复点内已持久化数据的补读；no-store不新增�
 - **验收/证据**：查询规模、CPU/堆、排队龄、SQL和连接等待受限，许可覆盖实际完整工作；超时后迟到JDBC不继续无界堆积，辅助失败不拖垮Stop/heartbeat。撤屏障、停突发后确认任务/队列回落，保存SQL计划/行数、线程池、租户map及分配趋势。
 
 <a id="t06"></a>
-### T06 — 500MiB文件、慢存储与生命周期（R06；L1→L3；RB07 / D06）
+### T06 — 500MiB EDM直传、转发与文件生命周期（R06；L1→L3，EDM/入口联合L4；RB07 / D06）
 
-- **配置/负载**：记录4C4G或实际规格、堆/direct、临时卷、multipart、ALB与provider限制；当前文件50MB/请求60MB及应用50MiB先测拒绝。W06实现后才测1/10/50/500MiB及上限+1字节，先1并发再按字节预算增至4/8；不得直接运行32×500MiB。API Store整份byte[]与对象存储SDK分开验收。
-- **注入**：无可信Content-Length、慢上传/下载16KiB/s持续60秒再取消；临时复制/SDK上传延迟、存储成功后DB登记失败、下载取流后暂停30秒、退出实例分别测；专用临时卷只填到安全停止线。
-- **验收/证据**：接收前准入和在途字节、盘、FD、连接有界；下载许可覆盖流生命周期，超时/取消真实复制/SDK任务在`D_release`结束。API Store HTTP30s从整文件读取后开始，对象存储连接10s/socket30s不是完整传输总期限，SDK重试需另核验。500MiB支持须完整传输及慢流取消均通过。
-- **目标路径/清理**：对象存储直传验证文件字节不经过Chat/技能查询进程，完成通知丢失不触发整文件重传；EDM独立worker验证队列字节/年龄与退出恢复。灰度回退不得把500MiB导回旧`readAllBytes()`路径。按对象与DB引用核对后清理未完成分片/无引用对象，不清有效对象；保存每阶段字节/资源/任务时间线。
+- **前置/预算**：状态NOT_RUN。按EDM真实测试环境签认浏览器入口/授权、分片大小与并发、每上传/租户/实例在途字节、总期限、总尝试数及取消清理合同；初始化/续传/合并/完成查询/清理能力缺失的子项BLOCKED。记录实际JDK、4C4G或真实规格、堆/direct/native、临时卷是否tmpfs及页缓存，不能只看堆或把Chat默认32许可视为500MiB安全并发。
+- **路径/规模**：当前Chat→agentService→EDM转发、目标浏览器→EDM直传、经验证的独立worker及local/OBS/S3兼容路径分别测。当前50MB/请求60MB及应用50MiB先测拒绝；W06完成后才测1/10/50/500MiB及上限+1字节，先1并发再在签认字节/EDM配额内递增4/8，未达安全前置不得升档。记录原转发Chat整读和两层临时文件，以及agent分片资源；生产峰值需实测，不直接执行32×500MiB。
+- **故障注入**：慢分片16KiB/s持续60秒后取消，断网30秒后按合同续传；分别注入授权过期、分片丢响应/429/5xx/黑洞、合并或完成响应丢失、重复完成、EDM成功但DB登记失败及agent重启。单项解除并稳定后再叠加故障；临时卷仅填到停止线。现有local/OBS另测下载取流后暂停30秒，不把api-store本地状态当EDM远端查询。
+- **验收/证据**：目标文件正文不经Chat/agent进程，不产生与文件大小成比例的服务端内容数组/临时副本；浏览器和EDM分片资源、agent控制请求/核验/DB预算均有界。保留现有docId、技能授权和可信附件身份；完成未知先查询、不重复合并/登记、不盲重传整文件，只按EDM合同对可安全重试分片执行有界退避。Chat及agent技能查询、chat/MCP、Stop观察流达标；失败边界能区分Chat整读、agent转发、EDM分片/合并和登记。
+- **期限/清理**：local/OBS下载许可须持有至响应发送关闭/取消/失败，慢下载在途并发受限，不能取得流后立即归还；原Chat HTTP30s从整读后开始，无应用重试；agent→EDM实际重试与取消需独立取证。验证客户端取消、授权到期、超时和实例退出后，流/连接/许可与EDM未完成分片在签认期限收口；状态无法确认时保留可查询标识并受限对账，不伪装已清理。撤注入后按公共阶梯恢复并观察至少10分钟，保存每跳调用量、实际资源曲线、分片/文档/登记时间线；只清本次无有效引用的对象。直传回滚不得将500MiB导回Chat整读路径。
 
 <a id="t07"></a>
 ### T07 — CPU、JSON、日志与JVM压力（R07；L1→L3；RB02 / D01）
@@ -147,8 +148,8 @@ FULL仅承诺实际恢复点内已持久化数据的补读；no-store不新增�
 <a id="t16"></a>
 ### T16 — 一体agentService与技能配置依赖（R16；L3→L4；RB05、RB11 / D09）
 
-- **配置/负载**：四模块真实CPU/堆/线程/HTTP/JDBC池和限额入册，管理、技能miss、统一chat、Relay MCP各1/4/8并发轮流增压；两条链同时保留观察流。
-- **注入**：worker阻塞30秒、慢HTTP/SQL/Redis与429各60秒，终止一个agentService实例；单故障通过后组合技能回源＋MCP突发。技能HTTP默认2s无自动重试、缓存10m；验证缓存失败回源且2s不覆盖缓存/排队。
+- **配置/负载**：管理、技能查询、统一chat、MCP和文档上传五模块真实CPU/堆/线程/HTTP/JDBC池及限额入册；前四模块各1/4/8并发轮流增压，文档按T06安全字节/分片预算施压，两条执行链保留观察流。
+- **注入**：worker阻塞30秒、慢HTTP/SQL/Redis与429各60秒，终止一个agentService实例；单故障通过后组合技能回源＋MCP突发，并联合T06注入EDM慢分片/合并及取消残留；目标直传另压agent授权/核验/登记。技能HTTP默认2s无自动重试、缓存10m；验证缓存失败回源且2s不覆盖缓存/排队。
 - **验收/证据**：单模块不耗尽其余模块/三服务资源；留存策略启用时配置不可用阻断执行，仅附件检查失败开放按当前合同区分，不能把关键查询统一降级。记录映射/缓存变化引发的错误调用或重试负载，未知结果不重放。拆分后按相同总配额与逻辑负载复测，不能将增容效果算作拆分收益。
 - **清理**：恢复实例、映射和屏障后，先配置/治理再chat/MCP、最后管理旁路；保存模块×资源×受影响链路、远端任务和定位证据。
 

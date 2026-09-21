@@ -6,10 +6,10 @@
 
 | 标记 | 含义 | 本次内容 |
 |---|---|---|
-| U | 用户确认的架构事实 | WCM静态资源；ALB提供路由文根；saas gateway（SaaS统一网关）和业务服务运行于ADS Docker；当前ChatService、relayService、agentService共享数据库和Redis；intentService独立第三方 |
+| U | 用户确认的架构事实 | WCM静态资源；ALB提供路由文根；saas gateway（SaaS统一网关）和业务服务运行于ADS Docker；当前ChatService、relayService、agentService共享数据库和Redis；intentService独立第三方；api-store是agentService文档上传接口，其内部向EDM分片上传 |
 | S | 本仓源码确认 | Chat通过统一HTTP地址和skillId执行逻辑DomainAgent请求；独立WS连接Relay；通过独立配置URL查询技能属性；默认不支持可靠Runtime接管 |
-| P | 待实施目标 | agentService拆分为adminService、toolService、agentService；文档管理迁移；跨AZ、跨Region主备、各Region独立ALB与ADS运行/控制面、静态备用源和区域执行屏障 |
-| E | 待平台/联合验证 | 生效URL、文根、ADS资源、外部服务内部实现、MCP协议与取消、共享数据用途、复制及真实容灾能力 |
+| P | 待实施目标 | agentService拆分为adminService、toolService、agentService；文档管理迁移、前端经agentService授权直传EDM；跨AZ、跨Region主备、各Region独立ALB与ADS运行/控制面、静态备用源和区域执行屏障 |
+| E | 待平台/联合验证 | 生效URL、文根、ADS资源、外部服务内部实现、MCP协议与取消、EDM直传/授权/分片/完成查询/清理及入口、共享数据用途、复制及真实容灾能力 |
 
 当前采用一体agentService架构。后文“参与服务”按阶段计算：当前是ChatService、relayService、agentService；拆分后是ChatService、relayService、adminService、toolService、agentService，文档转发worker计入对应服务实例预算。拆分后数据库和Redis第一阶段继续共享。
 
@@ -20,6 +20,7 @@ U不等于生产验收；不假定ADS等同Kubernetes、ALB等同某公有云产
 | ChatService → agentService → DomainAgent | [ConfiguredDomainAgentClient.query](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java#L65)向配置地址发起流式HTTP；[请求映射](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/DomainAgentChatRequestMapper.java#L53)传可信skillId。物理中转为agentService（U），Java类名不代表绕过中转 |
 | ChatService → relayService → agentService MCP | [Relay连接](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L234)及[端点](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java#L952)确认Chat独立WS；后续MCP调用为U，具体协议、重试及资源释放为E |
 | 技能查询 | [配置Provider](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L60)查询skillName/isSaveSession/attachmentType；用户确认归agentService。实际配置URL需联调核对，不能等同执行mapping查询或宣称Chat直接查管理表 |
+| ChatService → agentService → EDM | [api-store适配器](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L67)先整读再上传multipart，HTTP默认30s且无应用重试（S）；接口归agentService且内部EDM分片为U，分片并发/重试/合并及取消为E。未传skillId的S3分支按现有合同保留 |
 | 接管边界 | [UnsupportedAgentRuntimeRecoveryPort](../../../src/main/java/com/huawei/it/ex/one/infrastructure/runtime/UnsupportedAgentRuntimeRecoveryPort.java#L21)不支持可靠Runtime接管；历史恢复不等于重跑外部执行 |
 | 生效配置 | [application.yml](../../../src/main/resources/application.yml)只是配置入口；默认连接数、超时不能当作生产安全容量 |
 
@@ -33,22 +34,23 @@ U不等于生产验收；不假定ADS等同Kubernetes、ALB等同某公有云产
 <a id="dep01-current"></a>
 ### 当前逻辑架构（U/S）
 
-ALB入口文根与内部文根是同一区域路由层的逻辑视图。下图只有一个agentService物理服务，其管理、技能查询、chat和MCP是内部能力；内部线程池、队列和连接是否隔离均需E。前端技能查询属于完整架构，不能计入ChatService的HTTP接口数量。
+ALB入口文根与内部文根是同一区域路由层的逻辑视图。下图只有一个agentService物理服务，其管理、技能查询、chat、MCP和文档上传是内部能力；内部线程池、队列和连接是否隔离均需E。前端技能查询属于完整架构，不能计入ChatService的HTTP接口数量。
 
 ```mermaid
 flowchart LR
     web["DEP01-CN01 Web"] --> edge["DEP01-CN02 ALB"]
     edge -->|静态资源| wcm["DEP01-CN03 WCM"]
     edge -->|业务文根| gateway["DEP01-CN06 saas gateway<br/>（SaaS统一网关）"]
-    gateway -->|聊天与前端WS| chat["DEP01-CN07 ChatService"]
+    gateway -->|聊天、前端WS和文档| chat["DEP01-CN07 ChatService"]
     gateway -->|技能查询和管理入口| agent["DEP01-CN09 agentService"]
-    chat -->|chat原始chunk空闲300s 总15m<br/>chat和技能无应用重试 技能HTTP 2s| internal["DEP01-CN08 ALB内部文根"]
-    chat -->|WS连接5s 握手各10s<br/>Run 30m 无应用重试| internal
-    internal -->|chat和技能查询| agent
+    chat -->|chat空闲300s 总15m；技能2s<br/>WS连接5s 握手各10s Run30m<br/>文档整读后HTTP30s；均无应用重试| internal["DEP01-CN08 ALB内部文根"]
+    internal -->|chat、技能查询和文档上传| agent
     internal -->|WS| relay["DEP01-CN10 relayService"]
     relay -->|MCP 期限重试待联合确认| internal
     internal -->|MCP服务| agent
     agent -->|统一chat或MCP转发<br/>期限重试待联合确认| domain["DEP01-CN12 DomainAgent"]
+    agent -->|EDM分片上传 U<br/>期限、重试及取消E| edm["DEP01-CN16 EDM文档服务"]
+    agent -.->|未传skillId的兼容合同| objects["DEP01-CN17 S3对象存储"]
     chat -->|默认关闭 启用流式时每次120s<br/>首次加3次重试 无退避| intent["DEP01-CN13 intentService（第三方）"]
     chat --> db["DEP01-CN14 共享DB（openGauss）"]
     agent --> db
@@ -60,12 +62,12 @@ flowchart LR
 
 以上期限是Chat调用侧仓库默认值，计时范围见[依赖策略](scenarios.md#wait-budgets)。原始chunk空闲不是首有效事件期限；Intent 120s不覆盖全部重试或前置鉴权，故障耗尽默认转Relay、也可配置失败。外部内部链路期限不能由Chat默认值反推。
 
-agentService同时服务管理操作、前端技能列表、Chat运行查询、统一chat和Relay MCP工具。**Chat的两条执行路线在agentService重新汇合**：其进程/资源或共享依赖故障可能同时影响两路；不能把切到Relay当作无条件的故障隔离。MCP扇出、取消传递及第三方任务查询由联合契约验证。
+agentService同时服务管理操作、前端技能列表、Chat运行查询、统一chat、Relay MCP工具和文档上传；EDM慢/分片积压也可能占用同一agent进程资源。**Chat的两条执行路线在agentService重新汇合**：其进程/资源或共享依赖故障可能同时影响两路；不能把切到Relay当作无条件的故障隔离。MCP扇出、取消传递及第三方任务查询由联合契约验证。
 
 <a id="dep01-target"></a>
 ### 三服务拆分及文档归属目标（P）
 
-保留旧DEP01-N编号作为目标节点；目标不是现有能力。adminService发布可追溯配置版本，toolService和agentService加载已发布配置，不让每次执行同步依赖后台管理可用性。
+DEP01-N编号标识目标节点；目标不是现有能力。adminService发布可追溯配置版本，toolService和agentService加载已发布配置，不让每次执行同步依赖后台管理可用性。
 
 ```mermaid
 flowchart LR
@@ -75,7 +77,7 @@ flowchart LR
     staticOrigin --> staticObjects["DEP01-N05 静态对象存储"]
     edge --> gateway["DEP01-N06 saas gateway<br/>（SaaS统一网关）"]
     gateway --> chat["DEP01-N07 ChatService"]
-    gateway -->|查询和文档管理| agent["DEP01-N16 agentService"]
+    gateway -->|技能查询、上传授权及完成登记| agent["DEP01-N16 agentService"]
     gateway -->|管理入口| admin["DEP01-N11 adminService"]
     chat -->|chat及查询HTTP 或Relay WS| internal["DEP01-N08 ALB内部文根"]
     internal -->|统一chat| tool["DEP01-N09 toolService"]
@@ -97,21 +99,22 @@ flowchart LR
     relay --> redis
     admin --> redis
     agent --> redis
-    web -->|短期授权后分片直传| objects["DEP01-N18 文档对象存储"]
-    agent -->|完成校验与对账| objects
-    agent -.->|需转发的EDM任务| worker["DEP01-N17 文档转发worker"]
-    worker --> edm["DEP01-N19 API Store或EDM"]
+    agent -.->|经入口返回受限上传授权| web
+    web -->|获授权后分片直传<br/>浏览器至EDM入口待验| edm["DEP01-N19 EDM文档服务"]
+    agent -->|授权协调、完成核验与对账<br/>目标协议及期限待联合确认| edm
+    agent -.->|仅已验过渡任务 非自动回退| worker["DEP01-N17 独立文档转发worker"]
+    worker -.->|有界流式转发| edm
 ```
 
-业务HTTP/WS的实际文根和管理鉴权需平台确认，图不新建公网管理入口。文档对象存储直传走授权的对象入口，其是否需专用ALB文根/企业出口为E；文件数据不得绕回Chat或技能查询进程。worker归属agentService文档能力，但采用独立进程/实例组和资源配额，不增加第四个业务服务职责；其数据库/Redis连接同样计入预算。
+业务HTTP/WS的实际文根和管理鉴权需平台确认，图不新建公网管理入口。目标EDM直传走获授权的EDM入口，ALB文根/企业出口、浏览器可达性、CORS及认证能力需联合验证；图不假设公开EDM或绕过入口鉴权。文件正文不进入ChatService/agentService，agentService只处理有限控制请求和元数据。worker归属agentService文档能力，仅作经验证的独立进程/实例组过渡路径，其连接和字节仍计入预算；直传失败不自动回流500MiB到Chat。现有local/OBS与无skillId的S3兼容合同保留，WCM静态对象存储不受EDM业务上传调整影响。
 
 | 节点或链路 | 故障传播与闭环 |
 |---|---|
-| CN09当前一体服务 | 管理/查询洪峰耗尽CPU、堆、线程或DB连接，chat与MCP同时受影响；R16 → W11 → T16 → RB11/D09 |
+| CN09当前一体服务 | 管理/查询/文档上传洪峰耗尽CPU、堆、线程或DB连接，chat与MCP同时受影响；R16 → W11 → T16 → RB11/D09 |
 | CN10→CN09→CN12 | 扇出与分层重试放大，超时后工具继续执行；R17 → W05/W11 → T17 → RB05/D04 |
 | CN14/CN15、目标N14/N15 | 任一服务耗尽共享资源，影响其他服务及Stop/心跳；R09/R10 → W11 → T09/T10 → RB11/D09 |
 | CN09配置、目标N09/N11/N16 | 映射/留存配置过期或版本不一致；R16 → W05/W11 → T16 |
-| N17/N18/N19 | 500MiB传输、元数据登记与对象结果分离；R06 → W06 → T06 → RB07/D06 |
+| CN09/CN16、N16/N17/N19 | 当前EDM分片等待回传agent；目标500MiB直传与控制链隔离、EDM结果与登记分离；R06 → W06 → T06 → RB07/D06 |
 | CN02/CN08、N02/N08 | 路由、鉴权头、流缓冲、期限和重试错误跨服务传播；R12 → W12 → T12 |
 | N03–N05 | 静态源故障；R11 → W12 → T11 → RB12/D10 |
 | CN12/CN13/CN10及目标对应节点 | DomainAgent、intentService、relayService不可用、断流与等待放大；R19/R20/R21 → W05/W07 → T19/T20/T21 → RB05/D04。切区不能修复共同第三方故障 |
@@ -127,6 +130,7 @@ flowchart LR
 | 前端WS | ALB → saas gateway（SaaS统一网关） → Chat；实例/租户连接、握手与控制消息速率、Upgrade/心跳/idle/摘流及重连预算分别登记；实际入口限制E | R22/T22：大量空闲/活跃连接、慢消费、跨实例配额与集中重连；W12入口配额同W03在第一轮联调，不能只依赖应用单用户8连接 |
 | ChatService → 执行接口 | 当前内部文根 → agentService → DomainAgent；目标为toolService；逐跳分配总期限 | skillId/请求标识透传、流式背压、取消路由、未知执行结果查询；各跳重试次数合并计入预算 |
 | ChatService → relayService | 内部WS文根 → Relay；不能轮流把同一运行会话发给不持有状态的副本 | 会话归属、重连/Stop同目标、专家跨Run会话及迟到Stop；粘性路由本身不证明故障接管 |
+| 文档上传与EDM直传 | 当前Chat经内部ALB→agentService文档接口→EDM；目标前端经agentService授权后分片直传EDM，完成通知回agentService | 当前Chat整读后HTTP30s；EDM分片/合并、逐跳重试及取消E；目标授权、大小/并发/字节预算、浏览器入口、结果查询和清理须T06联合验证 |
 | 管理文根 | 当前agentService管理模块，目标adminService；经既有鉴权边界，权限和内部暴露范围保持 | 配置发布一致性、作业单执行权、页面配置缺失的降级边界；不自行新增公网管理入口 |
 | 前端及运行时技能查询 | 当前与目标均为agentService；独立配置URL需核对，不与统一chat或执行mapping混淆 | 留存和附件策略的现有失败语义；撤销或权限类配置不得无限沿用旧缓存 |
 | relayService → MCP | 当前内部文根 → agentService MCP → 下游；目标为toolService MCP | 明确MCP传输、会话、工具次数/并发/总期限、429/重试归属、取消传播及远端结果查询，不按普通短HTTP推断 |
@@ -180,11 +184,11 @@ N04/N06表示每项服务都有跨AZ副本，不是把参与服务装进一个�
 | 阶段/服务 | 数据和能力职责 | 必须隔离的预算及故障边界 |
 |---|---|---|
 | 当前ChatService（S/U） | 会话、Run、事件、Binding、Interaction、当前文档及相关业务事实；Redis缓存和广播 | 主Run、恢复、历史、文档、Stop/心跳分别度量等待、占用与释放 |
-| 当前agentService（U，内部实现E） | 管理配置、技能查询、统一chat、MCP共进程；各模块表/缓存/队列用途需负责人登记 | 管理批任务和前端查询不得吃满执行资源；chat与MCP按调用方/下游设预算，并有实例总上限 |
+| 当前agentService（U，内部实现E） | 管理配置、技能查询、统一chat、MCP和文档上传共进程；各模块表/缓存/队列用途需负责人登记 | 管理批任务、前端查询及EDM上传分片不得吃满执行资源；chat与MCP按调用方/下游设预算，并有实例总上限 |
 | 当前relayService（U，内部实现E） | 会话、工具执行与任务状态；具体持久化和锁用途需取证 | 每Run工具并发/总调用次数、连接、重试与取消；不能只用Chat请求数估算MCP负载 |
 | 目标adminService（P） | 管理写入和版本化发布，后台作业单执行权 | 独立账号/实例/任务与DDL预算；运行时不逐请求访问管理服务 |
 | 目标toolService（P） | 已发布skill映射、chat/MCP转发与执行对账 | chat与MCP分别隔离，并共享提供方总配额；不同技能的慢依赖不能耗尽全部执行资源 |
-| 目标agentService（P） | 技能展示、关键策略查询、文档授权/状态/元数据及可信引用 | 展示、策略、文档分别设资源配额；关键留存策略不能无限使用旧配置降级；文件worker独立进程 |
+| 目标agentService（P） | 技能展示、关键策略查询、EDM上传授权/完成核验/状态协调/元数据及可信引用 | 展示、策略、文档分别设资源配额；关键留存策略不能无限使用旧配置降级；EDM正文直传，过渡worker独立进程且不得自动兜底 |
 
 数据库预算按参与服务**最大计划副本、worker及发布重叠副本**计算：所有连接池上限之和 + 运维/治理保留 + 其他客户端预算 ≤ 已验证的数据库安全额度。还需验证CPU、IO、锁等待、长事务和磁盘增长；满足连接数不等于满足容量。独立账号、表归属和查询限额不形成物理隔离。共享实例仍不可接受时另立资源拆分任务，本阶段不默认迁移双库。
 
@@ -195,11 +199,11 @@ Redis逐用途登记owner、key/topic、ACL、数据量/TTL、连接/命令速�
 <a id="service-split"></a>
 ### 拆分实施与文档迁移（P）
 
-1. 先在一体agentService内建立模块指标与资源预算，记录管理/查询对chat/MCP的影响；这是拆分收益的对照基线。
+1. 先在一体agentService内建立模块指标与资源预算，记录管理/查询/EDM上传对chat/MCP的影响；这是拆分收益的对照基线。
 2. 为管理发布建立版本化快照及激活/撤回流程，再拆adminService；toolService和agentService只加载已发布配置，记录实际使用版本。保留配置新鲜度和撤销边界，不将缓存当永远有效。
 3. 将统一chat和MCP迁入toolService，先保留原路径、skillId、错误/流格式及回调合同，经ALB受控切换。运行中的会话、工具调用、取消与回调仍归原执行目标，未收口任务不得因映射变化改投另一Agent。
 4. agentService保留技能查询，文档管理分批迁入：维持documentId、归属权限、历史附件、可信provider引用和软删除语义；先兼容旧接口及数据读取，再转移元数据写入权。同一文档不能由新旧管理路径并行修改；存量对象不因控制面迁移重新上传。
-5. 对象存储上传由短期授权、分片传输、完成校验和幂等登记组成。签名/合并/登记属于待建设协议，不把前端完成通知视为可信事实；长期凭据不下发。skillId→EDM路径若不支持对象引用导入，沿现有契约由隔离worker流式转发，不能直接换成S3文档身份。
+5. EDM直传由agentService协调受限授权，前端直接传分片；完成后agentService核验EDM文档、大小/校验和与技能授权并幂等登记，Chat仅读取/引用。授权、断点续传、合并/完成查询和清理都是待联合确认或建设的协议，不把前端通知当可信事实，不下发长期凭据；保留EDM docId及现有技能授权和附件身份。EDM能力未满足时不放行500MiB；仅允许事先验证的独立worker过渡，不自动退回Chat整读或替换成普通S3身份。
 6. 同负载复验故障隔离、资源回落和业务正确性；撤销灰度只对新流量生效，在途任务继续受原归属约束。共享DB/Redis造成的共同故障仍单独验证。
 
 完整措施、参数作用域和双方SLA/故障定位契约统一见[W11](risks.md#w11)，文档资源生命周期见[W06](risks.md#w06)。本页描述目标职责，不表示这些隔离或协议当前已具备。
@@ -340,7 +344,7 @@ sequenceDiagram
     end
 ```
 
-05–06若发现复制损失超出事先批准的RPO边界，保持接管门槛关闭并升级；不能由“备用已启动”推导数据可接受。分别核对DB与业务附件对象的实际恢复点、引用和权限：DB已有引用但对象未复制也属于缺口，不能用静态发布包哈希通过来替代。无法核对或超批准损失范围时停止相关接管；已明确接受的缺失对象仍须列清单、隔离对应功能并报告受限恢复，不计为全功能恢复。08前确认Relay会话、chat/MCP执行及管理作业的接管策略；现有进程可预启动但不能提前执行业务。09包括映射、带附件的新Run、Stop、FULL补读及文档访问正负例。外部已执行、内部记录未复制是必须单独对账的未知结果，不能按“新库没有记录”自动补执行。
+05–06若发现复制损失超出事先批准的RPO边界，保持接管门槛关闭并升级；不能由“备用已启动”推导数据可接受。分别核对DB与EDM文档/其他业务附件的实际恢复点、引用和权限；EDM跨Region可达性、授权及未完成分片归属另取证，不假设与本方DB同步复制。DB已有引用但对象未复制也属于缺口，不能用静态发布包哈希通过来替代。无法核对或超批准损失范围时停止相关接管；已明确接受的缺失对象仍须列清单、隔离对应功能并报告受限恢复，不计为全功能恢复。08前确认Relay会话、chat/MCP执行及管理作业的接管策略；现有进程可预启动但不能提前执行业务。09包括映射、带附件的新Run、Stop、FULL补读及文档访问正负例。外部已执行、内部记录未复制是必须单独对账的未知结果，不能按“新库没有记录”自动补执行。
 
 DNS TTL、递归解析缓存、浏览器已有连接、第三方回调固定地址分别测量；DNS切换不转移已建立的WS/SSE。回调经稳定地址进入新区域时仍执行现有授权、租约/终态判断；记录缺失或失权回调进入可观察处置，不盲目创建新Run。新旧区域隔离状态在观察期持续验证。
 

@@ -10,8 +10,8 @@
 ### 证据与范围
 
 - **S源码确认**：实现/默认配置可定位；不能仅凭模式认定已经OOM、死锁或泄漏。**E环境待验**：有效配置、容量、外部实现/协议及故障行为未验。本轮没有新增故障复现证据。**OPEN/ENV**均未关闭；P1是在相应功能/容量启用前的阻断项，P2为条件性优化/治理项，可由实际影响上调。
-- **U用户确认现状**：ChatService、relayService、agentService三服务运行于ADS，共享DB（openGauss）及Redis；agentService含admin技能管理、运行时技能查询、统一chat转发DomainAgent、供Relay调用的MCP。Chat直接调用Relay和agentService，intentService（第三方）可选。WCM托管静态资源，ALB管理文根，上游包括saas gateway（SaaS统一网关）。
-- **P目标/措施**：未来adminService/toolService/agentService拆分，加Chat/Relay共五服务；文档管理迁agentService，内容直传合适存储或独立worker。各Region ADS控制/运行面与ALB独立、至少双AZ多副本、双Region预部署热备单写、DB区域内HA/跨区异步复制、GSLB/DNS受控切流、独立非ADS静态备用源均须实施/验证，不能作为已存在保护；不默认全面读写分离。
+- **U用户确认现状**：ChatService、relayService、agentService三服务运行于ADS，共享DB（openGauss）及Redis；agentService含admin技能管理、运行时技能查询、统一chat转发DomainAgent、供Relay调用的MCP，以及文档上传接口；Chat的`api-store`适配器调用该上传接口，由agentService分片上传EDM。Chat直接调用Relay和agentService，intentService（第三方）可选。WCM托管静态资源，ALB管理文根，上游包括saas gateway（SaaS统一网关）。
+- **P目标/措施**：未来adminService/toolService/agentService拆分，加Chat/Relay共五服务；文档管理迁agentService，由其提供上传授权、完成核验及登记，浏览器分片直传EDM；Chat只读取及引用文档。EDM浏览器直传能力、授权和清理合同待联合验证，独立worker仅作为经验证的过渡转发方案。各Region ADS控制/运行面与ALB独立、至少双AZ多副本、双Region预部署热备单写、DB区域内HA/跨区异步复制、GSLB/DNS受控切流、独立非ADS静态备用源均须实施/验证，不能作为已存在保护；不默认全面读写分离。
 - 资源收口需要终态、取消、恢复及防双主边界，但本轮不展开纯业务完整性、通用幂等/副作用补偿或安全专项。
 - 全盘范围由[场景及资源覆盖](scenarios.md)衡量，不能证明不存在未知风险。源码确认、真实依赖实验、生产证据分别保存；关闭需修复提交/有效配置、关联T/D结果、资源曲线、复核人与日期。未完成项须具名接受、容量/功能限制、监控及到期日，当前无已签认接受记录。
 
@@ -27,7 +27,7 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 | [R03](#r03) 完整等待预算 | OPEN/P2 | [S02](scenarios.md#s02)、[S10](scenarios.md#s10)、[S11](scenarios.md#s11) | [W05](#w05)/[W07](#w07) | 应用、鉴权/下游 | [T03](tests.md#t03) | [RB05](operations.md#rb05) | [D04](operations.md#d04) |
 | [R04](#r04) Redis接收线程 | OPEN/P1条件性 | [S03](scenarios.md#s03)、[S07](scenarios.md#s07) | [W02](#w02) | 应用 | [T04](tests.md#t04) | [RB04](operations.md#rb04)/[RB01](operations.md#rb01) | [D03](operations.md#d03) |
 | [R05](#r05) 查询/旁路资源 | OPEN/P2 | [S08](scenarios.md#s08)、[S10](scenarios.md#s10)、[S11](scenarios.md#s11) | [W08](#w08) | 应用、DBA | [T05](tests.md#t05) | [RB03](operations.md#rb03)/[RB02](operations.md#rb02) | [D08](operations.md#d08) |
-| [R06](#r06) 文件完整生命周期 | OPEN/P2；大文件门槛P1 | [S09](scenarios.md#s09) | [W06](#w06) | 应用、存储 | [T06](tests.md#t06) | [RB07](operations.md#rb07)/[RB01](operations.md#rb01) | [D06](operations.md#d06) |
+| [R06](#r06) 文件上传/EDM及完整生命周期 | OPEN/P2；大文件门槛P1 | [S09](scenarios.md#s09) | [W06](#w06) | 应用、agent、EDM/存储 | [T06](tests.md#t06) | [RB07](operations.md#rb07)/[RB01](operations.md#rb01) | [D06](operations.md#d06) |
 | [R07](#r07) CPU/JSON/分配 | OPEN/P2条件性 | [S01](scenarios.md#s01)、[S03](scenarios.md#s03)、[S06](scenarios.md#s06) | [W01](#w01)/[W08](#w08) | 应用、性能测试 | [T07](tests.md#t07) | [RB02](operations.md#rb02)/[RB01](operations.md#rb01) | [D01](operations.md#d01) |
 | [R08](#r08) 部署/健康/退出 | ENV/P1上线门槛 | [S12](scenarios.md#s12) | [W09](#w09)/[W07](#w07) | 平台、应用 | [T08](tests.md#t08) | [RB08](operations.md#rb08) | [D07](operations.md#d07) |
 | [R09](#r09) 共享DB/洪峰/治理 | OPEN+ENV/P1条件性 | [S01](scenarios.md#s01)、[S12](scenarios.md#s12)、[DEP01](deployment.md#dep01) | [W04](#w04)/[W11](#w11) | DBA、三服务负责人 | [T09](tests.md#t09) | [RB03](operations.md#rb03)/[RB11](operations.md#rb11) | [D09](operations.md#d09) |
@@ -37,7 +37,7 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 | [R13](#r13) ADS控制/运行面 | ENV/P1条件性 | [S12](scenarios.md#s12)、[DEP02](deployment.md#dep02) | [W13](#w13) | ADS、服务负责人 | [T13](tests.md#t13) | [RB13](operations.md#rb13) | [D11](operations.md#d11) |
 | [R14](#r14) AZ失效余量 | ENV/P1条件性 | [S12](scenarios.md#s12)、[DEP02](deployment.md#dep02) | [W13](#w13) | 平台、容量、DBA | [T14](tests.md#t14) | [RB13](operations.md#rb13) | [D11](operations.md#d11) |
 | [R15](#r15) Region接管/回切 | ENV/P1容灾门槛 | [S12](scenarios.md#s12)、[DEP05](deployment.md#dep05)、[DEP06](deployment.md#dep06) | [W14](#w14) | 容灾指挥、平台、DBA | [T15](tests.md#t15) | [RB14](operations.md#rb14) | [D12](operations.md#d12) |
-| [R16](#r16) agent模块/配置回源 | OPEN+ENV/P1条件性 | [S02](scenarios.md#s02)、[S12](scenarios.md#s12) | [W11](#w11)/[W05](#w05) | agent、应用、平台 | [T16](tests.md#t16) | [RB11](operations.md#rb11)/[RB05](operations.md#rb05) | [D09](operations.md#d09)/[D04](operations.md#d04) |
+| [R16](#r16) agent模块/配置回源 | OPEN+ENV/P1条件性 | [S02](scenarios.md#s02)、[S09](scenarios.md#s09)、[S12](scenarios.md#s12) | [W11](#w11)/[W05](#w05) | agent、应用、平台 | [T16](tests.md#t16) | [RB11](operations.md#rb11)/[RB05](operations.md#rb05) | [D09](operations.md#d09)/[D04](operations.md#d04) |
 | [R17](#r17) MCP扇出/取消残留 | ENV/P1条件性 | [S02](scenarios.md#s02)、[S05](scenarios.md#s05) | [W11](#w11)/[W05](#w05)/[W07](#w07) | Relay、agent、下游 | [T17](tests.md#t17) | [RB11](operations.md#rb11)/[RB05](operations.md#rb05) | [D09](operations.md#d09)/[D04](operations.md#d04) |
 | [R18](#r18) DB/JVM锁与事务 | OPEN+ENV/P2条件性 | [S03](scenarios.md#s03)、[S05](scenarios.md#s05)、[S06](scenarios.md#s06)、[S08](scenarios.md#s08) | [W04](#w04) | 应用、DBA、平台 | [T18](tests.md#t18) | [RB02](operations.md#rb02)/[RB03](operations.md#rb03) | [D02](operations.md#d02) |
 | [R19](#r19) DomainAgent故障 | OPEN+ENV/P1启用条件 | [S02](scenarios.md#s02)、[S03](scenarios.md#s03)、[S05](scenarios.md#s05) | [W05](#w05)/[W07](#w07)/[W11](#w11) | 应用、agent/DA | [T19](tests.md#t19) | [RB05](operations.md#rb05) | [D04](operations.md#d04) |
@@ -90,13 +90,13 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **措施/验收**：[W08](#w08)。T05/D08覆盖长历史/深树/大metadata/搜索，以及旧旁路worker阻塞、标题候选/生成/提交分别变慢；记录计划、扫描量、队列龄、CPU、连接与首事件，保证旁路启用/关闭均符合预算、过期未启动任务不再执行。执行计划与阈值待验证。
 
 <a id="r06"></a>
-#### R06 上传堆占用、下载许可生命周期及孤儿对象
+#### R06 文件上传堆占用、EDM等待与分片残留及文件资源生命周期
 
-- **证据 S**：[API Store upload](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L67)许可内 L71 整份 `readAllBytes`、L97 将同一数组交给 multipart，L112 阻塞等待 HTTP；[入口辅助](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/upload/DocumentUploadSupport.java#L63)在 MVC multipart 已解析后，L120 再复制临时文件，L140 才检查业务大小并传入流，此阶段早于存储许可。[对象存储 download](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/object/ObjectStorageDocumentStorage.java#L74)获得输入流即归还许可，[Controller](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L179)之后响应输出；[上传服务](../../../src/main/java/com/huawei/it/ex/one/application/service/document/DocumentApplicationService.java#L74)存储完成后才写 DB。
-- **触发与影响**：放大限额到 **500MiB（524288000 字节）** 时，单次 API Store 上传至少存在一份 500MiB 内容数组；32 个同时持有此数组的请求约 **15.625GiB**，仅是内容数组的条件下界，不是总堆测量或已支持并发数。额外有解析/HTTP/native buffer、框架与应用临时盘、FD 等消耗，实际乘数取决于 JDK、容器、客户端和配置，不能固定宣称两倍。当前[默认 multipart 50MB/请求60MB](../../../src/main/resources/application.yml#L19)并非已允许500MiB；只改限额可能把磁盘、堆和带宽风险带入整个 Chat JVM。慢下载可超过许可覆盖在途数；存储成功而DB失败/进程退出会留下孤儿对象。
-- **已有保护/剩余缺口**：multipart 限额、存储32许可、正常/异常流关闭与 `usingWhen` 清理已有；API Store的阻塞期限不覆盖此前本地完整读入。OBS/本地文件上传使用 InputStream/流复制，不能套用整文件数组结论，也仍须核对SDK阻塞取消、临时盘及下载生命周期。清理异常在辅助类 L155 被忽略、kill 无法执行 finally；软删除不是物理回收策略。文件迁 agentService、直传或独立 worker 是 P，当前仍由 Chat 实现。
-- **加固措施**：[W06](#w06)；验收条件见下。
-- **关闭证据（待取得）**：T06/D06 在批准容量下测试500MiB及边界、未知长度/分块、慢上传/下载、取消、DB失败/进程退出；分别测堆/native/临时盘/FD/连接，不在生产尝试OOM。准入发生于昂贵接收/复制前，许可和临时文件最终归还，孤儿可对账且不误删历史引用。
+- **证据 U/S/E**：U确认`api-store`对应agentService文档上传接口，由agentService分片上传EDM，不能将API Store画成独立服务或将下游分片视为Chat已流式。S：[当前上传适配器](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L67)在许可内L71整份`readAllBytes`、L97将同一数组交给multipart，L112等待HTTP；[默认30s](../../../src/main/resources/application.yml#L392)从该HTTP订阅起计，无应用自动重试，不覆盖此前完整读入。[入口辅助](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/upload/DocumentUploadSupport.java#L63)在MVC multipart解析后L120再复制临时文件，L140才检查业务大小，此阶段早于存储许可；[上传服务](../../../src/main/java/com/huawei/it/ex/one/application/service/document/DocumentApplicationService.java#L74)远端存储成功后才写DB。E包括agentService分片大小/并发/缓冲/重试/合并/取消实现、EDM期限与浏览器直传能力。
+- **触发→传播→影响**：放大限额到 **500MiB（524288000字节）** 时，单次当前agentService转发上传至少有一份500MiB内容数组驻留于Chat；32个同时持有数组的请求约 **15.625GiB**，仅为内容数组的条件下界，不是总堆实测或安全并发数。额外有解析/HTTP/native buffer、框架与应用临时盘、FD等，实际乘数依赖JDK和容器。EDM慢响应、黑洞、429/5xx或分片失败会延长agentService缓冲/连接和Chat许可占用；前端重传与agent分片重试叠加可能放大请求、CPU和带宽，影响Chat全功能及[R16](#r16)的技能查询、chat和MCP。合并响应丢失、上游30s超时或取消不证明EDM停止；EDM成功但登记失败/进程退出会留下文档或分片残留。
+- **已有保护/剩余缺口**：当前[默认multipart 50MB/请求60MB](../../../src/main/resources/application.yml#L19)、存储32许可、正常/异常流关闭及`usingWhen`清理已有，不能只改限额放行500MiB。OBS/本地上传使用InputStream/流复制，不套用整文件数组结论；[对象存储下载](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/object/ObjectStorageDocumentStorage.java#L74)获得输入流即归还许可，[Controller](../../../src/main/java/com/huawei/it/ex/one/interfaces/document/DocumentController.java#L179)随后才输出，慢下载可能超过许可覆盖的在途数。临时文件清理异常被忽略，kill无法执行finally；软删除不等于物理回收。[当前api-store能力](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L170)明确download/status=false，不支持经Chat下载或查询EDM实时状态；查询补偿能力不得假定已存在。`skillId`缺省时的下游S3兼容分支按[现行合同](../../../src/main/java/com/huawei/it/ex/one/infrastructure/storage/api/ApiStoreDocumentStorage.java#L39)保留。
+- **措施**：[W06](#w06)以浏览器经agentService授权后直接分片到EDM为P目标；agent负责完成核验、文档管理/登记和对账，Chat只读取及引用，文件正文不经过这两个进程。当前模块隔离协同[W11](#w11)；直传/续传/查询/清理及EDM限额合同未验前保持E，不将500MiB标为已支持。
+- **关闭证据（待取得）**：T06/D06分别验证当前转发和目标EDM直传，在批准容量下覆盖500MiB/边界、未知长度、慢分片、断网/授权过期、429/5xx、合并未知、重复完成、登记失败、取消及进程退出。测量浏览器、Chat/agent及EDM的堆/native/临时盘/FD/连接/分片在途量；证明直传正文不经Chat/agent、正常聊天/技能查询/Stop达标、资源回落、分片和文档可安全对账。缺必要接口或容量合同的子项BLOCKED，测试/演练NOT_RUN；500MiB为P1上线门槛，不在生产尝试OOM。
 
 <a id="r07"></a>
 #### R07 高频 JSON、序列化与长对象造成条件性 CPU/分配压力
@@ -182,10 +182,10 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 <a id="r16"></a>
 #### R16 一体agentService模块争抢与技能配置回源放大
 
-- **证据 U/S/E**：U确认agentService同时承担admin技能管理、运行时技能查询、统一chat→DomainAgent、Relay调用的MCP，与Chat/Relay共享DB和Redis。S：[技能缓存](../../../src/main/java/com/huawei/it/ex/one/application/service/domainagentconfig/DomainAgentSkillConfigurationService.java#L69)失败视为miss、未见并发miss合并；[HTTP provider](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L54)有[默认2s期限/10m缓存](../../../src/main/resources/application.yml#L99)，无应用重试，但HTTP期限不覆盖前置缓存/排队。[Gate](../../../src/main/java/com/huawei/it/ex/one/application/service/agentdatapersistence/AgentDataPersistenceGate.java#L91)共用本次配置快照。实际agent内部线程/队列/隔离及配置发布能力为E。
-- **触发→传播→影响**：管理导入/批任务、缓存失效的技能查询、长chat和MCP扇出争同一进程及共享依赖；一模块过载拖慢另两条执行链及运行前配置检查。技能映射/缓存发布不一致可能引发错误重试/重路由流量。将500MiB文件转移到同一管理进程只会转移共同故障范围。
+- **证据 U/S/E**：U确认agentService同时承担admin技能管理、运行时技能查询、统一chat→DomainAgent、Relay调用的MCP及文档上传→EDM分片转发，与Chat/Relay共享DB和Redis。S：[技能缓存](../../../src/main/java/com/huawei/it/ex/one/application/service/domainagentconfig/DomainAgentSkillConfigurationService.java#L69)失败视为miss、未见并发miss合并；[HTTP provider](../../../src/main/java/com/huawei/it/ex/one/infrastructure/domainagentconfig/DefaultDomainAgentSkillConfigurationProvider.java#L54)有[默认2s期限/10m缓存](../../../src/main/resources/application.yml#L99)，无应用重试，但HTTP期限不覆盖前置缓存/排队。[Gate](../../../src/main/java/com/huawei/it/ex/one/application/service/agentdatapersistence/AgentDataPersistenceGate.java#L91)共用本次配置快照。实际agent内部线程/队列/隔离及配置发布能力为E。
+- **触发→传播→影响**：管理导入/批任务、缓存失效的技能查询、长chat、MCP扇出和EDM分片上传/重试争同一进程及共享依赖；一模块过载拖慢另两条执行链及运行前配置检查。技能映射/缓存发布不一致可能引发错误重试/重路由流量。EDM缓慢或分片残留还可能持续占用agent资源；仅将500MiB整文件接收从Chat移到agent只会转移共同故障范围，目标应为浏览器直传EDM、agent只承担授权与核验登记。
 - **已有保护/缺口**：Chat的缓存、provider期限、下游许可不能限制外部管理/MCP流量。Gate在留存开关启用时配置失败阻止执行，仅附件检查失败则按现实现开放（L117–128），不能统一当作可丢旁路或关闭留存来降级；成功无配置、畸形附件配置和故障须区分。缓存关闭后provider完成线程还可能进入[同步仓储路由](../../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRuntimeDispatchCoordinator.java#L204)，应核对调度边界，不能断言默认一定阻塞event loop。
-- **措施/验收**：[W11](#w11)建立模块预算、配置合同及拆分，配置等待/回源协同[W05](#w05)，文件协同[W06](#w06)。T16/D09/D04逐模块施压、缓存失效、配置组合和慢库，证明其他模块及Stop达标且留存/附件语义未变；目标拆分为P，必须以同负载复测证明隔离收益。
+- **措施/验收**：[W11](#w11)建立模块预算、配置合同及拆分，配置等待/回源协同[W05](#w05)，文件协同[W06](#w06)。T16/D09/D04逐模块施压、缓存失效、配置组合和慢库，并与T06/D06联合施加EDM慢分片/重试和取消，证明其他模块及Stop达标且留存/附件语义未变；目标拆分为P，必须以同负载复测证明隔离收益。
 
 <a id="r17"></a>
 #### R17 Relay经MCP调用下游的扇出、重试及取消残留
@@ -323,18 +323,19 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 - **接口/发布/回滚**：先取得提供方真实期限、限额、取消/重试与错误来源合同；新增字段/错误码独立更新OpenAPI及前端兼容。按provider小流量发布；回滚后保留已验证的入口/依赖配额，必要时暂停对应功能，不能通过加重试、绕过鉴权或关闭留存恢复吞吐。
 
 <a id="w06"></a>
-### W06 文档在途字节、流生命周期与对账
+### W06 EDM直传、文档控制链路与文件资源生命周期
 
-**责任**：应用/存储主责，agentService与前端协作；R06。
+**责任**：应用、agentService与EDM共同主责，前端、入口平台及存储协作；R06，协同R16；T06、RB07/RB01、D06。
 
-- **500MiB前置门槛**：先固定单位、有效multipart/业务/网关/provider限额、上传总期限与单实例/集群安全容量，再允许500MiB；不能把32个请求许可视为可同时安全接收32个500MiB。入口许可必须在multipart解析和落盘前取得（网关或经验证的Filter/解析层），不能读取表单后才决定是否准入。对未知Content-Length/分块按实际接收字节递增收费，设每请求、实例和租户字节/速率/临时盘边界；请求数、字节、磁盘预留、FD及出站连接预算独立核对。
-- **最小实现路径**：API Store替换`readAllBytes`为受控临时文件及`FileSystemResource`或经provider验证的流式multipart。当前[DocumentUploadCommand](../../../src/main/java/com/huawei/it/ex/one/application/command/DocumentUploadCommand.java#L24)只有InputStream，需新增内部可重开资源/Path抽象、清晰所有权及兼容适配，不得通过强转流猜路径。保留`file`/`skillId`/Cookie出站头及返回元数据合同；验证WebClient/SDK不会再聚合整份文件，取消/超时后停止复制和外呼，关闭流并删除临时文件。独立worker采用有界队列/字节和过期清理，不把OOM变为磁盘或队列耗尽。
-- **目标职责与迁移**：文档管理迁agentService属于P，先落实文档事实/权限/对象key与现有Chat附件引用的唯一所有者、登记/状态查询/删除契约及路由兼容。文件内容优先由浏览器直接上传合适对象存储，或独立worker承载转发/处理，管理进程只处理有限元数据；短期兼容Chat上传仍须受上述预算。直传需授权范围/有效期、大小/校验和、完成确认、重复完成与孤儿清理。`skillId→API Store/EDM`如含业务解析/登记，不能用普通S3直传替换；须由下游确认等价导入流程，否则走有界worker转发。迁移不默认跨库双写文档事实。
-- **流生命周期**：对象存储下载包装流在close/cancel/读取失败时幂等归还许可，覆盖完整响应发送；HTTP取消、异步超时和SDK实际结束分别核对。明确临时目录配额、框架与应用临时文件叠加、清理失败告警、实例kill后的恢复扫描及安全过期规则；软删除不等于物理清理。
-- **对账**：为上传分配稳定操作标识，记录存储成功/DB保存/补偿结果；落库失败尽力补偿并保留可重试对账记录。重试前确认对象是否已创建及provider是否幂等。物理回收先核对有效引用，区分用户软删除、历史合法引用、孤儿和临时文件；所有权或结果未知先隔离对账，不做全桶清理。
-- **前置/接口**：确认API Store可重复流/分块、EDM导入、对象删除/查询能力，以及下载/状态合同；缺必要接口记UNKNOWN，不能编造自动补偿。异步worker/直传如改变同步返回或增加上传状态/完成接口，先更新OpenAPI、前端和兼容方案，原路径在新链路验收前有界保留。
-- **观测/测试**：在途文件/实际字节、接收与转发速率、队列龄、堆/native/临时盘、FD/连接/许可、取消残留及孤儿年龄；500MiB及边界/未知长度、慢两端/断连/DB失败/kill、重复完成、worker退出和迁移双版本兼容。证据必须证明Chat及agent管理/运行时主链路不受大文件拖累。
-- **发布/回滚**：先小文件/单provider与少量租户灰度；新增操作记录向旧版本兼容，旧版本不得误删新对象。若500MiB新路径失败，阻断新大文件或摘流，已受理文件继续按操作记录收口；不能把大文件重新送回原`readAllBytes`路径。路由回滚保持文档事实单写、历史引用和未完成上传可查询。
+- **目标与边界**：浏览器向agentService申请上传授权，文件分片直接传至EDM；agent负责上传状态协调、完成核验、文档管理/登记和对账，Chat只读取及引用。500MiB正文不得经Chat或agent进程中转；部署入口、浏览器至EDM的网络可达性、HTTPS/CORS及短期授权等能力须由EDM/平台联合验证，不编造接口地址或认证机制。文档事实保持唯一写者，迁移不默认跨库双写。
+- **500MiB前置门槛**：按500MiB（524288000字节）冻结EDM文件上限、分片大小/并发、总在途字节、单分片及逻辑上传总期限、全部尝试次数和租户/实例/集群预算；先实测再签认数值。浏览器分片不得先整文件读入内存；agent授权/核验/登记请求有独立准入，EDM分片及合并有明确速率/容量边界。当前转发路径仍须在multipart解析/复制前取得入口许可，未知长度按实际字节计费并限制临时盘/FD/出站连接；32个存储许可不等于可接收32个500MiB。能力或容量合同缺失时阻断相应大文件上线。
+- **完成与引用合同**：授权绑定用户/租户、允许的skillId、大小/类型及有效期，具体机制与EDM签认；agent完成登记必须核验EDM上传事实、完整大小及可用校验信息，不能信任浏览器单方面成功。保留现有`docId`、技能授权和Chat附件引用语义；普通S3对象key不能替代EDM文档标识或技能导入/解析职责。重复完成以同一上传操作幂等登记，EDM成功但DB失败保留可对账状态；不把校验或远端外呼包在长DB事务内。
+- **期限、重试和取消**：前端、agent和EDM统一逻辑总预算并确定唯一重试责任层；优先只重试确认失败且可安全重试的分片，退避、抖动及并发上限覆盖恢复洪峰。完成/合并响应丢失先查询事实，结果未知不盲重传整文件或重复合并。取消/授权过期/客户端退出后约定停止新分片、在途请求收口和残留保留期限；远端取消未确认时保持受限状态和责任人，不能因Chat或浏览器收到timeout认定EDM已停止。
+- **过渡转发**：仅在EDM直传暂不具备且独立worker已完成端到端容量验证时保留有界转发；替换整文件`readAllBytes`为受控文件/流式传输，验证SDK和HTTP栈不重新聚合整文件。worker与Chat/agent管理及运行时实例组隔离，队列、在途字节、临时盘、连接和过期清理均有上限；不能无上限排队，也不能自动将500MiB直传失败回退到Chat整读路径。当前[DocumentUploadCommand](../../../src/main/java/com/huawei/it/ex/one/application/command/DocumentUploadCommand.java#L24)仅含InputStream，若过渡实现需要可重开资源/Path，须独立明确内部所有权和释放，不强转猜路径。
+- **文件生命周期与对账**：local/OBS现有流式上传、下载许可覆盖完整响应的整改继续保留；在close/cancel/读取失败时幂等释放，核对SDK真实结束。EDM操作标识、分片/合并状态、agent登记结果及历史有效引用纳入对账；取消/过期的遗留分片和孤儿文档按EDM合同清理，临时盘清理失败可观测、kill后受控扫描。缺查询/删除能力时先列建设项或人工核对，不编造自动补偿；未知所有权不删除，软删除不等于物理回收。
+- **接口兼容**：当前`api-store`配置名、适配器和错误码不变，现行转发`file`/`skillId`/Cookie头及返回元数据合同不改，`skillId`缺省的S3分支按当前合同保留。当前api-store不支持经Chat下载或查询EDM实时状态；直传新增授权、状态协调、完成核验和取消接口列独立协议任务，同步OpenAPI及前端双版本兼容，未经验证不写成已有能力。EDM文档下载/预览能力按其真实合同单独接入。
+- **观测/验收**：T06/D06覆盖500MiB及边界、慢分片/未知长度、断网续传、授权过期、黑洞/429/5xx、合并结果未知、重复完成、登记失败、取消/重启和孤儿清理；记录每层操作关联/阶段耗时/尝试次数、在途分片/字节、带宽、队列龄、堆/native/临时盘/FD/连接及资源回落。联合T16证明现状agent混合负载和目标直传下正常聊天/技能查询/Stop达标；测试NOT_RUN，缺合同项BLOCKED。
+- **发布/回滚**：先小文件、少量租户验证EDM直传和完成登记，再按已测容量放开500MiB；保留旧文档读取引用和无skillId的S3兼容能力。新链路失败先阻断新大文件或受控摘流，已受理操作按查询/对账收口，不自动回退Chat整读、不盲重传、不批量删除有效文档。回滚保持文档事实单写及在途操作可追踪。
 
 <a id="w07"></a>
 ### W07 取消残留与完整资源生命周期收口
@@ -376,14 +377,14 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 
 **责任**：DBA、Redis平台、Chat/Relay/agent及下游负责人共同主责；R09/R10/R16/R17，协同W05/W06/W07；当前拓扑与目标分别见[DEP01](deployment.md#dep01)。
 
-- **当前模块隔离**：为agentService的admin/skill-query/chat/MCP分别签认CPU、堆/native、线程/队列、连接、并发/速率/字节及排队龄预算，为Stop/状态查询/配置校验留资源；过载拒绝限定故障来源，禁止共享无限队列或仅扩大线程池。模块暂停/熔断等未实现能力先建设验证，不能直接列作运行命令。
+- **当前模块隔离**：为agentService的admin/skill-query/chat/MCP/document-upload分别签认CPU、堆/native、线程/队列、连接、并发/速率/字节及排队龄预算，为Stop/状态查询/配置校验留资源；过载拒绝限定故障来源，禁止共享无限队列或仅扩大线程池。当前EDM分片缓冲、连接、重试和残留须独立计量；目标直传后的授权/核验/登记仍保留控制请求配额。模块暂停/熔断等未实现能力先建设验证，不能直接列作运行命令。
 - **DB集群预算**：收齐三服务池上限×实例数、SQL/事务/DDL、峰值与重连速率，agent按模块归因；W04负责Chat内部治理。共享DB（openGauss）为控制/恢复/维护保留额度，覆盖扩容、AZ减少和Region接管；批任务/DDL错峰，核验索引和双版本schema兼容。未来五服务额度重分配，不能叠加原池上限；不默认全面读写分离或跨库双写。
 - **Redis分类及恢复**：按服务登记缓存、锁/租约/取消、Pub/Sub及若存在的持久队列，记录大小、TTL、owner与恢复规则；限制大key/热key/脚本/订阅/回源速率，前缀/ACL不等于容量隔离。故障恢复分批重建缓存、重订阅及FULL补读，按新权威建立锁；持久队列先冻结到可核对水位，再按已确认重放策略恢复，禁止整库盲复制锁与任务后自动执行。真实部署拓扑、maxmemory/淘汰/持久化必须取证。
-- **目标拆分P**：定义adminService/toolService/agentService的技能管理/发布、运行时查询、统一chat、MCP/工具及文档元数据归属，加Chat/Relay共五服务。文件内容按W06直传或独立worker。先兼容契约与唯一事实写者，再按模块迁流、排空、复测共享依赖；旧Run/回调/Stop稳定到原执行者，不用双库双写制造假隔离。
+- **目标拆分P**：定义adminService/toolService/agentService的技能管理/发布、运行时查询、统一chat、MCP/工具及文档元数据归属，加Chat/Relay共五服务。文档控制链路由agent提供授权、EDM完成核验/登记和管理，内容按W06由浏览器直传EDM；独立worker只承载经过验证的过渡转发。先兼容契约与唯一事实写者，再按模块迁流、排空、复测共享依赖；旧Run/回调/Stop稳定到原执行者，不用双库双写制造假隔离。
 - **技能合同**：管理发布、属性查询与执行mapping区分版本/目标、新鲜度、缓存失效及已知好版本回退，执行者记录实际使用版本。成功无配置、未知/撤销、缓存过期与故障分别定义；留存启用时配置查询失败阻止执行；仅附件检查的查询失败按现有开放政策，成功空支持类型仍拒绝附件。最后可用值仅在批准有效期内使用，不以关闭留存切回FULL降级；进行中的Stop仍到原目标。
 - **两条执行链合同**：Chat→agent chat→DomainAgent、Chat→Relay→agent MCP→下游各自限制总调用次数、扇出、嵌套深度、结果字节与截止时间；重试由唯一层负责并记录放大比，具体策略归W05。区分请求已发/已受理/停止确认/结果未知，约定取消级联及不可取消任务预算；未知结果先查询或受限人工核对，避免重连/恢复反复执行。当前外部源码缺失的能力不得假装已存在。
 - **SLA与定位**：双方签认受理、首有效事件、空闲/进展、完成、Stop真实停止、恢复的SLI及数值目标、错误来源和升级联系人。统一可信trace/operation/run/session/message/parent-call/remote-task、服务/模块/实例/Region/skill/配置版本、阶段耗时/尝试/剩余预算；[trace占位](../../../src/main/java/com/huawei/it/ex/one/infrastructure/trace/JalorTraceContextProvider.java#L13)及未透传字段为待实施协议任务，优先复用现有可信ID。脱敏日志，不用高基数ID做指标label；观察到超时不直接当作已确定根因。
-- **验收/发布/回滚**：T09/T10/T16/T17逐服务/模块施压和共享依赖故障，联合T19–T21核对两链资源/重试/取消和定位时间。先预算/观测/契约，后拆分迁流；无提供方证据的子项BLOCKED。回滚保持schema兼容、同一事实唯一写者及Run稳定归属，先核对在途量与旧模块容量，不自动重放未知任务。
+- **验收/发布/回滚**：T09/T10/T16/T17逐服务/模块施压和共享依赖故障，联合T19–T21核对两链资源/重试/取消和定位时间，联合T06核对EDM分片故障、文档控制请求及完成登记不挤占技能/执行模块。先预算/观测/契约，后拆分迁流；无提供方证据的子项BLOCKED。回滚保持schema兼容、同一事实唯一写者及Run稳定归属，先核对在途量与旧模块容量，不自动重放未知任务。
 
 <a id="w12"></a>
 ### W12 WCM独立静态备用源与ALB区域入口

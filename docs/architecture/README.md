@@ -4,9 +4,9 @@
 [高可用落地蓝图](high-availability/README.md#overview)；已执行的本地检查与待执行的环境验收分别记录。
 
 当前静态资源和入口采用WCM、ALB、saas gateway（SaaS统一网关），应用部署在ADS；ChatService、relayService、一体agentService共享DB和Redis，参见
-[部署架构与容灾设计](high-availability/deployment.md)。当前agentService同时承担管理、技能查询、统一chat与MCP；Chat携带skillId经agentService转发至第三方DomainAgent，Chat独立连接relayService，relayService再经agentService MCP调用下游。intentService是独立第三方。下文DomainAgent指逻辑provider，不表示Chat绕过agentService直连第三方。
+[部署架构与容灾设计](high-availability/deployment.md)。当前agentService同时承担管理、技能查询、统一chat、MCP及文档上传；Chat携带skillId经agentService转发至第三方DomainAgent，Chat独立连接relayService，relayService再经agentService MCP调用下游。api-store适配器访问agentService文档上传接口，由agentService分片上传EDM；该内部策略需联合取证。intentService是独立第三方。下文DomainAgent指逻辑provider，不表示Chat绕过agentService直连第三方。
 
-拆分为adminService/toolService/agentService、文档管理迁移、跨AZ/Region主备与独立静态备用源均为目标设计，见[现状及目标图](high-availability/deployment.md#dep01)；现有调用链和待建设能力不能混用。运行视图、事务/锁及等待预算、风险到测试/预案的追踪以高可用文档为准。
+拆分为adminService/toolService/agentService、文档管理迁移、前端经agentService授权直传EDM、跨AZ/Region主备与独立静态备用源均为目标设计，见[现状及目标图](high-availability/deployment.md#dep01)；现有调用链和待建设能力不能混用。运行视图、事务/锁及等待预算、风险到测试/预案的追踪以高可用文档为准。
 
 主编排代码阅读顺序、状态机、记忆边界和调试入口参见
 [FinanceEXChatService 开发导读](../onboarding.md)。
@@ -214,6 +214,8 @@ sequenceDiagram
     participant Redis as "Redis"
     participant DB as "数据库"
     participant S3 as "S3 / OBS"
+    participant AgentService as "agentService"
+    participant EDM as "EDM文档服务"
 
     opt "上传文档"
         Frontend->>EX: "POST /v1/documents"
@@ -221,7 +223,15 @@ sequenceDiagram
             EX->>S3: "写入文件对象"
             S3-->>EX: "bucket/objectKey"
         else "storage.provider=api-store"
-            EX->>EX: "调用新文档上传接口(file, metadata.skillId?)"
+            EX->>AgentService: "整读后multipart file/skillId；HTTP30s，无应用重试"
+            alt "skillId指向EDM"
+                AgentService->>EDM: "分片上传（用户确认）；内部期限/重试待验"
+                EDM-->>AgentService: "docId及文档属性"
+            else "未传skillId的兼容合同"
+                AgentService->>S3: "上传S3"
+                S3-->>AgentService: "url"
+            end
+            AgentService-->>EX: "docId或url"
         end
         EX->>DB: "写入 fin_ex_uploaded_document_t"
         EX-->>Frontend: "documentId/status"
@@ -282,7 +292,8 @@ sequenceDiagram
     participant DocApp as "DocumentApplicationService"
     participant Storage as "DocumentStorage"
     participant ObjectStorage as "ObjectStorage"
-    participant ApiStore as "api-store"
+    participant AgentService as "agentService"
+    participant EDM as "EDM文档服务"
     participant DB as "数据库"
     participant Chat as "FinanceEXChatService"
     participant Executor as "DomainAgent / AgentRuntime"
@@ -296,8 +307,15 @@ sequenceDiagram
         Storage->>ObjectStorage: "putObject(tenantId, file)"
         ObjectStorage-->>Storage: "bucket/objectKey"
     else "api-store"
-        Storage->>ApiStore: "multipart file + optional metadata.skillId"
-        ApiStore-->>Storage: "docId 或 url"
+        Storage->>AgentService: "整读后multipart file/skillId；HTTP30s，无应用重试"
+        alt "skillId指向EDM"
+            AgentService->>EDM: "分片上传；合并/重试/取消策略待验"
+            EDM-->>AgentService: "docId及文档属性"
+        else "未传skillId的兼容合同"
+            AgentService->>ObjectStorage: "S3上传"
+            ObjectStorage-->>AgentService: "url"
+        end
+        AgentService-->>Storage: "docId 或 url"
     end
     DocApp->>DB: "写 fin_ex_uploaded_document_t"
     DocApp-->>Frontend: "UploadedDocument(id,status,source)"
@@ -310,8 +328,10 @@ sequenceDiagram
 
 设计原则：
 
-- 前端上传仍先进入 FinanceEXChatService，方便统一鉴权、审计、限流和企业网关接入。
-- 真实文件内容由 `DocumentStorage` 决定去向：`local/huawei-s3` 写入本服务对象存储，`api-store` 转发新文档上传接口。
+- 当前前端上传仍先进入FinanceEXChatService，入口接收/临时文件早于存储许可，不能将统一入口视为已完成大文件准入。
+- 真实文件内容由 `DocumentStorage` 决定去向：`local/huawei-s3` 写入本服务对象存储，`api-store` 调用agentService文档上传接口，再由其分片上传EDM；没有skillId的S3分支保留。agentService分片不消除Chat整文件读入风险。
+- 当前api-store内容托管于下游，不支持经Chat下载或查询EDM实时状态；local/OBS下载能力单独保留。
+- 目标为前端经agentService授权直传EDM，由agentService完成核验和管理元数据；正文不经Chat/agent，当前协议未实现，见[W06](high-availability/risks.md#w06)。
 - 聊天请求只引用 `documentId`，不携带文件正文。
 - DomainAgent 或 Runtime 看到的是经过文档库回查后的可信附件元数据。
 - `fin_ex_uploaded_document_t` 是文档库事实源，支持最近文档、库中文档选择和后续连接器文档扩展。
@@ -379,7 +399,7 @@ stop；删除成功后应立即移除会话并取消本地订阅。
 
 `current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。`/messages` 会在有多个 sibling 版本的消息上返回 `versionInfo`，包含当前版本序号、版本总数和候选版本的 `switchLeafMessageId`。前端切换版本时可以先用 `GET /messages?leafMessageId={switchLeafMessageId}` 刷新聊天区，再用 `POST /path` 持久化当前选择；`/variants` 保留为查询完整候选内容和调试的接口。
 
-复杂前端或联调排障可以调用 `GET /v1/chat/sessions/{sessionId}/messages/tree` 读取完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。历史消息、tree 和 variants 返回的 `ChatMessageDto.attachments` 是消息附件展示快照，文件下载和预览仍由文档库接口独立鉴权。
+复杂前端或联调排障可以调用 `GET /v1/chat/sessions/{sessionId}/messages/tree` 读取完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。历史消息、tree 和 variants 返回的 `ChatMessageDto.attachments` 是消息附件展示快照，文件下载和预览仍须由文档库接口独立鉴权且受provider能力限制；当前api-store不提供经Chat的内容下载。
 
 ```mermaid
 flowchart TD

@@ -6,7 +6,7 @@
 
 > 当前代码架构快照。实线表示同步或严格有序调用，粗线表示流式消息，虚线表示异步或 best-effort；橙色节点为周期治理任务。
 
-> 物理边界按用户确认：当前只有一个agentService，包含管理、技能查询、统一chat和MCP；ChatService的DomainAgent适配器访问agentService，relayService也经其MCP调用下游。外部服务内部实现待联合验证，图不推断其线程池或持久化机制。未来拆分、文档迁移和大文件直传见[部署目标](high-availability/deployment.md#service-split)，不属于本图已实现能力。
+> 物理边界按用户确认：当前只有一个agentService，包含管理、技能查询、统一chat、MCP和文档上传；ChatService的DomainAgent适配器访问agentService，relayService也经其MCP调用下游。api-store适配器实际调用agentService文档上传接口，后者分片上传EDM；缺skillId的S3分支按现行合同保留。外部服务内部实现待联合验证，图不推断其线程池或持久化机制。未来拆分、文档迁移和前端经agentService授权直传EDM见[部署目标](high-availability/deployment.md#service-split)，不属于本图已实现能力。
 
 ## 整体架构图
 
@@ -96,7 +96,7 @@ flowchart TB
             end
             subgraph RuntimeExternal["Runtime依赖"]
                 direction TB
-                AgentService["agentService<br/>管理 / 技能查询 / 统一chat / MCP"]
+                AgentService["agentService<br/>管理 / 技能查询 / 统一chat / MCP / 文档上传"]
                 DomainAgentService["DomainAgent<br/>第三方"]
                 RelayService["relayService<br/>Delegate / Domain Expert / RESUME / stop"]
             end
@@ -104,7 +104,7 @@ flowchart TB
                 direction TB
                 SessionTitleService["Session Title Service"]
                 WeLink["WeLink 分享服务"]
-                ApiStore["API Store / EDM"]
+                Edm["EDM文档服务<br/>分片上传内部策略待联合验证"]
                 LongTermMemory["Long-term Memory Provider<br/>扩展点，默认关闭"]
             end
         end
@@ -178,7 +178,9 @@ flowchart TB
     DocumentService --> StorageAdapter
     StorageAdapter --> LocalStorage
     StorageAdapter --> Obs
-    StorageAdapter --> ApiStore
+    StorageAdapter -->|"api-store 整读后HTTP30s 无应用重试"| AgentService
+    AgentService -->|"EDM分片上传 用户确认"| Edm
+    AgentService -.->|"无skillId的S3兼容合同"| Obs
     ShareService -.->|"有界异步投递"| WeLink
 
     Admission -.->|"提交后调度，不等待"| SessionTitle
@@ -204,7 +206,7 @@ flowchart TB
     class Admission,Lease,Routing,RetentionGate,Binding,RuntimeDispatch,EventPipeline,Terminal core;
     class UseCaseAdapter,IntentAdapter,SkillConfigAdapter,DomainAdapter,RelayAdapter,AuthAdapter,StorageAdapter,StreamAdapter adapter;
     class OpenGauss,Redis,LocalStorage,Obs data;
-    class UseCaseService,IntentService,AgentService,DomainAgentService,RelayService,SessionTitleService,WeLink,ApiStore,EnterpriseAuth,LongTermMemory external;
+    class UseCaseService,IntentService,AgentService,DomainAgentService,RelayService,SessionTitleService,WeLink,Edm,EnterpriseAuth,LongTermMemory external;
     class SessionTitle,IntentRecord,RouteMemoryWrite service;
     class Governance scheduled;
 ```

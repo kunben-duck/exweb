@@ -33,12 +33,12 @@
 - 交付范围：运行稳定性风险分析、服务级时序图、加固任务设计、测试用例、故障预案和演练方案。**没有修改业务代码、配置、SQL或对外协议，没有实施生产故障注入。**
 - 当前结论以本方案及其源码链接为准；每项风险关闭必须具备对应实现与有效测试证据。
 - 当前为 Spring Boot 3.4.6 / JDK 21 / Servlet 主部署，混用响应式编排、阻塞 JDBC 和出站 HTTP/WS。用户确认WCM静态源、ALB文根、saas gateway（SaaS统一网关）和ADS Docker；当前ChatService、relayService与一体agentService共享DB与Redis。agentService包括管理、技能查询、统一chat和MCP，第三方intentService独立。目标要求各Region的ALB和ADS运行/控制面独立（P）；实际独立性、参数、数据复制和容灾实测仍待提供（E），见[部署与容灾设计](deployment.md)。
-- 未来拆分为adminService、toolService、agentService，加上ChatService/relayService共五服务，初期仍共享数据资源；文档管理迁入agentService，大文件直传对象存储，必须转发的EDM文件采用独立worker。拆分、直传和资源隔离均为P，不能当作当前保护。
+- 未来拆分为adminService、toolService、agentService，加上ChatService/relayService共五服务，初期仍共享数据资源；文档管理迁入agentService，500MiB文件由前端经agentService授权后直传EDM；agentService核验登记，Chat只引用，独立worker仅作已验证过渡。拆分、直传和资源隔离均为P，不能当作当前保护。
 - “全盘”指全部入口仍有场景归属，主风险清单按高影响稳定性故障筛选；纯业务正确性和安全专项不在本方案范围；不意味着证明不存在未知风险。S=源码事实，L=本轮本地验证，U=用户确认架构，P=待实施目标，E=环境待验证；U/P不是生产验收证据，“具备缺陷触发条件”不等于生产已经发生事故。
 
 #### 当前实现的关键语义
 
-1. 当前统一chat与Relay MCP都依赖agentService，因此Relay不是独立故障备用。DomainAgent、intentService、relayService分别列为[R19](risks.md#r19)、[R20](risks.md#r20)、[R21](risks.md#r21)，与agentService自身的[R16](risks.md#r16)分开定位。
+1. 当前api-store上传接口也属于agentService，其内部向EDM分片上传（U）；EDM直传尚待建设，不能将现有下游分片当成Chat已流式。当前统一chat与Relay MCP都依赖agentService，因此Relay不是独立故障备用。DomainAgent、intentService、relayService分别列为[R19](risks.md#r19)、[R20](risks.md#r20)、[R21](risks.md#r21)，与agentService自身的[R16](risks.md#r16)分开定位。
 2. 仓库默认Intent关闭；开启后的重试、故障转Relay行为需同时评估下游余量。统一chat与Relay都有各阶段期限，但应用超时、本地Stop返回不证明远端任务停止。默认值及计时范围只维护在[依赖调用策略](scenarios.md#wait-budgets)。
 3. 技能留存策略、附件校验和展示查询的失败语义不同，不能统一降级放行。新保护和服务拆分均需实装验收，不能把图中目标当作已有能力。
 4. [R22 WebSocket连接与订阅洪峰](risks.md#r22)列入第一轮P1条件性加固：当前单用户/单连接限制不能替代实例总量、握手/控制速率及恢复并发预算。大量连接场景上线前必须完成T22及D05验证。
@@ -95,7 +95,7 @@
 - 连接需求估算：`在途流数 × 每流事件速率 ÷ 每批事件数 × 每批持连接时间 + 其他业务占用`；模型用于选择压测区间，不作为性能承诺。
 - 内存预算：JVM基础占用 + 活跃Run累计数据 + 各缓冲区/对象副本 + 连接发送数据 + 文件在途字节 + GC余量；还要给direct/native及进程额外占用留预算。
 - 当前三服务、未来五服务及文档worker的所有实例数据库池、扩容及滚动发布重叠副本、治理保留和其他连接之和不得超过DB安全预算；隔离线程池或Redis命名空间不等于隔离共享资源。暂不全面读写分离，状态判断和Resume保持读取权威主库。
-- 500MiB文档是目标容量，不是当前默认允许值。评估堆内副本、临时盘、慢上传连接及存储完整流生命周期；文件大小不是进程内存上限。按[W06](risks.md#w06)分别验收直传和隔离转发，不通过单纯调大multipart上限放量。
+- 500MiB文档是目标容量，不是当前默认允许值。评估当前Chat整读/临时盘、agentService分片缓冲、EDM等待与任务残留，以及目标浏览器分片和控制请求预算；文件大小不是进程内存上限。按[W06](risks.md#w06)验收EDM直传及确需保留的隔离转发，不通过单纯调大multipart上限放量。
 - 限额降低须验证忙响应及客户端退避；重试、重连、回源和Watchdog同时恢复时也必须受预算约束。
 
 ### 4. 执行阶段、接口与交接

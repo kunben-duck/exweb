@@ -1,5 +1,7 @@
 # 文件上传接口 1.0
 
+此页描述当前**agentService文档上传接口**；ChatService通过名为`api-store`的适配器调用它，API Store不是额外部署的独立服务。EDM分支由agentService内部执行分片上传（用户确认），分片大小、并发、期限、重试及取消仍需联合确认。目标“前端经agentService授权直传EDM”见[高可用加固W06](architecture/high-availability/risks.md#w06)，尚未实施，不替代下列现行接口。
+
 ## 基本信息
 
 | 项目 | 内容 |

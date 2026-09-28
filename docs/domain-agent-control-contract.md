@@ -3,6 +3,10 @@
 版本：`v1.1`
 适用范围：DomainAgent 与 ChatService/Supervisor 之间的控制事件握手、拒答编码、澄清编码、审批编码、异常编码、敏感信息与数据安全拦截编码。
 
+当前可执行的 DomainAgent Ask User 使用 `approval-request + operation_type=questionnaire`，
+详见 [问卷及 HTTP 答案续跑](domain.md#64ask-user-问卷与答案续跑)。该分支复用现有 Interaction，
+不表示本文其他 `inputRequest/approvalRequest` 控制编码已经具备相同的等待与续跑能力。
+
 ---
 
 ## 1. 规范目标

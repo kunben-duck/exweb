@@ -24,6 +24,134 @@ class DomainAgentResponseNormalizerTest {
     private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(objectMapper);
 
     @Test
+    void questionnaireMetadataFollowsPendingContentAndPrecedesCard() {
+        var state = normalizer.newStreamState();
+        assertThat(normalizer.normalize("run1", "session1", "data: {\"content\":\"before<thi\"}\n\n", state))
+                .singleElement().satisfies(event -> assertThat(event.payload()).containsEntry("delta", "before"));
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"type":"approval-request","approval_id":"q1","operation_type":"questionnaire","questions":[{"question":"期间"}],"traceId":"trace-1","sessionId":"domain-session-new","messageId":"domain-message-1"}
+
+                data: {"sessionId":"must-not-apply","content":"discarded"}
+
+                """, state);
+        assertThat(events).extracting(ChatEvent::type).containsExactly(
+                "message.delta", "runtime.metadata", "runtime.metadata", "runtime.metadata", "runtime.card");
+        assertThat(events.getFirst().payload()).containsEntry("delta", "<thi");
+        assertThat(events.get(1).payload()).containsEntry("metadataType", "trace").containsEntry("traceId", "trace-1");
+        assertThat(events.get(2).payload()).containsEntry("metadataType", "domain_agent_session")
+                .containsEntry("runtimeSessionId", "domain-session-new")
+                .containsEntry("domainAgentSessionId", "domain-session-new");
+        assertThat(events.get(3).payload()).containsEntry("metadataType", "domain_agent_message")
+                .containsEntry("domainAgentMessageId", "domain-message-1");
+        assertThat(events.getLast().payload()).containsEntry("approval_id", "q1")
+                .doesNotContainKeys("sessionId", "runtimeSessionId");
+        assertThat(events).allSatisfy(event -> {
+            assertThat(event.runId()).isEqualTo("run1");
+            assertThat(event.sessionId()).isEqualTo("session1");
+        });
+        assertThat(events.toString()).doesNotContain("must-not-apply", "discarded");
+        assertThat(normalizer.finish("run1", "session1", state)).isEmpty();
+    }
+
+    @Test
+    void splitQuestionnaireRetainsSessionMetadataBeforeStoppingStream() {
+        String frame = "data: {\"type\":\"approval-request\",\"approval_id\":\"q1\","
+                + "\"operation_type\":\"questionnaire\",\"sessionId\":\"domain-session-new\","
+                + "\"questions\":[{\"question\":\"期间\"}]}\n\n";
+        for (int split = 6; split < frame.indexOf('}'); split++) {
+            var state = normalizer.newStreamState();
+            assertThat(normalizer.normalize("run1", "session1", frame.substring(0, split), state)).isEmpty();
+            List<ChatEvent> events = normalizer.normalize("run1", "session1", frame.substring(split)
+                    + "data: {\"sessionId\":\"late-session\"}\n\n", state);
+            assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.metadata", "runtime.card");
+            assertThat(events.getFirst().payload()).containsEntry("runtimeSessionId", "domain-session-new");
+            assertThat(normalizer.finish("run1", "session1", state)).isEmpty();
+        }
+    }
+
+    @Test
+    void malformedQuestionnaireWithMetadataDoesNotEmitBeforeValidation() {
+        var state = normalizer.newStreamState();
+        assertThatThrownBy(() -> normalizer.normalize("run1", "session1", """
+                data: {"type":"approval-request","operation_type":"questionnaire","sessionId":"invalid-session","questions":[]}
+
+                """, state)).isInstanceOf(DomainAgentProtocolException.class);
+        assertThat(normalizer.normalize("run1", "session1", "data: {\"content\":\"normal\"}\n\n", state))
+                .singleElement().satisfies(event -> assertThat(event.type()).isEqualTo("message.delta"));
+    }
+
+    @Test
+    void splitQuestionnaireDiscardsTrailingFramesAndFinishOutput() {
+        String questionnaire = "data: {\"type\":\"approval-request\",\"operation_type\":\"questionnaire\","
+                + "\"approval_id\":\"q1\",\"questions\":[{\"question\":\"期间\"}]}\n\n";
+        for (int split = 6; split < questionnaire.indexOf('}'); split++) {
+            var state = normalizer.newStreamState();
+            assertThat(normalizer.normalize("r", "s", questionnaire.substring(0, split), state)).isEmpty();
+            List<ChatEvent> result = normalizer.normalize("r", "s", questionnaire.substring(split)
+                    + "data: {\"content\":\"discard\"}\n\ndata: {\"endFlag\":true}\n\n", state);
+            assertThat(result).extracting(ChatEvent::type).containsExactly("runtime.card");
+            assertThat(normalizer.finish("r", "s", state)).isEmpty();
+        }
+    }
+
+    @Test
+    void unrelatedApprovalAndOrdinaryCardsKeepExistingMapping() {
+        List<ChatEvent> result = normalizer.normalize("r", "s", """
+                data: {"type":"approval-request","operation_type":"other","cardUrl":"https://example.test/card.js"}
+
+                data: {"content":"normal"}
+
+                data: {"endFlag":true}
+
+                """);
+        assertThat(result).extracting(ChatEvent::type)
+                .containsExactly("runtime.card", "message.delta", "message.completed");
+        assertThat(result.getFirst().payload()).containsEntry("sourceType", "cardUrl");
+    }
+
+    @Test
+    void questionnaireEndsChunkAndRetainsOnlyPrecedingContent() {
+        var state = normalizer.newStreamState();
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"content":"before"}
+
+                data: {"type":"approval-request","approval_id":"q1","operation_type":"questionnaire","mode":"questionnaire","questions":[{"question":"期间","options":[{"label":"本月"}],"multi_select":false}],"metadata":{"token":"secret","business":"kept"}}
+
+                data: {"content":"must not appear"}
+
+                data: {"endFlag":true}
+
+                """, state);
+        assertThat(events).extracting(ChatEvent::type).containsExactly("message.delta", "runtime.card");
+        assertThat(events.getLast().payload()).containsEntry("source", "domain-agent")
+                .containsEntry("sourceType", "approval-request").containsEntry("approval_id", "q1");
+        assertThat(events.getLast().payload().toString()).contains("期间", "本月", "kept").doesNotContain("secret");
+        assertThat(normalizer.normalize("run1", "session1", "data: {\"content\":\"late\"}\n\n", state)).isEmpty();
+        assertThat(normalizer.finish("run1", "session1", state)).isEmpty();
+    }
+
+    @Test
+    void malformedQuestionnaireFailsInsteadOfBecomingOrdinaryCard() {
+        for (String fields : List.of("\"questions\":[]", "\"approval_id\":\"q1\",\"questions\":[]",
+                "\"approval_id\":\"q1\",\"questions\":[{\"question\":\" \"}]",
+                "\"approval_id\":\"q1\",\"questions\":[{\"question\":\"same\"},{\"question\":\"same\"}]")) {
+            assertThatThrownBy(() -> normalizer.normalize("r", "s",
+                    "data: {\"type\":\"approval-request\",\"operation_type\":\"questionnaire\"," + fields + "}\n\n"))
+                    .isInstanceOf(DomainAgentProtocolException.class);
+        }
+    }
+
+    @Test
+    void callbackRejectsQuestionnaireBeforeProducingBusinessEvents() throws Exception {
+        var frame = objectMapper.readTree("""
+                {"type":"approval-request","operation_type":"questionnaire","approval_id":"q1",
+                 "questions":[{"question":"期间"}]}
+                """);
+        assertThatThrownBy(() -> normalizer.normalizeCallbackFrame("r", "s", frame, normalizer.newStreamState()))
+                .isInstanceOf(DomainAgentProtocolException.class);
+    }
+
+    @Test
     void defaultsStructuredFrameLimitTo256KiB() {
         DomainAgentProperties properties = new DomainAgentProperties();
 

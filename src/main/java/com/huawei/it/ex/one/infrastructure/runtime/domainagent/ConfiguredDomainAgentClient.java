@@ -5,8 +5,10 @@
 package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
+import com.huawei.it.ex.one.application.integration.agent.DomainAgentQuestionnaire;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -65,15 +67,30 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
     public Flux<ChatEvent> query(DomainAgentRequest request) {
         validate(request);
         Map<String, Object> body = requestMapper.toWireRequest(request);
+        return exchange(request.runId(), request.sessionId(), body, request.forwardHeaders(), () -> { });
+    }
+
+    @Override
+    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
+        validate(null);
+        Map<String, Object> body = requestMapper.toInteractionWireRequest(request);
+        return exchange(request.runId(), request.sessionId(), body, request.forwardHeaders(),
+                request.dispatchState()::markResponseDispatched);
+    }
+
+    private Flux<ChatEvent> exchange(String runId, String sessionId, Map<String, Object> body,
+                                     RuntimeForwardHeaders forwardHeaders, Runnable onSubmit) {
         Flux<ChatEvent> source = Flux.defer(() -> {
             DomainAgentResponseNormalizer.DomainAgentStreamState streamState = responseNormalizer.newStreamState();
             DomainAgentUtf8StreamDecoder utf8Decoder = new DomainAgentUtf8StreamDecoder();
+            // HTTP 提交开始后无法证明答案未送达，失败时不得自动重发问卷答案。
+            onSubmit.run();
             return webClientBuilder.build()
                     .post()
                     .uri(fullUrl(properties.getChatPath()))
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_NDJSON, MediaType.APPLICATION_JSON)
-                    .headers(headers -> applyOutboundHeaders(headers, request.forwardHeaders()))
+                    .headers(headers -> applyOutboundHeaders(headers, forwardHeaders))
                     .bodyValue(body)
                     .retrieve()
                     /*
@@ -87,21 +104,22 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                     .map(utf8Decoder::decode)
                     .concatWith(Mono.fromSupplier(utf8Decoder::finish))
                     .flatMapIterable(chunk -> responseNormalizer.normalize(
-                            request.runId(), request.sessionId(), chunk, streamState))
+                            runId, sessionId, chunk, streamState))
                     .concatWith(Flux.defer(() -> Flux.fromIterable(
-                            responseNormalizer.finish(request.runId(), request.sessionId(), streamState))))
+                            responseNormalizer.finish(runId, sessionId, streamState))))
                     /*
                      * DomainAgent 的 endFlag=true 已经映射为 message.completed。收到后主动闭合本轮流，
                      * 避免下游 HTTP 连接未关闭时持续占用本机 bulkhead 和 WebClient 资源。
                      */
                     .takeUntil(event -> "message.completed".equals(event.type())
-                            || "run.async_running".equals(event.type()));
+                            || "run.async_running".equals(event.type())
+                            || DomainAgentQuestionnaire.isRequest(event));
         });
         return enforceDomainAgentTotalDeadline(source)
                 .doOnError(ex -> log.warn(SystemErrorLogEntry.builder(classifyDomainAgentFailure(ex),
                                 "DomainAgent response stream failed")
-                        .runId(request.runId())
-                        .sessionId(request.sessionId())
+                        .runId(runId)
+                        .sessionId(sessionId)
                         .operation("domain-agent.query")
                         .build(), ex));
     }

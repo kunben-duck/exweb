@@ -37,6 +37,7 @@ class DomainAgentPropertiesTest {
             assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(120));
             assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
             assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofMinutes(15));
+            assertThat(properties.getQuestionnaireWaitTimeout()).isEqualTo(Duration.ZERO);
             assertThat(properties.isAsyncTaskEnabled()).isFalse();
             assertThat(properties.getAsyncTaskMaxDuration()).isEqualTo(Duration.ofHours(24));
             assertThat(properties.getAsyncTaskCallbackMaxConcurrency()).isEqualTo(4);
@@ -101,6 +102,15 @@ class DomainAgentPropertiesTest {
                     assertThat(properties.normalizedBindingCompensationRetryBackoff())
                             .isEqualTo(Duration.ofSeconds(1));
                 });
+    }
+
+    @Test
+    void applicationYamlBindsIndependentQuestionnaireWaitTimeout() throws IOException {
+        DomainAgentProperties properties = bindApplicationYaml(Map.of(
+                "FINANCEEX_DOMAIN_AGENT_QUESTIONNAIRE_WAIT_TIMEOUT", "45s",
+                "FINANCEEX_RELAY_QUESTIONNAIRE_WAIT_TIMEOUT", "90s"));
+
+        assertThat(properties.getQuestionnaireWaitTimeout()).isEqualTo(Duration.ofSeconds(45));
     }
 
     @Test

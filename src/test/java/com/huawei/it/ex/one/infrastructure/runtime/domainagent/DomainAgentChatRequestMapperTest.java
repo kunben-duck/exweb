@@ -8,8 +8,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.document.DocumentSource;
 import com.huawei.it.ex.one.domain.document.DocumentStatus;
@@ -26,6 +29,31 @@ class DomainAgentChatRequestMapperTest {
     private final DomainAgentProperties properties = new DomainAgentProperties();
     private final DomainAgentChatRequestMapper mapper =
             new DomainAgentChatRequestMapper(properties);
+
+    @Test
+    void questionnaireControlUsesOnlyTrustedIdsAndNeverResendsQueryOrFiles() {
+        Map<String, Object> response = Map.of("approved", true, "scope", "once",
+                "questionnaireAnswers", Map.of("label", Map.of("期间", "本月")),
+                "metadata", Map.of("skillId", "forged", "runId", "forged", "query", "forged"));
+        assertThat(mapper.toInteractionWireRequest(interaction(response)))
+                .containsExactlyInAnyOrderEntriesOf(Map.of("type", "approval-response", "runId", "run-b",
+                        "messageId", "user-message", "sessionId", "runtime-session", "skillId", "skill-a",
+                        "request_id", "q1", "approved", true, "scope", "once",
+                        "questionnaire_answers", Map.of("label", Map.of("期间", "本月"), "ignore", false)));
+        assertThat(mapper.toInteractionWireRequest(interaction(Map.of("approved", false,
+                "questionnaireAnswers", Map.of("ignore", true)))))
+                .containsEntry("approved", false).containsEntry("questionnaire_answers", Map.of("ignore", true));
+        assertThatThrownBy(() -> mapper.toInteractionWireRequest(interaction(Map.of("approved", true,
+                "questionnaireAnswers", Map.of("ignore", true)))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private AgentRuntimeInteractionResponseRequest interaction(Map<String, Object> response) {
+        return new AgentRuntimeInteractionResponseRequest("tenant", "user", "user", null, "session", "run-b",
+                "runtime-session", "domain-agent", "interaction", "CLARIFICATION", "q1", response,
+                RuntimeForwardHeaders.empty(), TraceContext.empty(),
+                Map.of("userMessageId", "user-message", "skillId", "skill-a"), RuntimeInteractionDispatchState.tracked());
+    }
 
     @Test
     @SuppressWarnings("unchecked")

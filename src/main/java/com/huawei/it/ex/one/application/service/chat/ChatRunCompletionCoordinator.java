@@ -330,6 +330,12 @@ final class ChatRunCompletionCoordinator {
         payload.put("messageReady", target.messageReady());
         payload.put("assistantMessageId", target.assistantMessageId());
         payload.put("feedbackTargetMessageId", target.assistantMessageId());
+        if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(waitingRequest.runtimeProvider())
+                && waitingRequest.interactionType() == ChatInteractionType.AGENT_CLARIFICATION
+                && waitingRequest.runtimeSessionId() != null && !waitingRequest.runtimeSessionId().isBlank()) {
+            // 上游可能提前生成终态 payload；以顺序处理会话元数据后准备的问卷会话为准，避免写回旧 ID。
+            payload.put("runtimeSessionId", waitingRequest.runtimeSessionId());
+        }
         if (waitingRequest.expiresAt() != null) {
             payload.put("expiresAt", waitingRequest.expiresAt().toString());
         }

@@ -795,6 +795,14 @@ public class SessionApplicationService implements ChatSessionFacade {
         return saved;
     }
 
+    @Transactional(readOnly = true, timeout = 2)
+    String questionnaireAssistantContent(UserContext user, String sessionId, String messageId) {
+        return messageRepository.findInputByOwnerAndId(user.tenantId(), user.ownerUserId(), messageId)
+                .filter(message -> sessionId.equals(message.sessionId()) && "assistant".equals(message.role()))
+                .orElseThrow(() -> new IllegalStateException("DomainAgent 问卷原 assistant 不存在或不属于当前会话"))
+                .content();
+    }
+
     private AssistantPersistenceProjection projectAssistantPersistence(
             String content,
             List<ChatMessagePartDraft> partDrafts,

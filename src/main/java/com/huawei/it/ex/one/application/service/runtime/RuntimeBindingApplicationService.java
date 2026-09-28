@@ -544,6 +544,45 @@ public class RuntimeBindingApplicationService {
         return resumed;
     }
 
+    /** DomainAgent 问卷只续接持久化 Interaction 引用的原 Binding，校验与更新共用 execution 栅栏。 */
+    public RuntimeBinding resumeDomainAgentForInteraction(ChatInteractionRequest request,
+                                                          String runId, RunExecutionClaim claim, String skillId) {
+        if (request == null || claim == null || !Objects.equals(runId, claim.runId())) {
+            throw new IllegalArgumentException("DomainAgent Interaction Binding 续接参数不完整");
+        }
+        RuntimeBinding binding = loadInteractionBinding(request);
+        if (!DOMAIN_AGENT_PROVIDER.equals(request.runtimeProvider())
+                || !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                || binding.status() != RuntimeBindingStatus.ACTIVE
+                || !Objects.equals(request.sourceRunId(), binding.lastRunId())
+                || skillId == null || !skillId.equals(metadataText(binding, "domainAgentId"))
+                || request.approvalId() == null || request.approvalId().isBlank()
+                || request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
+                || !Objects.equals(request.runtimeSessionId(), binding.runtimeSessionId())) {
+            throw new IllegalStateException("DomainAgent Interaction Binding 不可续接: " + binding.id());
+        }
+        RuntimeBinding next = binding.withRun(runId, binding.expiresAt())
+                .withLeafMessageId(request.assistantMessageId());
+        RuntimeBinding resumed = repository.resumeInteractionWithExecutionGuard(next, request.sourceRunId(), claim)
+                .orElseThrow(() -> new ChatEventAppendRejectedException(
+                        "DomainAgent Interaction Binding 被 run/execution 栅栏拒绝: runId=" + runId));
+        synchronizeCache(resumed);
+        return resumed;
+    }
+
+    public boolean restoreUnstartedDomainAgentInteraction(RuntimeBinding binding, String runId, String sourceRunId) {
+        if (binding == null || !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                || runId == null || runId.isBlank() || sourceRunId == null || sourceRunId.isBlank()) {
+            return false;
+        }
+        boolean restored = repository.restoreUnstartedForRun(
+                binding.withRun(sourceRunId, binding.expiresAt()), runId);
+        if (restored) {
+            cache.evict(binding.tenantId(), binding.userId(), binding.chatSessionId());
+        }
+        return restored;
+    }
+
     /**
      * run-B 尚未订阅 Relay 时只回退 Binding 的 lastRunId，不销毁可恢复的 Relay session。
      */

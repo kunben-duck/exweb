@@ -24,6 +24,11 @@ public interface DomainAgentClient {
      */
     Flux<ChatEvent> query(DomainAgentRequest request);
 
+    /** 向同一 chat 地址提交问卷控制响应，不重新发送普通 query。 */
+    default Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
+        return Flux.error(new UnsupportedOperationException("DomainAgent interaction is not supported"));
+    }
+
     /**
      * 尽力取消 DomainAgent run。
      *

@@ -175,6 +175,10 @@ class ChatRuntimeCoordinatorConfiguration {
             InteractionEventFactory eventFactory,
             InteractionRunLifecycle lifecycle,
             ChatEventPersistenceCoordinator persistenceCoordinator,
+            DomainAgentRefusalCoordinator refusalCoordinator,
+            DocumentFacade documentFacade,
+            RunMemoryContextAssembler memoryAssembler,
+            SessionApplicationService sessionService,
             @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
         return new RuntimeInteractionContinuationCoordinator(
                 runtimeBindingService,
@@ -183,7 +187,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 eventFactory,
                 lifecycle,
                 persistenceCoordinator,
-                eventIoScheduler);
+                eventIoScheduler,
+                new DomainAgentQuestionnaireContinuation(refusalCoordinator, documentFacade, memoryAssembler, sessionService));
     }
 
     @Bean

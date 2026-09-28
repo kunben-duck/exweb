@@ -20,7 +20,7 @@
 | Relay Delegate、专家、工具与技能广播 | [S03](#s03) |
 | 聚合专家、Binding 续接、强制重意图 | [S04](#s04) |
 | 普通 Intent 澄清、模糊候选、OTHER、代选 | [S05](#s05) |
-| Relay 问卷、回答、忽略及连续问卷 | [S06](#s06) |
+| Relay/DomainAgent 问卷、回答、忽略及连续问卷 | [S06](#s06) |
 | 拒答自动重路由、确认/拒绝切换 | [S07](#s07) |
 | 候选立即调用、旧 Run 停止及路由回放 | [S08](#s08) |
 | 不支持附件格式、不支持任何附件、数量超限 | [S09](#s09) |
@@ -2534,11 +2534,11 @@ OTHER 的 Run-B 开始段后重新 Intent，不直接调用技能：
 三种模糊续跑都复用原 user/assistant；前端按 response 的 assistantMessageId 在原卡片后追加，不新建第二个问题区域。B 如再次模糊，使用新的 Interaction 重复此流程。之后候选立即调用使用 B 的 runId 与原 userMessageId，不使用 A 的 runId。历史保存 A/B Parts 各自 runId，Resume 也按对应 Run 恢复；不是所有续跑都创建新 assistant。
 
 <a id="s06"></a>
-### S06 Relay 问卷
+### S06 Relay与DomainAgent问卷
 
 #### 发问与等待
 
-REST 创建 Run 后，Relay 返回 `approval-request(operation_type=questionnaire)`，本轮下游 WebSocket 关闭，并通过等待终态事务保存问卷及 Interaction。以下示例仅适用于 Relay；直接 DomainAgent 当前不支持该问卷等待和答案续跑协议。
+REST 创建 Run 后，Relay 或 DomainAgent 返回 `approval-request(operation_type=questionnaire)`，本轮下游连接结束，并通过等待终态事务保存问卷及 Interaction。两者复用前端问卷协议；以下先展示 Relay，再说明 DomainAgent 的来源和传输差异。
 
 ```json
 [
@@ -3063,6 +3063,105 @@ REST `POST /v1/chat/runs`，提交已持久化的 Relay Interaction：
 ```
 
 使用新 interaction_next 和 Run-C；旧 interaction_relay 不可重复提交。approval-response 进入下游 WebSocket outbound 前失败可能条件恢复原 WAITING，进入 outbound 后超时/断连可能已送达，不自动重发答案，按最新 stream-status 决定重试还是新问题。FULL 按现有规则保存正文、问卷与答案 Parts；no-store 保留问卷/答案/等待等必要控制事实。恢复问卷不依赖一直保持旧 Run-A topic。
+
+#### DomainAgent问卷差异
+
+DomainAgent仍使用HTTP/SSE接入，不建立下游WebSocket。以下是前端WebSocket收到的完整消息示例，
+不是下游原始SSE帧；省略此前的`run.started`和正文事件。问卷后结束本轮HTTP，忽略同chunk中的后续帧：
+
+```json
+[
+  {
+    "type": "message",
+    "topicId": "chat-run-run_question_domain",
+    "offset": "1791",
+    "payload": {
+      "type": "conversation-turn-stream",
+      "payload": {
+        "type": "stream-item",
+        "conversationId": "session_demo",
+        "turnId": "run_question_domain",
+        "streamItemId": "evt_1791",
+        "serverTimestampMs": 1789516801791,
+        "encodedItem": {
+          "encoding": "chat-event-json-v1",
+          "event": "runtime.card",
+          "data": {
+            "runId": "run_question_domain",
+            "sessionId": "session_demo",
+            "sequence": 1791,
+            "type": "runtime.card",
+            "payload": {
+              "source": "domain-agent",
+              "sourceType": "approval-request",
+              "type": "approval-request",
+              "approval_id": "approval_domain_1",
+              "operation_type": "questionnaire",
+              "mode": "questionnaire",
+              "message": "请补充分析范围",
+              "questions": [{
+                "question": "请选择分析期间",
+                "options": [{"label": "本月"}, {"label": "上月"}],
+                "multi_select": false
+              }]
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "message",
+    "topicId": "chat-run-run_question_domain",
+    "offset": "1792",
+    "payload": {
+      "type": "conversation-turn-stream",
+      "payload": {
+        "type": "stream-item",
+        "conversationId": "session_demo",
+        "turnId": "run_question_domain",
+        "streamItemId": "evt_1792",
+        "serverTimestampMs": 1789516801792,
+        "encodedItem": {
+          "encoding": "chat-event-json-v1",
+          "event": "run.waiting_user",
+          "data": {
+            "runId": "run_question_domain",
+            "sessionId": "session_demo",
+            "sequence": 1792,
+            "type": "run.waiting_user",
+            "payload": {
+              "status": "WAITING_USER",
+              "interactionType": "AGENT_CLARIFICATION",
+              "interactionId": "interaction_domain",
+              "assistantMessageId": "msg_question_domain",
+              "feedbackTargetMessageId": "msg_question_domain",
+              "messageReady": true,
+              "expiresAt": "2026-09-17T00:00:00Z"
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+随后为现有`done(terminalEventType=run.waiting_user)`，不生成`run.completed`。
+前端向`POST /v1/chat/runs`提交上节相同答案结构，仅替换`interactionId=interaction_domain`。
+响应中的新Run-B携带原`userMessageId`；订阅其新topic，在原assistant上继续追加，不能创建第二个问题区域。
+Run-B先返回`run.started`和`runtime.metadata(sourceType=clarification-response)`，答案事件提交完成后
+后端才向原DomainAgent发起第二次HTTP请求。下游请求见[DomainAgent协议](domain.md#64ask-user-问卷与答案续跑)。
+
+续跑首次不调用Intent，也不重发原query/附件/messages；若下游拒答，再按发问时冻结的逻辑入口、
+聚合专家范围、原query与答案走既有重意图流程。内部续跑上下文不会出现在前端卡片或历史Parts中。
+普通卡片、Intent澄清、Relay问卷仍按各自规则处理，不凭`message`字段推断等待。
+
+DomainAgent自动忽略仅由`financeex.domain-agent.questionnaire-wait-timeout`控制，默认`0s`，
+与Relay独立；开启后使用相同`autoActionAt/autoActionTimeoutMs/autoActionType`和忽略请求。
+HTTP提交前失败允许条件恢复WAITING，开始提交后断线、超时视为可能送达，不自动重发答案。
+前端以最新stream-status判断是否可重试；等待期不需要一直保持旧topic，刷新恢复方式与Relay相同。
+FULL追加原正文及Parts；no-store只保存占位正文和必要问卷/答案控制事实。实际渲染与下游恢复须联调验证。
 
 <a id="s07"></a>
 ### S07 拒答、自动重路由与人工确认
@@ -5988,4 +6087,6 @@ SSE 的 data 是 WS 外层 payload，而不是完整 WS Envelope。例如：
 
 DomainAgent Ask User 回退验证（2026-09-17）：S06 仅保留 Relay 问卷，并同步修正 OpenAPI 等待示例。当前手册 57 个 JSON 块、156 条业务 message Envelope 通过语法及身份/序号关联检查，6 个 OpenAPI WS 命名示例与手册一致，107 个本地引用及 43 处链接有效；前端联调文档 71 个 JSON 示例可解析。JDK 21 定向测试 379 项、全量测试 1549 项均无失败或错误，全量中 1 项既有 S3 集成测试跳过，打包通过。生产源码、配置、Mapper 与测试均恢复至 `52f2906c`，未进行真实下游或生产数据库验证。
 
-发布前须在仍支持 DomainAgent Ask User 的版本中完成或 Stop 存量问卷及答案续跑任务，并协调下游停止发送该问卷协议；回退版本不兼容未完成的 DomainAgent 问卷续跑。历史消息和事件不删除，Relay 问卷、Intent 澄清及拒答切换确认不受此次功能回退影响。
+上述2026-09-17记录仅描述当时回退的验证结果，不代表当前版本能力。当前已重新接入DomainAgent Ask User，协议及发布约束以下文和S06为准。
+
+本次恢复上线须先部署所有承接流量的兼容实例，再启用下游问卷帧；不要让回退版本处理新问卷的续跑。下游必须在HTTP断开后保留等待上下文，并支持按原session和问卷ID恢复。默认不启用自动忽略；只有下游支持`ignore=true`且前端完成联调后才可开启。部署不自动重放旧答案、不修改历史数据。

@@ -39,6 +39,8 @@ public class DomainAgentProperties {
     private Duration streamIdleTimeout = Duration.ofSeconds(300);
     /** DomainAgent 查询从 HTTP 订阅开始计算的绝对总超时。 */
     private Duration streamTotalTimeout = Duration.ofMinutes(15);
+    /** 前端自动忽略问卷的等待时间；0 表示仅等待用户手动处理。 */
+    private Duration questionnaireWaitTimeout = Duration.ZERO;
     /** 单次 DomainAgent 调用最大附件数。 */
     private int maxAttachments = 10;
     /** 单个完整或未完成 DomainAgent 流式 frame 的最大字节数，防止下游异常大 JSON 导致 OOM。 */
@@ -93,6 +95,8 @@ public class DomainAgentProperties {
     public void setStreamIdleTimeout(Duration streamIdleTimeout) { this.streamIdleTimeout = streamIdleTimeout; }
     public Duration getStreamTotalTimeout() { return streamTotalTimeout; }
     public void setStreamTotalTimeout(Duration streamTotalTimeout) { this.streamTotalTimeout = streamTotalTimeout; }
+    public Duration getQuestionnaireWaitTimeout() { return questionnaireWaitTimeout; }
+    public void setQuestionnaireWaitTimeout(Duration timeout) { this.questionnaireWaitTimeout = timeout; }
     public int getMaxAttachments() { return maxAttachments; }
     public void setMaxAttachments(int maxAttachments) { this.maxAttachments = maxAttachments; }
     public int getMaxPendingFrameBytes() { return maxPendingFrameBytes; }

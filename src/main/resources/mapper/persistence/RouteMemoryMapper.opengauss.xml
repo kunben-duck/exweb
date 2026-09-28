@@ -51,7 +51,8 @@
 
     <!--
       查询会话最近可发送给意图服务的路由摘要，排除 route_source=front-selected 的前端直选事实。
-      入参: tenantId/userId/sessionId 为归属边界，limit 为 TopK 限制；过滤后按创建时间倒序返回。
+      入参: tenantId/userId/sessionId 为归属边界，limit 为 TopK 限制；excludedSourceRunId 可选，
+      拒答重意图时排除本轮路由但保留无来源 Run 的存量记录；过滤后按创建时间倒序返回。
     -->
     <select id="findRecentRoutes" resultMap="routeMemoryResultMap">
         SELECT <include refid="routeMemoryColumns"/>
@@ -62,6 +63,9 @@
           AND item_type = 'ROUTE'
           AND status = 'ACTIVE'
           AND (route_source IS NULL OR route_source &lt;&gt; 'front-selected')
+        <if test="excludedSourceRunId != null and excludedSourceRunId != ''">
+          AND (source_run_id IS NULL OR source_run_id &lt;&gt; #{excludedSourceRunId})
+        </if>
         ORDER BY created_at DESC
         LIMIT #{limit}
     </select>

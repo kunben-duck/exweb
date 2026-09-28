@@ -85,6 +85,12 @@ public class RouteMemoryApplicationService {
 
     public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
                                             Map<String, Object> lastIntentRejectReason) {
+        return loadForIntent(user, sessionId, routeTrigger, lastIntentRejectReason, null);
+    }
+
+    /** 仅过滤本次出站 history，不撤销已生效的路由事实或折叠澄清记录。 */
+    public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
+                                            Map<String, Object> lastIntentRejectReason, String excludedSourceRunId) {
         if (user == null || blank(sessionId)) {
             return fallbackContext(routeTrigger, lastIntentRejectReason);
         }
@@ -93,7 +99,8 @@ public class RouteMemoryApplicationService {
                 () -> {
                     List<Map<String, Object>> history = new ArrayList<>();
                     List<RouteMemoryItem> routes = new ArrayList<>(repository.findRecentRoutes(user.tenantId(),
-                            user.ownerUserId(), sessionId, properties.normalizedTopK()));
+                            user.ownerUserId(), sessionId, properties.normalizedTopK(),
+                            blank(excludedSourceRunId) ? null : excludedSourceRunId.trim()));
                     Collections.reverse(routes);
                     List<RouteMemoryItem> visibleRoutes = routes.stream()
                             .filter(this::visibleInIntentHistory)

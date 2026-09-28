@@ -20,7 +20,13 @@ public interface RouteMemoryRepository {
      *
      * <p>过滤必须发生在 TopK 限制之前，避免前端直选事实占用意图 history 配额。</p>
      */
-    List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit);
+    default List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit) {
+        return findRecentRoutes(tenantId, userId, sessionId, limit, null);
+    }
+
+    /** 排除指定 Run 的路由事实；与前端直选过滤一样，必须在 TopK 截取之前执行。 */
+    List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit,
+                                          String excludedSourceRunId);
 
     List<RouteMemoryItem> findActiveClarifications(String tenantId, String userId, String sessionId);
 

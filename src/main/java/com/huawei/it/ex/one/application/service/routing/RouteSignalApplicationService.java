@@ -435,11 +435,22 @@ public class RouteSignalApplicationService {
     }
 
     private MemoryContext memoryWithRouteContext(IntentRouteRequest request) {
-        RouteMemoryContext context = routeMemoryService == null
-                ? new RouteMemoryContext(request.routeTrigger(), List.of(), request.lastRejectReason())
-                : routeMemoryService.loadForIntent(request.user(), request.session().id(),
-                request.routeTrigger(), request.lastRejectReason());
-        context = mergeInlineRouteHistory(context, request.memory());
+        String excludedRunId = RouteMemoryApplicationService.TRIGGER_DOMAIN_REJECT.equals(request.routeTrigger())
+                ? firstText(request.runId()) : null;
+        RouteMemoryContext context;
+        if (routeMemoryService == null) {
+            context = new RouteMemoryContext(request.routeTrigger(), List.of(), request.lastRejectReason());
+        } else if (excludedRunId == null) {
+            context = routeMemoryService.loadForIntent(request.user(), request.session().id(),
+                    request.routeTrigger(), request.lastRejectReason());
+        } else {
+            context = routeMemoryService.loadForIntent(request.user(), request.session().id(),
+                    request.routeTrigger(), request.lastRejectReason(), excludedRunId);
+        }
+        // 本轮拒答路由可能尚未异步落库；不再补入无法逐条确认来源的内存 route，防止过滤后重新混入。
+        if (excludedRunId == null) {
+            context = mergeInlineRouteHistory(context, request.memory());
+        }
         context = mergeInlineClarificationHistory(context, request.command());
         MemoryContext memory = request.memory() == null ? MemoryContext.empty() : request.memory();
         if (shortTermMemoryAssembler == null) {

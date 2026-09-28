@@ -739,6 +739,17 @@ class MyBatisXmlMapperConsistencyTest {
                 .doesNotContain("route_source &lt;&gt; 'front-selected'");
     }
 
+    @Test
+    void routeMemoryIntentHistoryShouldExcludeCurrentRunBeforeTopKWithoutDiscardingLegacyRows() throws IOException {
+        String mapper = Files.readString(MAPPER_XML_ROOT.resolve("persistence/RouteMemoryMapper.opengauss.xml"));
+        int start = mapper.indexOf("<select id=\"findRecentRoutes\"");
+        String query = mapper.substring(start, mapper.indexOf("</select>", start));
+        int filter = query.indexOf("AND (source_run_id IS NULL OR source_run_id &lt;&gt; #{excludedSourceRunId})");
+
+        assertThat(filter).isGreaterThanOrEqualTo(0).isLessThan(query.indexOf("ORDER BY created_at DESC"));
+        assertThat(query).contains("<if test=\"excludedSourceRunId != null and excludedSourceRunId != ''\">");
+    }
+
     private List<String> validateXmlMapper(Path xmlFile) {
         try {
             String xml = Files.readString(xmlFile);

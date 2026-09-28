@@ -128,6 +128,66 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
+    void excludesAllCurrentRunRoutesBeforeTopKButPreservesPreviousRunsAndLegacyRows() {
+        RouteMemoryProperties properties = new RouteMemoryProperties();
+        properties.setTopK(3);
+        RouteMemoryApplicationService reader = new RouteMemoryApplicationService(
+                repository, new FixedIdGenerator(), properties);
+        for (String sourceRunId : new String[] {null, "run-previous-a", "run-previous-b", "run-current",
+                "run-current", "run-current", "run-current"}) {
+            reader.appendRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                    user, "session1", sourceRunId, "相同问题", intent("skill-a", "相同意图"),
+                    RouteTarget.domainAgent("skill-a", "intent-agent", 1.0, "accepted")));
+        }
+        reader.appendClarification(user, "session1", "run-current", "interaction1", Map.of(
+                "originalQuery", "原问题", "clarifyQuestion", "需要哪个期间？"));
+        Map<String, Object> reason = Map.of("lastIntent", "相同意图", "domainRejectMessage", "不支持");
+        List<RouteMemoryItem> beforeRead = List.copyOf(repository.items);
+
+        RouteMemoryContext context = reader.loadForIntent(user, "session1", "domain_reject", reason, "run-current");
+
+        Map<String, Object> route = Map.of("type", "route", "query", "相同问题", "intent", "相同意图");
+        assertThat(context.history()).containsExactly(route, route, route,
+                Map.of("type", "clarify", "query", "原问题", "clarifyQuestion", "需要哪个期间？"));
+        assertThat(context.latestRouteSourceRunId()).isEqualTo("run-previous-b");
+        assertThat(context.routeTrigger()).isEqualTo("domain_reject");
+        assertThat(context.lastIntentRejectReason()).isEqualTo(reason);
+        assertThat(repository.items).containsExactlyElementsOf(beforeRead);
+        assertThat(reader.loadForIntent(user, "session1", "first_turn", Map.of()).latestRouteSourceRunId())
+                .isEqualTo("run-current");
+    }
+
+    @Test
+    void currentRunExclusionIsStableBeforeDuringAndAfterQueuedRouteWrites() {
+        service.appendRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "session1", "run-previous", "之前问题", intent("skill-old", "之前意图"),
+                RouteTarget.domainAgent("skill-old", "intent-agent", 1.0, "accepted")));
+        List<Runnable> writes = new ArrayList<>();
+        RouteMemoryApplicationService delayed = new RouteMemoryApplicationService(
+                repository, new FixedIdGenerator(), new RouteMemoryProperties(), Runnable::run, writes::add);
+        for (String skill : List.of("a", "b", "c")) {
+            delayed.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                    user, "session1", "run-current", "本轮问题", intent(skill, skill),
+                    RouteTarget.domainAgent(skill, "intent-agent", 1.0, "accepted")));
+        }
+
+        for (int completed = 0; completed <= writes.size(); completed++) {
+            RouteMemoryContext context = delayed.loadForIntent(user, "session1", "domain_reject",
+                    Map.of(), "run-current");
+            assertThat(context.history()).containsExactly(
+                    Map.of("type", "route", "query", "之前问题", "intent", "之前意图"));
+            assertThat(context.latestRouteSourceRunId()).isEqualTo("run-previous");
+            if (completed < writes.size()) {
+                writes.get(completed).run();
+            }
+        }
+
+        assertThat(delayed.loadForIntent(user, "session1", "domain_reject", Map.of(), "run-next")
+                .history()).extracting(item -> item.get("intent")).containsExactly("之前意图", "a", "b", "c");
+        assertThat(repository.items).hasSize(4);
+    }
+
+    @Test
     void foldsActiveClarifications() {
         service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",
@@ -506,9 +566,11 @@ class RouteMemoryApplicationServiceTest {
         }
 
         @Override
-        public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit) {
+        public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit,
+                                                      String excludedSourceRunId) {
             return findRecentRouteFacts(tenantId, userId, sessionId).stream()
                     .filter(item -> !"front-selected".equals(item.routeSource()))
+                    .filter(item -> excludedSourceRunId == null || !excludedSourceRunId.equals(item.sourceRunId()))
                     .limit(limit)
                     .toList();
         }
@@ -585,7 +647,8 @@ class RouteMemoryApplicationServiceTest {
         }
 
         @Override
-        public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit) {
+        public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit,
+                                                      String excludedSourceRunId) {
             throw new IllegalStateException("route memory down");
         }
 
@@ -609,9 +672,10 @@ class RouteMemoryApplicationServiceTest {
         private final AtomicInteger reads = new AtomicInteger();
 
         @Override
-        public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit) {
+        public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit,
+                                                      String excludedSourceRunId) {
             reads.incrementAndGet();
-            return super.findRecentRoutes(tenantId, userId, sessionId, limit);
+            return super.findRecentRoutes(tenantId, userId, sessionId, limit, excludedSourceRunId);
         }
 
         int readCount() {

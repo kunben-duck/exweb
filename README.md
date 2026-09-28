@@ -446,6 +446,12 @@ RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定�
 
 意图澄清续接时允许提交答案、附件和 metadata。附件在 Interaction claim 前按 `documentId` 校验归属、状态和真实文件名；历史 user 消息只保存用户真实回答，附件-only 时正文为 `""`，附件通过标准 `attachments[]` 返回。仅发送给 IntentAgent 的本轮 query 会追加文件名：附件-only 为 `[用户上传文档] xxx.pdf`，文本加附件为 `答案 [用户上传文档] xxx.pdf，xxx.xls`。IntentAgent 不接收文档 ID、URL 或完整业务 metadata。最终目标确定后，DomainAgent/Relay 收到 `用户:原问题；系统追问:...；用户:...` 形式的完整折叠问题，其中各轮附件以可信文件名体现，并使用最终一轮 metadata；服务端以整条澄清链累计的可信文档覆盖 `sceneParam.docList`。每轮澄清 user/assistant 消息属于消息树事实，但不会单独写 RouteMemory `ROUTE`；最终 binding 成功后才折叠澄清链并记录一次路由。
 
+同一 Run 的拒答重意图（`routeTrigger=domain_reject`）会在 TopK 之前按当前可信 `runId` 排除本轮全部
+路由记录，并停止合并内存 inline route，避免异步落库时序导致本轮中间技能重新进入 Intent `history`。
+其他 Run 及缺少来源 Run 的存量路由、澄清历史、当前拒答原因仍按原规则保留；读取失败不从内存补回路由。
+该调整不删除事实或修改前端思维链、历史 Parts、Binding，也不跨 Run 追踪原问题；问卷/澄清续跑及下一次
+独立问答仍可读取之前 Run 的路由。详见 [Intent history 规则](docs/intent/intent.md#3-history-结构)。
+
 WebSocket 边界如下：
 
 - 前端 WebSocket：`/v1/chat/ws`，只连接 FinanceEXChatService，用于订阅 `streamTopicId` 并接收已经落库的 ChatEvent。

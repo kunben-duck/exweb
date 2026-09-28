@@ -872,6 +872,12 @@ sequenceDiagram
 - DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 后，后端立即终止旧 Agent 流并以 `routeTrigger=domain_reject` 重新调用 intent-agent。若意图返回澄清，后续每轮请求使用 `routeTrigger=clarify_answer` 并继续携带本次拒答摘要；普通澄清不携带该字段。旧拒答编码和单独的 `reasonCode` 不再触发重路由。
 - 如果当前绑定来自意图或用例库，后端自动切换到新 DomainAgent；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时执行 Relay。后端直接采用本次 Intent 结果，返回当前或曾拒答技能时仍会重新调用，并由 `max-reroutes` 防止无界循环。若当前绑定来源为 `front-selected/user-confirmed`，默认会先返回 `run.waiting_user`，消息 parts 包含 `DOMAIN_AGENT_REFUSAL` 和 `ROUTE_SWITCH_CONFIRMATION_REQUEST`；同意后使用原问题调用候选 Runtime，拒绝后保留原绑定。确认调用需要附件时，前端必须在本次 `approved=true` 请求中重新提交完整 `attachments`；后端不继承 run-A 附件，也不改写原 user 消息附件。等待事件返回 `autoActionAt/autoActionTimeoutMs/autoActionType=APPROVE_ROUTE_SWITCH`，并与 AMBIGUOUS_ROUTE 共用默认30秒配置；到期后前端提交现有 `approved=true` 请求。重意图返回当前技能时目标未变化，不生成切换确认。部署配置 `financeex.domain-agent.refusal-auto-switch-enabled=true` 后，手动来源拒答时也会原子取消旧 Binding，并直接调用重意图得到的 DomainAgent 或 Relay，不生成路由切换 Interaction。意图本身要求澄清时仍进入 `INTENT_CLARIFICATION`。等待确认阶段不生成 `ANSWER`，最终回答、拒答与确认过程复用同一个 assistantMessageId。
 
+同一 Run 内发生拒答重意图时，发送给 Intent 的 `history` 排除本 Run 的全部中间路由，数据库过滤发生在
+TopK 前，内存中的本轮路由也不会补回。之前 Run（包括 Ask User 或澄清续跑的来源 Run）的记录仍保留，
+不按相同问题文本或技能名称去重。`routeTrigger=domain_reject`、本次拒答原因和澄清链继续传递。
+这只是下游 Intent 上下文过滤：前端仍收到原有的技能命中、拒答、重路由事件，历史 Parts 和路由事实不删除，
+无需改变请求参数、WebSocket 或 Resume 处理；下一次独立问答仍可能使用前一 Run 的路由历史。
+
 路由切换等待事件的关键字段示例：
 
 ```json

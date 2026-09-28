@@ -149,6 +149,19 @@ ChatService事件的`sourceExpert`中回显。
 
 `conversationContext.history` 只放在线路由需要的摘要，默认取最新 TopK。`routeSource=front-selected` 的路由事实在 TopK 前排除；`user-confirmed` 和 `intent-agent` 路由保持可见。完整链路、原始问题和澄清过程应保存在 ChatService 审计日志或消息历史中。
 
+`routeTrigger=domain_reject` 时，还会在 TopK 之前排除 `source_run_id` 等于当前可信 Run ID 的所有路由记录。
+例如 Run-B 内先命中 A、A 拒答后改选 B、B 再拒答，这两次重意图都不会把 Run-B 内的中间路由放入
+`history`；之前 Run 的记录仍按原规则保留，即使问题、技能或意图名称相同也不会被误删。存量缺少
+`source_run_id` 的记录继续保留，`CLARIFY` 历史合并不受影响。
+
+拒答重意图也不再补入内存 inline route 摘要，避免尚未完成异步落库的本轮路由重新进入 `history`。
+最近有效路由标识以过滤后的数据库结果为准；数据库读取失败继续降级为空路由历史，不从无法逐条确认来源的
+内存路由恢复。`routeTrigger` 和当前 `lastIntentRejectReason` 仍照常发送。
+
+该过滤仅影响本次 Intent 出站上下文，不删除路由事实、前端思维链或历史 Parts，也不改变 Binding。
+Ask User 回答、澄清或候选切换创建新 Run 后，之前 Run 的路由仍是可用历史；下一次独立问答也可能读取
+前一 Run 中曾被拒答的路由。本规则不等同于只保留最终成功技能，也不按跨 Run 的原问题关系进行过滤。
+
 ### 3.1 已生效路由记录
 
 ```json

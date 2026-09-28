@@ -30,12 +30,14 @@ public interface RouteMemoryMapper {
      * @param userId 用户边界。
      * @param sessionId 会话边界。
      * @param limit 最大返回条数。
+     * @param excludedSourceRunId 可选的排除 Run，在 TopK 截取前过滤；null 表示不排除。
      * @return 最近可见路由记录，按创建时间倒序返回。
      */
     List<RouteMemoryRow> findRecentRoutes(@Param("tenantId") String tenantId,
                                           @Param("userId") String userId,
                                           @Param("sessionId") String sessionId,
-                                          @Param("limit") int limit);
+                                          @Param("limit") int limit,
+                                          @Param("excludedSourceRunId") String excludedSourceRunId);
 
     /**
      * 查询当前会话尚未折叠的意图澄清链路。

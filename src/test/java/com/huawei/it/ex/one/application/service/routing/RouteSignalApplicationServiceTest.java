@@ -5,13 +5,19 @@
 package com.huawei.it.ex.one.application.service.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.IntentFailureStrategy;
 import com.huawei.it.ex.one.application.config.MemoryProperties;
+import com.huawei.it.ex.one.application.config.RouteMemoryProperties;
 import com.huawei.it.ex.one.application.config.RouteSignalProperties;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.application.integration.intent.IntentService;
+import com.huawei.it.ex.one.application.integration.memory.RouteMemoryRepository;
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseMatchRequest;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
@@ -27,6 +33,9 @@ import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
+import com.huawei.it.ex.one.domain.memory.RouteMemoryItem;
+import com.huawei.it.ex.one.domain.memory.RouteMemoryItemStatus;
+import com.huawei.it.ex.one.domain.memory.RouteMemoryItemType;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RoutingPolicy;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
@@ -40,6 +49,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -54,6 +64,109 @@ class RouteSignalApplicationServiceTest {
     private final ChatCommand command = new ChatCommand("cmd1", "tenant1", "user1", "session1",
             null, "web", "帮我报销一张发票", List.of(), Map.of());
     private final MemoryContext memory = MemoryContext.empty();
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void domainRejectDoesNotReintroduceInlineRoutesWhenDatabaseHistoryIsUnavailable(boolean expert) {
+        Map<String, Object> rejectReason = Map.of("lastIntent", "技能B", "domainRejectMessage", "不在处理范围");
+        ChatCommand rejection = new ChatCommand("cmd-reject", "tenant1", "user1", "session1", null,
+                "web", "原问题", List.of(), Map.of("lastIntentRejectReason", rejectReason), null, null,
+                com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT, null, null, null, "domain_reject");
+        if (expert) {
+            rejection = rejection.withIntentExpertScope(new IntentExpertScope("expert-a", "专家A", "entry-a"));
+        }
+        MemoryContext inline = memory.withRouteMemory(new RouteMemoryContext("first_turn", List.of(
+                Map.of("type", "route", "query", "原问题", "intent", "技能A"),
+                Map.of("type", "route", "query", "原问题", "intent", "技能B")), Map.of(), "run-current"));
+        AtomicReference<MemoryContext> captured = new AtomicReference<>();
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"), (input, context, owner) -> {
+                    captured.set(context);
+                    return simpleDomainAgentIntent();
+                });
+
+        RouteSignalResult result = service.routeInitialWithProgress(new RouteSignalRequest(
+                        "run-current", user, session, rejection, List.of(), inline))
+                .filter(RouteSignalFrame::resultFrame).map(RouteSignalFrame::result).blockLast();
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(captured.get().routeMemory().history()).isEmpty();
+        assertThat(captured.get().routeMemory().latestRouteSourceRunId()).isNull();
+        assertThat(captured.get().routeMemory().routeTrigger()).isEqualTo("domain_reject");
+        assertThat(captured.get().routeMemory().lastIntentRejectReason()).isEqualTo(rejectReason);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void domainRejectUsesFilteredDatabaseHistoryAndKeepsClarificationsAndShortTermRules(boolean databaseFails) {
+        RouteMemoryRepository repository = mock(RouteMemoryRepository.class);
+        RouteMemoryProperties properties = new RouteMemoryProperties();
+        properties.setTopK(2);
+        if (databaseFails) {
+            when(repository.findRecentRoutes("tenant1", "user1", "session1", 2, "run-current"))
+                    .thenThrow(new IllegalStateException("database unavailable"));
+        } else {
+            when(repository.findRecentRoutes("tenant1", "user1", "session1", 2, "run-current"))
+                    .thenReturn(List.of(new RouteMemoryItem("route1", "tenant1", "user1", "session1",
+                            RouteMemoryItemType.ROUTE, RouteMemoryItemStatus.ACTIVE, "查询经营数据",
+                            "intent-old", "经营分析", "skill-old", "intent-agent", null, null,
+                            "run-route", null, Map.of(), null, Instant.EPOCH, Instant.EPOCH)));
+            when(repository.findActiveClarifications("tenant1", "user1", "session1")).thenReturn(List.of());
+        }
+        RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(repository, null, properties);
+        MemoryProperties memoryProperties = new MemoryProperties();
+        memoryProperties.getShortTerm().setEnabled(true);
+        ShortTermMemoryContextAssembler assembler = new ShortTermMemoryContextAssembler(memoryProperties,
+                values -> values.stream().mapToInt(value -> value.content().length()).sum(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+        Map<String, Object> reason = Map.of("lastIntent", "技能A", "domainRejectMessage", "不支持");
+        Map<String, Object> clarification = Map.of("type", "clarify", "query", "原问题",
+                "clarifyQuestion", "哪个期间？", "answer", "本月");
+        ChatCommand rejection = new ChatCommand("cmd-reject", "tenant1", "user1", "session1", null,
+                "web", "本轮问题", List.of(), Map.of("lastIntentRejectReason", reason,
+                "intentClarification", Map.of("clarificationHistory", List.of(clarification))), null, null,
+                com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT, null, null, null, "domain_reject");
+        MemoryContext sourceMemory = new MemoryContext(List.of(
+                message("m1", null, "run-route", "user", "查询经营数据", 1),
+                message("m2", "m1", "run-route", "assistant", "经营数据如下", 2),
+                message("m3", "m2", "run-follow", "user", "华南区域呢", 3),
+                message("m4", "m3", "run-follow", "assistant", "华南数据如下", 4),
+                message("m5", "m4", "run-current", "user", "本轮问题", 5)), List.of(),
+                new RouteMemoryContext("first_turn", List.of(
+                        Map.of("type", "route", "query", "本轮问题", "intent", "技能A")), Map.of(), "run-current"),
+                true, List.of());
+        AtomicReference<MemoryContext> captured = new AtomicReference<>();
+        RouteSignalApplicationService service = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                new BlockingIntentAgentRuntime((input, context, owner) -> {
+                    captured.set(context);
+                    return simpleDomainAgentIntent();
+                }), new RoutingPolicy(0.85), new RouteSignalProperties(false, true, IntentFailureStrategy.RELAY_FALLBACK),
+                routeMemoryService, assembler);
+
+        RouteSignalResult result = service.routeInitialWithProgress(new RouteSignalRequest(
+                        "run-current", user, session, rejection, List.of(), sourceMemory))
+                .filter(RouteSignalFrame::resultFrame).map(RouteSignalFrame::result).blockLast();
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        RouteMemoryContext context = captured.get().routeMemory();
+        assertThat(context.routeTrigger()).isEqualTo("domain_reject");
+        assertThat(context.lastIntentRejectReason()).isEqualTo(reason);
+        assertThat(context.history().getLast()).isEqualTo(clarification);
+        verify(repository).findRecentRoutes("tenant1", "user1", "session1", 2, "run-current");
+        if (databaseFails) {
+            assertThat(context.history()).containsExactly(clarification);
+            assertThat(context.latestRouteSourceRunId()).isNull();
+        } else {
+            assertThat(context.history()).hasSize(2);
+            assertThat(context.latestRouteSourceRunId()).isEqualTo("run-route");
+            assertThat(context.history().getFirst()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "type", "route", "query", "查询经营数据", "intent", "经营分析",
+                    "domainSessionMessages", List.of(new ConversationMemoryMessage("user", "华南区域呢"))));
+            verify(repository).findActiveClarifications("tenant1", "user1", "session1");
+        }
+        verifyNoMoreInteractions(repository);
+    }
 
     @ParameterizedTest
     @CsvSource({

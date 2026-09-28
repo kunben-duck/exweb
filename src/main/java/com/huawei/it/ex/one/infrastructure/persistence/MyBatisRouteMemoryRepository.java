@@ -41,11 +41,12 @@ public class MyBatisRouteMemoryRepository implements RouteMemoryRepository {
     }
 
     @Override
-    public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit) {
+    public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit,
+                                                 String excludedSourceRunId) {
         if (blank(tenantId) || blank(userId) || blank(sessionId) || limit <= 0) {
             return List.of();
         }
-        return mapper.findRecentRoutes(tenantId, userId, sessionId, limit).stream()
+        return mapper.findRecentRoutes(tenantId, userId, sessionId, limit, excludedSourceRunId).stream()
                 .map(this::toDomain)
                 .toList();
     }

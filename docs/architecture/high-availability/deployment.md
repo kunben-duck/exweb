@@ -6,7 +6,7 @@
 
 | 标记 | 含义 | 本次内容 |
 |---|---|---|
-| U | 用户确认的架构事实 | WCM静态资源；ALB提供路由文根；saas gateway（SaaS统一网关）和业务服务运行于ADS Docker；当前ChatService、relayService、agentService共享数据库和Redis；intentService独立第三方；api-store是agentService文档上传接口，其内部向EDM分片上传 |
+| U | 用户确认的架构事实 | WCM静态资源；ALB提供路由文根；HTTP/Resume/SSE经Web→ALB→saas gateway→ChatService，前端WS握手及订阅/数据帧经Web→ALB→ChatService、不经saas gateway；saas gateway（SaaS统一网关）和业务服务运行于ADS Docker；当前ChatService、relayService、agentService共享数据库和Redis；intentService独立第三方；api-store是agentService文档上传接口，其内部向EDM分片上传 |
 | S | 本仓源码确认 | Chat通过统一HTTP地址和skillId执行逻辑DomainAgent请求；独立WS连接Relay；通过独立配置URL查询技能属性；默认不支持可靠Runtime接管 |
 | P | 待实施目标 | agentService拆分为adminService、toolService、agentService；文档管理迁移、前端经agentService授权直传EDM；跨AZ、跨Region主备、各Region独立ALB与ADS运行/控制面、静态备用源和区域执行屏障 |
 | E | 待平台/联合验证 | 生效URL、文根、ADS资源、外部服务内部实现、MCP协议与取消、EDM直传/授权/分片/完成查询/清理及入口、共享数据用途、复制及真实容灾能力 |
@@ -40,8 +40,9 @@ ALB入口文根与内部文根是同一区域路由层的逻辑视图。下图�
 flowchart LR
     web["DEP01-CN01 Web"] --> edge["DEP01-CN02 ALB"]
     edge -->|静态资源| wcm["DEP01-CN03 WCM"]
-    edge -->|业务文根| gateway["DEP01-CN06 saas gateway<br/>（SaaS统一网关）"]
-    gateway -->|聊天、前端WS和文档| chat["DEP01-CN07 ChatService"]
+    edge -->|业务HTTP文根 含Resume/SSE| gateway["DEP01-CN06 saas gateway<br/>（SaaS统一网关）"]
+    gateway -->|聊天HTTP、Resume/SSE和文档| chat["DEP01-CN07 ChatService"]
+    edge -->|前端WS握手、订阅及数据帧| chat
     gateway -->|技能查询和管理入口| agent["DEP01-CN09 agentService"]
     chat -->|chat空闲300s 总15m；技能2s<br/>WS连接5s 握手各10s Run30m<br/>文档整读后HTTP30s；均无应用重试| internal["DEP01-CN08 ALB内部文根"]
     internal -->|chat、技能查询和文档上传| agent
@@ -75,8 +76,9 @@ flowchart LR
     edge -->|静态主源| wcm["DEP01-N03 WCM"]
     edge -.->|静态备用| staticOrigin["DEP01-N04 独立HTTPS静态源"]
     staticOrigin --> staticObjects["DEP01-N05 静态对象存储"]
-    edge --> gateway["DEP01-N06 saas gateway<br/>（SaaS统一网关）"]
-    gateway --> chat["DEP01-N07 ChatService"]
+    edge -->|业务HTTP文根 含Resume/SSE| gateway["DEP01-N06 saas gateway<br/>（SaaS统一网关）"]
+    gateway -->|聊天HTTP与Resume/SSE| chat["DEP01-N07 ChatService"]
+    edge -->|前端WS握手、订阅及数据帧| chat
     gateway -->|技能查询、上传授权及完成登记| agent["DEP01-N16 agentService"]
     gateway -->|管理入口| admin["DEP01-N11 adminService"]
     chat -->|chat及查询HTTP 或Relay WS| internal["DEP01-N08 ALB内部文根"]
@@ -106,7 +108,7 @@ flowchart LR
     worker -.->|有界流式转发| edm
 ```
 
-业务HTTP/WS的实际文根和管理鉴权需平台确认，图不新建公网管理入口。目标EDM直传走获授权的EDM入口，ALB文根/企业出口、浏览器可达性、CORS及认证能力需联合验证；图不假设公开EDM或绕过入口鉴权。文件正文不进入ChatService/agentService，agentService只处理有限控制请求和元数据。worker归属agentService文档能力，仅作经验证的独立进程/实例组过渡路径，其连接和字节仍计入预算；直传失败不自动回流500MiB到Chat。现有local/OBS与无skillId的S3兼容合同保留，WCM静态对象存储不受EDM业务上传调整影响。
+现状与目标均按协议分路：业务HTTP/Resume/SSE经saas gateway进入Chat，前端WS握手及建立后的订阅/数据帧由ALB直达Chat、不经saas gateway。实际文根、ALB→Chat身份传递、超时和额度及管理鉴权需平台确认；Chat执行WS身份、权限和订阅归属校验，不得依赖saas gateway的鉴权、限流或超时策略覆盖该直连链路。图不新建公网管理入口。目标EDM直传走获授权的EDM入口，ALB文根/企业出口、浏览器可达性、CORS及认证能力需联合验证；图不假设公开EDM或绕过入口鉴权。文件正文不进入ChatService/agentService，agentService只处理有限控制请求和元数据。worker归属agentService文档能力，仅作经验证的独立进程/实例组过渡路径，其连接和字节仍计入预算；直传失败不自动回流500MiB到Chat。现有local/OBS与无skillId的S3兼容合同保留，WCM静态对象存储不受EDM业务上传调整影响。
 
 | 节点或链路 | 故障传播与闭环 |
 |---|---|
@@ -126,8 +128,8 @@ flowchart LR
 | 路由用途 | 目标与期限/重试契约 | 必须验证 |
 |---|---|---|
 | 前端静态文根 | WCM主源/独立备用源；原域名及base path保持；故障切换只作用于静态路径 | HTTPS源站接入、Host/SNI、私有访问、深层路由、MIME、缓存；API前缀优先于SPA兜底 |
-| Chat HTTP/Resume/SSE | ALB → saas gateway（SaaS统一网关） → Chat；连接、首字节、idle、总期限分别登记；预算与应用一致 | SSE不被缓冲到终态，错误码透传；受理/Stop/回调等非幂等操作不做入口透明重试 |
-| 前端WS | ALB → saas gateway（SaaS统一网关） → Chat；实例/租户连接、握手与控制消息速率、Upgrade/心跳/idle/摘流及重连预算分别登记；实际入口限制E | R22/T22：大量空闲/活跃连接、慢消费、跨实例配额与集中重连；W12入口配额同W03在第一轮联调，不能只依赖应用单用户8连接 |
+| Chat HTTP/Resume/SSE | Web → ALB → saas gateway（SaaS统一网关） → Chat；连接、首字节、idle、总期限分别登记；预算与应用一致 | SSE不被缓冲到终态，错误码透传；受理/Stop/回调等非幂等操作不做入口透明重试 |
+| 前端WS | 握手和建立后的订阅/数据帧均为Web → ALB → Chat，不经saas gateway；ALB与Chat分别登记实例/租户连接、握手与控制消息速率、Upgrade/心跳/idle/摘流及重连预算；实际入口限制E | ALB→Chat身份传递及Chat校验需联合验证，不继承网关策略；R22/T22：大量空闲/活跃连接、慢消费、跨实例配额与集中重连；W12入口配额同W03在第一轮联调，不能只依赖应用单用户8连接 |
 | ChatService → 执行接口 | 当前内部文根 → agentService → DomainAgent；目标为toolService；逐跳分配总期限 | skillId/请求标识透传、流式背压、取消路由、未知执行结果查询；各跳重试次数合并计入预算 |
 | ChatService → relayService | 内部WS文根 → Relay；不能轮流把同一运行会话发给不持有状态的副本 | 会话归属、重连/Stop同目标、专家跨Run会话及迟到Stop；粘性路由本身不证明故障接管 |
 | 文档上传与EDM直传 | 当前Chat经内部ALB→agentService文档接口→EDM；目标前端经agentService授权后分片直传EDM，完成通知回agentService | 当前Chat整读后HTTP30s；EDM分片/合并、逐跳重试及取消E；目标授权、大小/并发/字节预算、浏览器入口、结果查询和清理须T06联合验证 |
@@ -150,16 +152,18 @@ flowchart TB
         subgraph azOne["AZ-1"]
             gatewayOne["DEP02-N03 saas gateway<br/>（SaaS统一网关）副本组"]
             servicesOne["DEP02-N04 ChatService relayService agentService各自副本组"]
-            gatewayOne --> servicesOne
+            gatewayOne -->|业务HTTP 含Resume/SSE| servicesOne
         end
         subgraph azTwo["AZ-2"]
             gatewayTwo["DEP02-N05 saas gateway<br/>（SaaS统一网关）副本组"]
             servicesTwo["DEP02-N06 ChatService relayService agentService各自副本组"]
-            gatewayTwo --> servicesTwo
+            gatewayTwo -->|业务HTTP 含Resume/SSE| servicesTwo
         end
     end
-    entry --> gatewayOne
-    entry --> gatewayTwo
+    entry -->|业务HTTP 含Resume/SSE| gatewayOne
+    entry -->|业务HTTP 含Resume/SSE| gatewayTwo
+    entry -->|前端WS握手、订阅及数据帧<br/>仅ChatService| servicesOne
+    entry -->|前端WS握手、订阅及数据帧<br/>仅ChatService| servicesTwo
     servicesOne --> db["DEP02-N07 共享DB（openGauss）"]
     servicesTwo --> db
     servicesOne --> redis["DEP02-N08 Redis"]
@@ -168,7 +172,7 @@ flowchart TB
     entry --> staticSource["DEP02-N10 WCM或非ADS备用静态源"]
 ```
 
-N04/N06表示每项服务都有跨AZ副本，不是把参与服务装进一个容器。Relay副本分布只提供服务容量冗余，其内存会话的可迁移性仍需协议验证；丢失会话按明确中断/收口处理。内部调用经ALB文根的逻辑边见DEP01。
+N04/N06表示每项服务都有跨AZ副本，不是把参与服务装进一个容器。ALB直连WS箭头仅指向其中的ChatService副本，握手及订阅/数据帧不经过N03/N05网关；HTTP/Resume/SSE仍经网关进入Chat。各AZ的ALB→Chat身份传递、超时和额度需分别验证。Relay副本分布只提供服务容量冗余，其内存会话的可迁移性仍需协议验证；丢失会话按明确中断/收口处理。内部调用经ALB文根的逻辑边见DEP01。
 
 | 目标 | 实施及验收要求 |
 |---|---|
@@ -226,7 +230,8 @@ Redis逐用途登记owner、key/topic、ACL、数据量/TTL、连接/命令速�
 flowchart TB
     browser["DEP03-N01 浏览器与稳定业务域名"] --> globalEntry["DEP03-N02 GSLB或DNS 受接管门槛控制"]
     subgraph primaryRegion["Region A 正常主区域"]
-        albA["DEP03-N03 ALB"] --> adsA["DEP03-N04 ADS-A 跨AZ<br/>saas gateway及参与服务"]
+        albA["DEP03-N03 ALB"] -->|HTTP/Resume/SSE经gateway到Chat| adsA["DEP03-N04 ADS-A 跨AZ<br/>saas gateway及参与服务"]
+        albA -->|前端WS握手、订阅及数据帧直达Chat| adsA
         adsA --> dbA["DEP03-N05 共享DB（openGauss）"]
         adsA --> redisA["DEP03-N06 Redis"]
         albA --> webA["DEP03-N07 WCM或独立静态备用源A"]
@@ -234,7 +239,8 @@ flowchart TB
         artifactsA -.-> webA
     end
     subgraph standbyRegion["Region B 预部署热备区域"]
-        albB["DEP03-N09 ALB"] --> adsB["DEP03-N10 ADS-B 跨AZ<br/>saas gateway及参与服务 写入执行关闭"]
+        albB["DEP03-N09 ALB"] -->|HTTP/Resume/SSE经gateway到Chat| adsB["DEP03-N10 ADS-B 跨AZ<br/>saas gateway及参与服务 写入执行关闭"]
+        albB -->|前端WS握手、订阅及数据帧直达Chat| adsB
         adsB --> dbB["DEP03-N11 共享DB（openGauss）"]
         adsB --> redisB["DEP03-N12 Redis"]
         albB --> webB["DEP03-N13 独立静态备用源B"]
@@ -286,7 +292,7 @@ sequenceDiagram
     participant ALB as ALB
     participant WCM as WCM主源
     participant BACKUP as 独立HTTPS备用源
-    participant API as saas gateway与ChatService
+    participant API as HTTP与WS业务端点（按协议分路）
     OBS->>WCM: DEP04-01 检查页面和版本资源
     WCM--xOBS: DEP04-02 超时或内容校验失败
     OBS->>OPS: DEP04-03 报告故障与受影响版本
@@ -295,7 +301,7 @@ sequenceDiagram
         OPS->>ALB: DEP04-05 仅切静态文根至备用源
         OBS->>ALB: DEP04-06 原域名打开深层页面和懒加载资源
         ALB->>BACKUP: DEP04-07 获取同版本静态内容
-        OBS->>API: DEP04-08 验证登录聊天流式输出和Stop
+        OBS->>API: DEP04-08 分别验证网关HTTP/Resume/SSE与ALB直连WS，并验证登录和Stop
         API-->>OBS: DEP04-09 核对业务结果及资源回落
         OPS->>WCM: DEP04-10 修复后验证相同版本和依赖
         OPS->>ALB: DEP04-11 观察通过后受控回切

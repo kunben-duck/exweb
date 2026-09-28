@@ -32,7 +32,7 @@
 - 本轮源码基线：`8f48d6cc084be91bcbaad90be43dac7181636cb4`；复核日期：2026-09-22（Asia/Shanghai）。文档与当前实现逐项对应，待实施设计与已有能力分别标记。
 - 交付范围：运行稳定性风险分析、服务级时序图、加固任务设计、测试用例、故障预案和演练方案。**没有修改业务代码、配置、SQL或对外协议，没有实施生产故障注入。**
 - 当前结论以本方案及其源码链接为准；每项风险关闭必须具备对应实现与有效测试证据。
-- 当前为 Spring Boot 3.4.6 / JDK 21 / Servlet 主部署，混用响应式编排、阻塞 JDBC 和出站 HTTP/WS。用户确认WCM静态源、ALB文根、saas gateway（SaaS统一网关）和ADS Docker；当前ChatService、relayService与一体agentService共享DB与Redis。agentService包括管理、技能查询、统一chat和MCP，第三方intentService独立。目标要求各Region的ALB和ADS运行/控制面独立（P）；实际独立性、参数、数据复制和容灾实测仍待提供（E），见[部署与容灾设计](deployment.md)。
+- 当前为 Spring Boot 3.4.6 / JDK 21 / Servlet 主部署，混用响应式编排、阻塞 JDBC 和出站 HTTP/WS。用户确认WCM静态源、ALB文根、saas gateway（SaaS统一网关）和ADS Docker；HTTP API（含Resume/SSE）经ALB→saas gateway→Chat，前端WS经ALB→Chat直连；当前ChatService、relayService与一体agentService共享DB与Redis。agentService包括管理、技能查询、统一chat和MCP，第三方intentService独立。目标要求各Region的ALB和ADS运行/控制面独立（P）；实际独立性、参数、数据复制和容灾实测仍待提供（E），见[部署与容灾设计](deployment.md)。
 - 未来拆分为adminService、toolService、agentService，加上ChatService/relayService共五服务，初期仍共享数据资源；文档管理迁入agentService，500MiB文件由前端经agentService授权后直传EDM；agentService核验登记，Chat只引用，独立worker仅作已验证过渡。拆分、直传和资源隔离均为P，不能当作当前保护。
 - “全盘”指全部入口仍有场景归属，主风险清单按高影响稳定性故障筛选；纯业务正确性和安全专项不在本方案范围；不意味着证明不存在未知风险。S=源码事实，L=本轮本地验证，U=用户确认架构，P=待实施目标，E=环境待验证；U/P不是生产验收证据，“具备缺陷触发条件”不等于生产已经发生事故。
 
@@ -79,8 +79,8 @@
 |---|---|---|
 | 流量 | 峰值到达率、每分钟完成量、在途Run、用户/租户分布、事件速率与大小、长连接/恢复比例、文件与历史分布 | 业务+测试 |
 | 实例 | 数量、AZ/故障域、CPU限额/节流、内存limit、Xmx、direct/native预算、FD、临时磁盘、滚动maxUnavailable | 平台/SRE |
-| saas gateway（SaaS统一网关） | 身份/Trace/Cookie、鉴权等待及自身连接期限、WS/SSE透传、配额、回调ACL与摘流；逐跳有效值须取证 | saas gateway（SaaS统一网关）负责人 |
-| 区域与全局入口 | ALB统一管理文根；各Region独立ALB为设计约束。补齐目标组、源站、连接/首字节/idle/总期限、重试、排空，以及GSLB/DNS放行条件、TTL及旧连接处理 | 入口/网络负责人 |
+| saas gateway（SaaS统一网关） | HTTP API/Resume/SSE的身份/Trace/Cookie、鉴权等待、连接期限、流式透传、配额、回调ACL与摘流；前端WS不经过此网关 | saas gateway（SaaS统一网关）负责人 |
+| 区域与全局入口 | ALB统一管理文根；各Region独立ALB为设计约束。补齐HTTP与WS各自目标组、源站、连接/首字节/idle/总期限、重试、排空，以及GSLB/DNS放行条件、TTL及旧连接处理；WS直达Chat的可信身份传递、握手额度与Chat校验须单独取证 | 入口/网络负责人 |
 | ADS与静态前端 | 两个Region ADS运行/控制独立是设计约束；补齐独立性证据、AZ副本、部署依赖、WCM及独立备用源、发布包与配置版本 | ADS/SRE/前端 |
 | DB | 实际openGauss版本/表引擎、主备/复制策略、切换与备份恢复、总连接、statement/lock/socket期限、索引 | DBA |
 | Redis | 真实拓扑、主从/AZ、超时、切主/重订阅策略、热点key、Pub/Sub行为 | 缓存负责人 |

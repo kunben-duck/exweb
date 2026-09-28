@@ -2,7 +2,7 @@
 
 > 全接口运行视图、Servlet有效默认容量、依赖超时、风险与验证记录见[高可用审计文档集](high-availability/README.md)（以当前基线为准，不代表加固建议已经实施）。
 
-> 当前场景、资源状态和接口索引见[场景与资源](high-availability/scenarios.md)。Run链路按[受理与启动](high-availability/scenarios.md#s01)、[路由](high-availability/scenarios.md#s02)、[流式输出](high-availability/scenarios.md#s03)、[交互](high-availability/scenarios.md#s04)、[Stop](high-availability/scenarios.md#s05)及[异步回调](high-availability/scenarios.md#s06)阅读，标题见[旁路场景](high-availability/scenarios.md#s11)。物理入口为ALB→saas gateway（SaaS统一网关）→Chat，实际策略和容量仍需环境验收。
+> 当前场景、资源状态和接口索引见[场景与资源](high-availability/scenarios.md)。Run链路按[受理与启动](high-availability/scenarios.md#s01)、[路由](high-availability/scenarios.md#s02)、[流式输出](high-availability/scenarios.md#s03)、[交互](high-availability/scenarios.md#s04)、[Stop](high-availability/scenarios.md#s05)及[异步回调](high-availability/scenarios.md#s06)阅读，标题见[旁路场景](high-availability/scenarios.md#s11)。HTTP/Resume/SSE入口为Web→ALB→saas gateway（SaaS统一网关）→Chat；前端WS握手及建立后的订阅/数据帧为Web→ALB→Chat，不经saas gateway。ALB→Chat身份传递、Chat鉴权校验、实际超时和额度仍需联合验收，WS不得依赖网关策略。
 
 > 当前代码架构快照。实线表示同步或严格有序调用，粗线表示流式消息，虚线表示异步或 best-effort；橙色节点为周期治理任务。
 
@@ -20,7 +20,7 @@ flowchart TB
         Gateway["saas gateway（SaaS统一网关）<br/>身份、Trace、Cookie配置待验"]
         PC --> ALB
         Mobile --> ALB
-        ALB --> Gateway
+        ALB -->|"HTTP 含Resume/SSE"| Gateway
     end
 
     subgraph Service["FinanceEXChatService 多实例"]
@@ -113,7 +113,8 @@ flowchart TB
     Gateway -->|"同步 HTTP"| RestApi
     Gateway -->|"上传 / 分享"| DocumentApi
     Gateway --> ShareApi
-    Gateway ==>|"WebSocket / SSE"| RealtimeApi
+    Gateway ==>|"HTTP Resume / SSE / Stream Status"| RealtimeApi
+    ALB ==>|"前端WS握手、订阅及数据帧"| RealtimeApi
 
     RestApi --> RunOrchestrator
     RestApi --> SessionMessage
@@ -245,7 +246,8 @@ sequenceDiagram
         participant Sidecar as "标题 / Intent记录"
     end
 
-    FE->>Gateway: "POST /v1/chat/runs"
+    Note over FE,API: "此图省略ALB参与者；HTTP/Resume/SSE经ALB→gateway→Chat，WS握手及后续帧经ALB→Chat"
+    FE->>Gateway: "经ALB：POST /v1/chat/runs"
     Gateway->>API: "转发，实际超时与重试配置待确认"
     API->>Run: "身份、Trace、Cookie + ChatCommand"
     activate Run
@@ -281,11 +283,11 @@ sequenceDiagram
     Events-->>Run: "首个持久化事件确认"
     Run-->>API: "ChatRunStartResult"
     API-->>Gateway: "runId + firstSeq + streamTopicId"
-    Gateway-->>FE: "转发启动响应"
+    Gateway-->>FE: "经ALB转发启动响应"
     deactivate Run
 
     par "前端建立实时通道"
-        FE->>API: "WebSocket subscribe(topic, afterSeq) 或 Run SSE Resume"
+        FE->>API: "WS经ALB握手和subscribe(topic, afterSeq)；Run SSE Resume经ALB与gateway"
         API->>DB: "补发已持久化Event"
         API->>Redis: "接续live topic"
     and "后台Run继续执行，不占用原HTTP请求"

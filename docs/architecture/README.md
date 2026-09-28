@@ -6,6 +6,8 @@
 当前静态资源和入口采用WCM、ALB、saas gateway（SaaS统一网关），应用部署在ADS；ChatService、relayService、一体agentService共享DB和Redis，参见
 [部署架构与容灾设计](high-availability/deployment.md)。当前agentService同时承担管理、技能查询、统一chat、MCP及文档上传；Chat携带skillId经agentService转发至第三方DomainAgent，Chat独立连接relayService，relayService再经agentService MCP调用下游。api-store适配器访问agentService文档上传接口，由agentService分片上传EDM；该内部策略需联合取证。intentService是独立第三方。下文DomainAgent指逻辑provider，不表示Chat绕过agentService直连第三方。
 
+前端入口按协议分路：HTTP/Resume/SSE走Web→ALB→saas gateway→ChatService；WebSocket握手及建立后的订阅/数据帧走Web→ALB→ChatService，不经saas gateway。下文省略入口节点的应用时序同样遵循这两条路径。ALB→Chat的身份传递、超时和额度仍需联合验证，Chat执行WS身份、权限及订阅归属校验，不得依赖网关策略覆盖直连WS。
+
 拆分为adminService/toolService/agentService、文档管理迁移、前端经agentService授权直传EDM、跨AZ/Region主备与独立静态备用源均为目标设计，见[现状及目标图](high-availability/deployment.md#dep01)；现有调用链和待建设能力不能混用。运行视图、事务/锁及等待预算、风险到测试/预案的追踪以高可用文档为准。
 
 主编排代码阅读顺序、状态机、记忆边界和调试入口参见
@@ -374,7 +376,7 @@ DELETE /v1/chat/sessions
 各接口的最小入参示例、不同 `runMode` 场景请求体、Interaction 续接请求体、文档上传 multipart 示例和 WebSocket 控制消息示例，以 [前端联调文档](../frontend-integration.md) 的“逐接口最小入参示例”和“`/v1/chat/runs` 不同场景请求体示例”为准；本架构文档只维护流程边界和事实源职责，避免接口样例双写漂移。
 
 `/v1/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、Event Resume 或 stop URL。
-这些 URL 属于前端 SDK、网关或部署配置，避免后端业务响应承担客户端路由配置职责。
+这些 URL 属于前端 SDK 或部署路由配置；HTTP/Resume/SSE配置涉及ALB与saas gateway，WS只涉及ALB→Chat直连路径，避免后端业务响应承担客户端路由配置职责。
 
 删除会话是软删除语义。若目标会话存在 active run，删除接口会复用 run stop 编排先写入取消标记、
 发布 `run.cancelled` 并释放本服务 active run，再把会话置为 `DELETED`。前端删除会话时不需要串行调用
@@ -640,7 +642,7 @@ owner 的 completed/waiting 终态事务只写 OpenGauss 事实；短期记忆 R
 
 当前系统存在两条职责隔离的 WebSocket：
 
-- 前端 WebSocket：`/v1/chat/ws`，只连接 FinanceEXChatService。它是用户级连接，按 run 级 `streamTopicId` 订阅已经写入事件事实源的 ChatEvent；它不接受聊天请求，也不直接调用 RelayAgent。
+- 前端 WebSocket：`/v1/chat/ws`，握手及建立后的订阅/数据帧均经Web→ALB→FinanceEXChatService，不经saas gateway。它是用户级连接，按 run 级 `streamTopicId` 订阅已经写入事件事实源的 ChatEvent；它不接受聊天请求，也不直接调用 RelayAgent。HTTP Event Resume/SSE仍走Web→ALB→saas gateway→FinanceEXChatService。
 - 下游 Relay WebSocket：FinanceEXChatService 主动连接 Relay，承载 `config -> user-message/approval-response`、流式 frame 和 `stop_all_agents`；前端不可见。
 
 因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。Relay provider 只注册一个 `RelayRuntimeProtocolAdapter` WebSocket 实现。
@@ -657,6 +659,7 @@ unsubscribe 和 recover-required 逻辑，避免协议实现分叉。企业框�
 Servlet/MVC WebSocket 会在 `HandshakeInterceptor.beforeHandshake` 阶段调用
 `AuthContextProvider.resolve()`，并把不可变 `UserContext` 写入 WebSocket session attributes；
 `afterConnectionEstablished` 和后续消息处理只读取该快照，不再访问企业 ThreadLocal。
+以上校验位于Chat；直连WS的可信身份如何经ALB到达Chat、生产身份源适配及权限校验效果仍需联合验证，不能用saas gateway的鉴权或额度配置证明该链路已受保护。
 
 MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allowed-origin-patterns`
 限制握手来源，`max-connections-per-user`、`max-subscriptions-per-connection`、

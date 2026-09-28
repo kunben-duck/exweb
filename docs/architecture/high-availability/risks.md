@@ -146,9 +146,9 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 <a id="r12"></a>
 #### R12 ALB文根路由、流式连接和区域入口切换不一致
 
-- **证据 U/S/P/E**：U确认ALB负责文根，P要求各Region独立ALB并采用GSLB/DNS受控主备入口；S确认Chat提供HTTP、SSE和WS，且[异步HTTP配置](../../../src/main/resources/application.yml#L11)不能替代ALB/saas gateway期限。E为文根/路径前缀、静态源/API目标组、Upgrade、缓冲、idle timeout、摘流和DNS有效缓存行为。
+- **证据 U/S/P/E**：U确认ALB负责文根，HTTP API/Resume/SSE经saas gateway转发，前端WS经ALB直达Chat；P要求各Region独立ALB并采用GSLB/DNS受控主备入口；S确认Chat提供HTTP、SSE和WS，WS实际身份传递与Chat鉴权接入仍需E；[异步HTTP配置](../../../src/main/resources/application.yml#L11)不能替代ALB/saas gateway期限。E为文根/路径前缀、静态源/API目标组、Upgrade、缓冲、idle timeout、摘流和DNS有效缓存行为。
 - **触发与影响**：文根重写错误将API落到静态HTML或破坏资源路径；ALB缓冲/idle小于静默期截断SSE/WS；目标退出后老连接仍向旧Region写；DNS缓存和长连接使“入口已切换”与客户端实际落点不同，POST自动重试可能重复执行。
-- **已有保护/剩余缺口**：应用超时/Resume提供局部保护，各Region独立ALB及GSLB/DNS受控切换为P；不等于流式转发正确或长连接可迁移。静态源、业务API和管理接口必须按各自路由验证，不能靠首页200判断服务健康。
+- **已有保护/剩余缺口**：应用超时/Resume提供局部保护，各Region独立ALB及GSLB/DNS受控切换为P；不等于流式转发正确或长连接可迁移。静态源、HTTP API/Resume、直连WS和管理接口必须按各自路由验证，不能靠首页200判断服务健康。
 - **加固措施**：[W12](#w12)；验收条件见下。
 - **关闭证据（待取得）**：T12/D10测试嵌套文根、静态资源与API错误路由、静默流/WS、目标摘流、故意缓存旧DNS/保持旧连接及恢复风暴；实际Region落点、写拒绝、首事件与补读结果可核对。
 
@@ -235,7 +235,7 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 <a id="r22"></a>
 #### R22 前端WebSocket连接、订阅及重连洪峰耗尽共享资源
 
-- **证据 S**：[注册与订阅](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)按本JVM的tenant＋user计连接，L99/L169检查本机订阅；register及新topic订阅在实例锁内扫描连接。Servlet[每帧处理](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L86)独立subscribe；[订阅前置查询](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java#L182)先校验Run归属，L191才注册并检查topic额度，之后L203启动历史补读。未见应用侧实例/租户/集群连接总限、握手及控制消息速率和前置查询独立并发限制；ALB、saas gateway及生产前端策略为E，不能推定它们也没有保护。
+- **证据 S**：[注册与订阅](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java#L49)按本JVM的tenant＋user计连接，L99/L169检查本机订阅；register及新topic订阅在实例锁内扫描连接。Servlet[每帧处理](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L86)独立subscribe；[订阅前置查询](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java#L182)先校验Run归属，L191才注册并检查topic额度，之后L203启动历史补读。未见应用侧实例/租户/集群连接总限、握手及控制消息速率和前置查询独立并发限制；WS链路ALB→Chat由U确认，入口配额及生产前端策略为E，HTTP Resume另核验ALB/saas gateway配额；不能推定平台没有保护，也不能将网关规则计作WS防护。
 - **触发→传播→影响**：大量不同用户保持连接，叠加多页签活跃推送、慢客户端、高频订阅/退订或集中重连；socket/FD、订阅/心跳及各连接缓冲累计增长，序列化、全表扫描和前置查询增加CPU/锁等待/DB压力。Servlet阻塞发送占满发送线程后拒绝并关连接，若客户端立即重连，则“发送拥塞→断连→重连补读→DB与堆/GC加压”可进一步影响无关聊天、Stop及治理。严重时可能内存耗尽或进程退出，尚未复现，不能据默认值给出4C4G安全连接数。
 - **已有保护 S**：[默认配置](../../../src/main/resources/application.yml#L300)为每用户每实例8连接、每连接8个Run topic、每topic本机128订阅、Servlet入站控制消息16KiB；[WebFlux检查](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketHandler.java#L81)则按字符串长度比较同一阈值，不能宣称两栈均严格限制UTF-8字节。Servlet单连接发送队列最多256条/2MiB消息字节，decorator另有512KiB缓冲及10s发送检查，空闲10分钟、每60秒扫描。[发送执行器](../../../src/main/java/com/huawei/it/ex/one/application/config/ChatServletWebSocketSendExecutorConfiguration.java#L28)默认平台线程核心4/最大16，SynchronousQueue无任务积压队列，[拒绝即关闭对应连接](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java#L188)。16限制并发发送任务，不是最多16条连接；虚拟线程选项默认关闭，启用后也不能替代资源预算。[队列](../../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ServletWebSocketOutboundQueue.java#L16)按需积累，2MiB不是预分配或单连接完整内存上限；计数不覆盖出队后正在发送、对象开销、其他层缓冲和native内存，发送10s检查也不能直接视为socket硬中断证明。
 - **剩余缺口与边界**：局部有界不能约束全实例累计占用；topic数量限制不限制此前并发查询或同topic反复替换的速率，空闲回收不能保护持续活跃的过载连接。R22独立登记连接/控制面准入与累计发送预算缺口；历史全量物化根因复用[R02](#r02)，Redis接收线程复用[R04](#r04)，锁内扫描/清理及潜在锁环复用[R18](#r18)，不重复认定根因或死锁。
@@ -282,16 +282,16 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 <a id="w03"></a>
 ### W03 WS连接与订阅准入、恢复分页及客户端协同
 
-**责任**：应用、前端共同主责，SRE及ALB/saas gateway入口负责人协作；R02/R22。R22为第一轮P1条件性门槛，T22/D05通过后才放行对应大连接量；W12的WS配额联调同轮完成。
+**责任**：应用、前端共同主责，SRE与ALB负责人协作WS直连，saas gateway负责人协作HTTP Resume；R02/R22。R22为第一轮P1条件性门槛，T22/D05通过后才放行对应大连接量；W12的WS配额联调同轮完成。
 
-- **连接准入**：在昂贵握手/鉴权及连接状态分配之前设置经平台验证的入口速率和在途限制，应用侧设置实例、租户、用户连接上限并原子预占、失败归还；不能以握手完成后的用户计数替代前置防护。记录作用域与扩缩容/AZ退出后的总配额：本机限制仍是本机限制，集群配额由已验证的入口统一控制或预算分配保证，不直接相加实例额度，也不新增依赖Redis逐帧计数的单点。
+- **连接准入**：在ALB→Chat直连路径的昂贵握手/鉴权及连接状态分配之前设置经平台验证的入口速率和在途限制，应用侧设置实例、租户、用户连接上限并原子预占、失败归还；不能以握手完成后的用户计数替代前置防护。记录作用域与扩缩容/AZ退出后的总配额：本机限制仍是本机限制，集群配额由已验证的入口统一控制或预算分配保证，不直接相加实例额度，也不新增依赖Redis逐帧计数的单点。
 - **控制与订阅**：控制消息按连接及租户/实例限制速率、突发和在途数；Run归属前置查询在执行前取得独立许可及等待期限，同topic重复订阅/替换也计费，不能等注册topic后才校验额度。准入不替代鉴权与归属校验，超限按现有协议拒绝；统一并验证Servlet/WebFlux的实际入站字节边界，解析前避免接收过大帧。断连/退订/取消须停止未启动任务并清理在途句柄，底层查询不能立即中断时仍计入受限残留预算。
 - **实施**：HTTP Session Resume、Run Resume、WS历史补读都使用游标分页，先建立 live 有界缓冲再读历史；复用仓储已有有界事件窗口能力时补齐会话级路径。按 sequence 单调推进，维持业务中止/异步边界语义；seq 是全局游标，不要求一个 topic 连续编号。
 - **配额与前端**：恢复设置实例、租户及用户并发、回放总字节/时间边界，配额失败立即返回明确忙/恢复信号，取消/断线归还；与新Run、Stop/heartbeat预算分开，累计发送字节归W01。前端优先按用户复用连接/多路topic，同源多页签选主或连接共享失败时仍受服务端配额；按服务端建议游标、指数退避、抖动及重试次数/总时间上限恢复，页面卸载/后台/重新登录释放无用连接。达到重试上限明确暂停并提示恢复，不持续立即重连。
 - **前置/接口**：优先保持现有 `afterSeq` 和流式响应；需要新增 continuation/busy code 时作为独立协议增量，旧前端不得把截断当回放完成。联调样例修复建议游标处理；生产前端需单独核验，不能推定已有相同缺陷。
 - **交付窗口**：DB提交、Redis广播、客户端消费独立；FULL以状态查询及有界Resume补读，no-store明确缺口，不新增正文留存或默认引入消息中间件。缺终态不能导致客户端无限重试。
 - **观测/测试**：连接/订阅数、握手与控制消息速率、前置查询在途/等待/拒绝、累计发送字节、慢发送/拒绝关闭、恢复在途/排队/拒绝、页大小/总字节、补读与live重叠、缺口/重连次数。T02保留长历史根因验证，T22分别覆盖空闲连接、活跃推送、慢消费、重复控制/订阅、跨实例及恢复洪峰，并组合慢DB、Redis重连和发布；检查正常聊天/Stop与全部资源回落，未测量前不承诺4C4G安全连接数。
-- **发布/回滚**：新旧服务均读同一事实源，先部署兼容客户端再启新错误/游标行为；回滚服务器时保留网关已验证恢复并发限制，不回到无限恢复流量。
+- **发布/回滚**：新旧服务均读同一事实源，先部署兼容客户端再启新错误/游标行为；回滚服务器时保留已验证的ALB/Chat WS限额及ALB/saas gateway HTTP恢复限额，不回到无限恢复流量。
 
 <a id="w04"></a>
 ### W04 事务/JVM锁、等待预算与Chat侧DB保护
@@ -393,8 +393,8 @@ S链接定位[当前场景](scenarios.md)，DEP链接定位[部署方案](deploy
 
 - **预发布静态源**：每次发布同时生成不可变版本目录、manifest/hash及HTML/bundle/公共运行配置，将备用产物提前放到独立于ADS的对象存储发布源，由独立HTTPS托管能力对外服务。对象存储API不自动具备静态HTTPS/SPA回退/私有源鉴权，须实测ALB可接入；不能临时加ADS内唯一代理后宣称仍独立。验证证书、发布权限和访问链路不依赖故障ADS；备用版本由独立探针持续核对，不在WCM失效后临时构建/上传。
 - **兼容与安全**：保持文根/相对资源路径、缓存版本、登录回调、API区域地址及CORS/CSP；运行配置不得包含凭证。静态备用只提供页面与资源，API/WS/agentService/relayService仍走选定Region的服务链路，首页成功不计作聊天恢复；后台不可用时页面明确说明状态。
-- **ALB配置**：产出各Region域名/文根/路径/目标组矩阵，API请求不得被SPA静态回退吞掉；分别验收HTTP上传下载、WS Upgrade、SSE flush/缓存及idle/heartbeat预算，禁止未经幂等保护的POST自动重试。ALB/saas gateway/Servlet/下游期限的各段关系进入有效配置证据，不用应用30分钟期限推定入口能保持30分钟。
-- **WS入口契约**：核对ALB/saas gateway最大活跃连接、握手速率/在途、连接耗时及idle/排空行为，记录区域/集群/目标实例作用域和生产有效值；按后端经T22测得的安全容量分配租户及实例额度，覆盖负载分布不均、扩缩容和AZ失效。联合验证应用超额时的握手失败/关闭语义与前端退避，不让入口自动重试放大重连；已建立WS的控制帧不能仅靠HTTP请求限流保护，应用限额仍由W03实现。未取得平台证据保持E，不宣称已有集群配额。
+- **ALB配置**：产出各Region域名/文根/路径/目标组矩阵，API请求不得被SPA静态回退吞掉；分别验收HTTP上传下载、WS Upgrade、SSE flush/缓存及idle/heartbeat预算，禁止未经幂等保护的POST自动重试。HTTP按ALB/saas gateway/Servlet、WS按ALB/Chat分别登记，结合下游期限形成有效配置证据，不用应用30分钟期限推定入口能保持30分钟。
+- **WS入口契约**：核对ALB→Chat的最大活跃WS连接、握手速率/在途、连接耗时及idle/排空行为；记录区域/集群/目标实例作用域和生产有效值；WS不经saas gateway，其HTTP限流不能保护WS握手或控制帧；按后端经T22测得的安全容量分配租户及实例额度，覆盖负载分布不均、扩缩容和AZ失效。联合验证应用超额时的握手失败/关闭语义与前端退避，不让入口自动重试放大重连；已建立WS的控制帧不能仅靠HTTP请求限流保护，应用限额仍由W03实现。未取得平台证据保持E，不宣称已有集群配额。
 - **切换**：WCM故障可先切静态源，但不因此改动API写Region；区域切换由W14授权顺序执行。GSLB/DNS刷新仅影响重新解析和新连接，旧连接需摘流/关闭并引导客户端按游标、退避和恢复配额重连；旧Region必须先阻断写入，不能依赖TTL实现防双写。
 - **前置/接口**：WCM/对象存储提供实际托管能力和URL，网络提供ALB/GSLB配置，前端提供base path/配置加载契约。保持既有API格式；备用页面缺依赖或版本不符时停止切换，不能把404资源或API HTML当作健康。
 - **观测/测试**：版本/hash、静态资源失败率、文根命中、WS/SSE连接/断流、真实Region落点、DNS缓存及重连量。D10隔离WCM/ADS相关路径后测试独立备用、故意保留旧DNS/socket、文根嵌套、idle流和恢复风暴，分别报告页面与业务恢复。

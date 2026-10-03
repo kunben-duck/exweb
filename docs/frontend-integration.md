@@ -54,7 +54,7 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 | 消息版本详情 | `GET` | `/v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
 | 切换路径 | `POST` | `/v1/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
 | 新建分支 | `POST` | `/v1/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
-| 重命名会话 | `PATCH` | `/v1/chat/sessions/{sessionId}` | 更新会话标题 |
+| 重命名会话 | `POST`（兼容`PATCH`） | `/v1/chat/sessions/{sessionId}` | 更新会话标题 |
 | 归档/恢复会话 | `POST` | `/v1/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
 | 删除会话 | `DELETE` | `/v1/chat/sessions/{sessionId}` | 软删除单个会话，历史事实数据保留 |
 | 批量删除会话 | `DELETE` | `/v1/chat/sessions` | 批量软删除会话，运行中的会话会先取消 run |
@@ -220,7 +220,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 查询完整候选内容和排障；普通聊天页优先使用 `/messages` 的 `versionInfo` |
 | `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 持久化当前 active leaf；UI 切换可先用 `/messages?leafMessageId=` 刷新，不必阻塞等待该接口 |
 | `POST /chat/sessions/{sessionId}/branches` | Path：源 `sessionId`；Body：`sourceMessageId`、`title` 可选 | 新分支 `ChatSessionDto` | 使用返回的新 `sessionId` 进入分支会话 |
-| `PATCH /chat/sessions/{sessionId}` | Path：`sessionId`；Body：`title` | `ChatSessionDto` | 更新左侧列表标题 |
+| `POST /chat/sessions/{sessionId}`（兼容`PATCH`） | Path：`sessionId`；Body：`title` | `ChatSessionDto` | 更新左侧列表标题 |
 | `POST /chat/sessions/{sessionId}/archive` | Path：`sessionId` | `ChatSessionDto(status=ARCHIVED)` | 可从普通列表隐藏；恢复用 restore |
 | `POST /chat/sessions/{sessionId}/restore` | Path：`sessionId` | `ChatSessionDto(status=ACTIVE)` | 恢复后可继续发 run |
 | `DELETE /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto(status=DELETED)` | 删除后清理本地当前会话状态和订阅 |
@@ -262,7 +262,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
 | `POST /v1/chat/sessions/{sessionId}/path` | 用户选择某个历史版本作为当前路径。 | Path：`sessionId`；JSON body：`leafMessageId`。 | `ChatSessionDto`。 | 只切换 `currentLeafMessageId`，不创建 run。 |
 | `POST /v1/chat/sessions/{sessionId}/branches` | 从某条消息新建只读历史快照分支。 | Path：来源 `sessionId`；JSON body：`sourceMessageId` 必填，`title` 可选。 | 新分支 `ChatSessionDto`。 | 复制 root 到来源消息路径；快照消息 locked，不可编辑/重新生成。 |
-| `PATCH /v1/chat/sessions/{sessionId}` | 用户重命名会话。 | Path：`sessionId`；JSON body：`title`。 | `ChatSessionDto`。 | `title` 为空时保留原值。 |
+| `POST /v1/chat/sessions/{sessionId}`（兼容`PATCH`） | 用户重命名会话。 | Path：`sessionId`；JSON body：`title`。 | `ChatSessionDto`。 | `title` 为空时保留原值。 |
 | `POST /v1/chat/sessions/{sessionId}/archive` | 用户归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 归档通常用于列表隐藏，不删除历史。 |
 | `POST /v1/chat/sessions/{sessionId}/restore` | 用户恢复归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 恢复后可重新出现在普通会话列表。 |
 | `DELETE /v1/chat/sessions/{sessionId}` | 用户删除会话。 | Path：`sessionId`。 | `ChatSessionDto`，`status=DELETED`。 | 软删除，不物理删除历史事实数据；如果会话存在 active run，后端会先主动取消 run，再删除会话。 |
@@ -328,7 +328,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`session_xxx`、`msg_xxx`。 |
 | `POST /v1/chat/sessions/{sessionId}/path` | Body：`{"leafMessageId":"msg_leaf_xxx"}`。 |
 | `POST /v1/chat/sessions/{sessionId}/branches` | Body：`{"sourceMessageId":"msg_xxx","title":"费用分析分支"}`。 |
-| `PATCH /v1/chat/sessions/{sessionId}` | Body：`{"title":"新的会话标题"}`。 |
+| `POST /v1/chat/sessions/{sessionId}`（兼容`PATCH`） | Body：`{"title":"新的会话标题"}`。 |
 | `POST /v1/chat/sessions/{sessionId}/archive` | Path：`session_xxx`；无 body。 |
 | `POST /v1/chat/sessions/{sessionId}/restore` | Path：`session_xxx`；无 body。 |
 | `DELETE /v1/chat/sessions/{sessionId}` | Path：`session_xxx`；无 body。 |
@@ -1199,8 +1199,12 @@ leaf 不匹配均返回 `400 BAD_REQUEST`。
 
 会话管理：
 
+重命名推荐使用POST；原PATCH继续调用同一实现，暂不移除。URL、请求体和响应不变，
+未传请求体、未传`title`、`null`、空字符串或纯空白均保留原标题。部署时先升级支持双方法的后端，
+再切换前端；若Jalor按HTTP方法配置放行规则，需同步确认该路径允许POST。文档更新接口仍使用PATCH。
+
 ```bash
-curl -X PATCH http://localhost:8080/v1/chat/sessions/session_xxx \
+curl -X POST http://localhost:8080/v1/chat/sessions/session_xxx \
   -H 'Content-Type: application/json' \
   -d '{"title":"新的会话标题"}'
 

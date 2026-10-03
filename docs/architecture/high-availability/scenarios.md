@@ -1,6 +1,6 @@
 # 功能场景、资源状态与接口索引
 
-按需阅读：[12场景与24张时序图](#flows) → [资源生命周期及状态转换](#resources) → [44个HTTP操作与非REST入口](#interfaces)。资源表统一说明当前资源/状态口径；各场景的源码索引用于核对具体方法和边界。
+按需阅读：[12场景与24张时序图](#flows) → [资源生命周期及状态转换](#resources) → [45个HTTP操作与非REST入口](#interfaces)。资源表统一说明当前资源/状态口径；各场景的源码索引用于核对具体方法和边界。
 
 <a id="flows"></a>
 
@@ -39,7 +39,7 @@ DB是Chat持久化事实源；Chat使用Redis做派生缓存和Pub/Sub分发。�
 | S11 | 短期记忆、RouteMemory、标题、Intent记录分别关闭/启用；缓存miss；旁路超时/排队/迟到提交 | [S11可选旁路](#s11) |
 | S12 | 心跳、过期租约、初始化孤儿、Interaction对账、async到期、缓存同步；滚动发布、进程退出、依赖切换 | [S12后台与部署](#s12) |
 
-接口逐项索引见本页[44个HTTP操作与非REST入口](#interfaces)；REST 的同一路径不同方法是不同操作，不能用路径去重替代接口覆盖。全局身份解析、参数绑定和错误封装在每个 HTTP 入口成立；以下图省略其重复方法箭头，不省略其网关故障影响。
+接口逐项索引见本页[45个HTTP操作与非REST入口](#interfaces)；REST 的同一路径不同方法是不同操作，不能用路径去重替代接口覆盖。全局身份解析、参数绑定和错误封装在每个 HTTP 入口成立；以下图省略其重复方法箭头，不省略其网关故障影响。
 
 <a id="flows--部署故障如何进入业务场景"></a>
 #### 部署故障如何进入业务场景
@@ -1165,7 +1165,7 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 <a id="interfaces--口径"></a>
 ### 口径
 
-核对Controller与OpenAPI：45个handler对应44个唯一HTTP操作。`POST /v1/documents`有Servlet/Reactive互斥实现，生产Servlet只计一次。WS不是第45个REST操作；Actuator管理端点另列。
+会话重命名新增POST并保留PATCH后，45个handler对应45个唯一HTTP操作；两个重命名方法共用一个handler，原索引20推荐POST，兼容PATCH单列为20P，其他编号不变。`POST /v1/documents`有Servlet/Reactive互斥实现，生产Servlet只计一次。WS不是REST操作；Actuator管理端点另列。
 
 公共处理：企业身份和权限检查后进入Controller；多数阻塞服务以全局boundedElastic执行，MVC异步返回。反馈、候选鉴权、Event与回调另有专用资源。参数错误通常400；身份缺失401；**资源越权沿现有协议为HTTP200、body.code=ACCESS_DENIED**，前端不能只检查response.ok。运行已受理后的错误多为Event，不再改变早已返回的启动HTTP状态。
 
@@ -1174,7 +1174,7 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 物理入口为ALB文根→Jalor→Chat；文根、身份与转发策略按实际配置验收。操作01依次关联[S01受理](#s01)、[S02路由](#s02)、[S03输出](#s03)，CONTINUE_INTERACTION和操作02另看[S04](#s04)；操作03看[S05](#s05)，异步回调看[S06](#s06)，操作06/07/08及WS看[S07](#s07)与[S12治理](#s12)。标题不是新增接口，触发来自操作01中合格的NEXT/EDIT，见[S11标题调度及提交](#s11)；结果由操作11/12/13等会话读取返回。
 
 <a id="interfaces--44个操作逐项覆盖"></a>
-### 44个操作逐项覆盖
+### 45个操作逐项覆盖
 
 | ID | 方法与本地路径 | 视图/资源与差异 | 前端成功、失败及恢复规则 | 风险 |
 |---|---|---|---|---|
@@ -1197,7 +1197,8 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 | 17 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | [S08](#s08)；sibling及关联数据，不装配versionInfo | 可查看A/B，展示不等于已切换当前path | R11 |
 | 18 | `POST /v1/chat/sessions/{sessionId}/path` | [S08](#s08)；归属/未删除/消息归属检查，更新leaf；无active检查或CAS | 后续消息/候选操作基于新leaf；运行中切换有竞态，前端应避免 | R02 R08 R24 |
 | 19 | `POST /v1/chat/sessions/{sessionId}/branches` | [S08](#s08)；复制祖先链快照、新session | 创建独立分支，Intent反馈不复制；失败可能留下部分分支，勿无限重试 | R18 |
-| 20 | `PATCH /v1/chat/sessions/{sessionId}` | [S08](#s08)；rename TX10s，锁后最新快照 | 只改标题/人工标记；不覆盖专家scope/leaf | R02 |
+| 20 | `POST /v1/chat/sessions/{sessionId}` | [S08](#s08)；rename TX10s，锁后最新快照 | 推荐入口；只改标题/人工标记，不覆盖专家scope/leaf；Jalor需允许该POST | R02 |
+| 20P | `PATCH /v1/chat/sessions/{sessionId}` | [S08](#s08)；与20共用handler、事务和SQL | 旧客户端兼容入口，暂无移除时间；请求、响应与POST一致 | R02 |
 | 21 | `POST /v1/chat/sessions/{sessionId}/archive` | [S08](#s08)；TX10s、锁后快照 | 归档与Stop不是同义词；按状态限制后续访问 | R02 |
 | 22 | `POST /v1/chat/sessions/{sessionId}/restore` | [S08](#s08)；TX10s、锁后快照 | 恢复归档会话，不复活DELETED，不自动重启Run | R02 |
 | 23 | `DELETE /v1/chat/sessions/{sessionId}` | [S08](#s08)；锁后DB停止计划、软删及关联处理；无显式TX期限 | DB删除先提交，再best-effort stop；不保证响应时远端已停 | R04 R14 R17 R18 R23 |

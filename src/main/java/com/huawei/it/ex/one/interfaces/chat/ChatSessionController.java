@@ -58,11 +58,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -381,11 +381,13 @@ public class ChatSessionController {
     /**
      * 重命名当前用户会话。
      *
+     * <p>推荐使用 POST；PATCH 保留旧客户端兼容，两个方法共用相同的权限及事务逻辑。</p>
+     *
      * @param sessionId 会话标识；服务端会校验会话归属。
      * @param request 更新请求；title 为空时保留原标题。
      * @return 更新后的会话元数据。
      */
-    @PatchMapping("/{sessionId}")
+    @RequestMapping(value = "/{sessionId}", method = {RequestMethod.POST, RequestMethod.PATCH})
     public Mono<ChatSessionDto> update(@PathVariable("sessionId") String sessionId,
                                             @RequestBody(required = false) UpdateChatSessionRequest request) {
         UserContext user = resolveChatUser();

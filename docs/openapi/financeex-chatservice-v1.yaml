@@ -1308,10 +1308,34 @@ paths:
           $ref: '#/components/responses/ChatSessionResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: renameChatSession
+      summary: 更新会话标题
+      description: 推荐使用POST重命名会话；原PATCH入口继续兼容，使用相同请求、响应及业务逻辑。
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateChatSessionRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
     patch:
       tags: [Chat Sessions & Messages]
       operationId: updateChatSession
-      summary: 更新会话标题
+      summary: 更新会话标题（兼容入口）
+      deprecated: true
+      description: 保留旧客户端兼容，暂无移除时间；新客户端请使用相同路径的POST方法。
       parameters:
         - $ref: '#/components/parameters/SessionId'
       requestBody:

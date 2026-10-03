@@ -4,6 +4,8 @@
 
 package com.huawei.it.ex.one.interfaces.chat.dto;
 
+import com.huawei.it.ex.one.domain.notification.UserNotification;
+
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.Map;
@@ -16,7 +18,7 @@ import java.util.Map;
  * turn stream 连接状态，不对应持久化事件。</p>
  *
  * @param id 客户端命令 ID，reply/error 会原样返回；服务端主动 message 可为空。
- * @param type envelope 类型：reply、message、error。
+ * @param type envelope 类型：reply、message、error、notification。
  * @param topicId run 级 stream topic。
  * @param offset 当前 stream-item 的数据库 seq 字符串；heartbeat/done 不推进 offset。
  * @param payload conversation turn stream 片段，仅 message 使用。
@@ -24,6 +26,7 @@ import java.util.Map;
  * @param code 错误码，仅 error 使用。
  * @param message 错误说明，仅 error 使用。
  * @param details 可选诊断信息；旧前端可忽略。
+ * @param notification 用户级轻量变更提示，不进入 Run 事件管线。
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ChatWebSocketEnvelopeDto(
@@ -35,8 +38,20 @@ public record ChatWebSocketEnvelopeDto(
         Map<String, Object> reply,
         String code,
         String message,
-        Map<String, Object> details
+        Map<String, Object> details,
+        UserNotification notification
 ) {
+    public ChatWebSocketEnvelopeDto(String id, String type, String topicId, String offset,
+            ConversationTurnStreamDto payload, Map<String, Object> reply, String code,
+            String message, Map<String, Object> details) {
+        this(id, type, topicId, offset, payload, reply, code, message, details, null);
+    }
+
+    public static ChatWebSocketEnvelopeDto notification(UserNotification notification) {
+        return new ChatWebSocketEnvelopeDto(null, "notification", null, null, null, null,
+                null, null, null, notification);
+    }
+
     public static ChatWebSocketEnvelopeDto reply(String id, Map<String, Object> reply) {
         return new ChatWebSocketEnvelopeDto(id, "reply", null, null, null, reply, null, null, null);
     }

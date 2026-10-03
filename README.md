@@ -115,7 +115,11 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 移动端会话创建和列表隔离复用现有 `channel`：移动端在自动创建 run 及三个列表接口中统一传小写 `mobile`；PC 端省略该字段，新会话继续默认保存为 `web`，列表仍可查看全部渠道。已有会话只有在请求显式携带 `channel` 时才校验一致性，因此该过滤属于展示和创建隔离，不替代会话的 `tenantId + userId` 归属校验。带 channel 的游标使用绑定 `appId/title/channel` 的 v4 格式；无 channel 的 v2/v3 游标继续兼容。
 
-启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题任务独立订阅，Run不等待标题生成或保存，不产生标题实时事件；前端在后续会话列表或详情查询中读取结果。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。
+启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题任务独立订阅，Run不等待标题生成或保存。标题提交后向已订阅连接尽力发送用户级提示，前端查询单会话详情读取结果，不产生Run事件。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。
+
+用户级通知接入见[公共实时通知组件](docs/user-notifications.md)：每条WS连接发送一次
+`subscribe-user-notifications`，可接收自动标题更新及DomainAgent异步任务终态。
+通知不占Run topic名额，不替代正文流、Resume或业务事实查询；本服务内其他模块可复用发布接口。
 
 自动结果只覆盖服务端默认或自动标题，显式标题、手动重命名、只读分支及没有私有状态标记的存量会话均受保护。标题编排通过`SessionTitleAppExclusionProvider`按当前可信会话AppId判断是否跳过；默认实现读取逗号分隔的`excluded-app-ids`，配置项会trim、去空并去重，再按大小写敏感的精确值匹配，`appId=null`的主站会话不受影响。企业可提供自定义Provider替换配置来源；查询失败或返回空结果时继续标题提炼。排除规则不会回滚已有自动标题，仅阻止后续提炼及晚轮补偿。
 

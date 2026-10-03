@@ -10,17 +10,24 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationBus;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
+import com.huawei.it.ex.one.application.service.notification.DefaultUserNotificationPublisher;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,6 +43,8 @@ class SessionTitleCommitServiceTest {
         when(repository.findByTenantIdAndUserIdAndId("tenant-1", "user-1", "session-1"))
                 .thenReturn(Optional.of(current));
         SessionTitleCommitService service = new SessionTitleCommitService(repository, metadata);
+        UserNotificationPublisher notifications = mock(UserNotificationPublisher.class);
+        service.setNotificationPublisher(notifications);
 
         boolean stale = service.apply(candidate(1, 4L), "旧标题");
         when(repository.findByTenantIdAndUserIdAndId("tenant-1", "user-1", "session-1"))
@@ -44,8 +53,39 @@ class SessionTitleCommitServiceTest {
 
         assertThat(stale).isFalse();
         assertThat(manual).isFalse();
+        verifyNoInteractions(notifications);
         verify(repository, never()).updateTitleWithoutTouch(
                 org.mockito.ArgumentMatchers.any(), anyString(), anyString());
+    }
+
+    @Test
+    void successfulTitleOnlyQueuesNotificationAfterCommit() {
+        SessionTitleProperties properties = new SessionTitleProperties();
+        properties.setEnabled(true);
+        SessionTitleMetadata metadata = new SessionTitleMetadata(new ObjectMapper(), properties);
+        SessionRepository repository = mock(SessionRepository.class);
+        ChatSession current = session(metadata.markAuto(null, 1, 2));
+        when(repository.findByTenantIdAndUserIdAndId("tenant-1", "user-1", "session-1"))
+                .thenReturn(Optional.of(current));
+        SessionTitleCommitService service = new SessionTitleCommitService(repository, metadata);
+        UserNotificationBus bus = mock(UserNotificationBus.class);
+        List<Runnable> tasks = new ArrayList<>();
+        service.setNotificationPublisher(new DefaultUserNotificationPublisher(bus, new ObjectMapper(), tasks::add));
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThat(service.apply(candidate(2, 5), "new title")).isTrue();
+            assertThat(tasks).isEmpty();
+            verifyNoInteractions(bus);
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+            assertThat(tasks).hasSize(1);
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
+        tasks.getFirst().run();
+        org.mockito.ArgumentCaptor<String> json = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(bus).publish(org.mockito.ArgumentMatchers.any(), json.capture());
+        assertThat(json.getValue()).contains("session.title.updated", "session-1").doesNotContain("new title");
     }
 
     private SessionTitleCandidate candidate(int queryCount, long nodeOrder) {

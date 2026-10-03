@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
@@ -68,6 +69,8 @@ class ChatCoordinatorConfigurationTest {
                             () -> mock(ChatInteractionApplicationService.class))
                     .withBean(ChatRunTerminalCommitService.class,
                             () -> mock(ChatRunTerminalCommitService.class))
+                    .withBean(UserNotificationPublisher.class,
+                            () -> mock(UserNotificationPublisher.class))
                     .withBean(DomainAgentAsyncTaskApplicationService.class,
                             () -> mock(DomainAgentAsyncTaskApplicationService.class))
                     .withBean(IdGenerator.class, () -> mock(IdGenerator.class))

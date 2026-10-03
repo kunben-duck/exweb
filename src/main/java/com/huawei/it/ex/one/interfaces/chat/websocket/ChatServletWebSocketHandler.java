@@ -149,6 +149,10 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         try {
             message = toOutboundMessage(envelope);
         } catch (Exception ex) {
+            if ("notification".equals(envelope.type())) {
+                log.warn("Drop unserializable user notification");
+                return;
+            }
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SERIALIZATION_FAILED,
                             "Servlet WebSocket envelope serialization failed")
                     .operation("websocket.envelope.serialize")
@@ -160,7 +164,9 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         }
         ServletWebSocketOutboundQueue.OfferResult result = connection.outbound().offer(message);
         if (result == ServletWebSocketOutboundQueue.OfferResult.ACCEPTED) {
-            scheduleDrain(connectionId, connection);
+            scheduleDrain(connectionId, connection, message.notification());
+        } else if (result == ServletWebSocketOutboundQueue.OfferResult.SKIPPED_NOTIFICATION) {
+            log.debug("Drop user notification because WebSocket outbound queue is busy");
         } else if (result == ServletWebSocketOutboundQueue.OfferResult.SKIPPED_HEARTBEAT) {
             log.debug("Skip WebSocket heartbeat because outbound queue is busy, connectionId={}, topicId={}, offset={}",
                     connectionId, message.topicId(), message.offset());
@@ -186,12 +192,22 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void scheduleDrain(String connectionId, ServletConnection connection) {
+        scheduleDrain(connectionId, connection, false);
+    }
+
+    private void scheduleDrain(String connectionId, ServletConnection connection, boolean notification) {
         if (!connection.outbound().tryStartDraining()) {
             return;
         }
         try {
             sendExecutor.execute(() -> drainOutbound(connectionId, connection));
         } catch (RejectedExecutionException ex) {
+            if (notification) {
+                if (connection.outbound().discardNotificationsAfterRejectedDrain()) {
+                    scheduleDrain(connectionId, connection);
+                }
+                return;
+            }
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_EXECUTOR_REJECTED,
                             "Servlet WebSocket send executor rejected a drain task")
                     .operation("websocket.outbound.schedule")

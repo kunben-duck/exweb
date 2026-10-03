@@ -8,6 +8,9 @@ import com.huawei.it.ex.one.application.config.ChatWebSocketProperties;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 
 import reactor.core.Disposable;
+import reactor.core.Disposables;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -18,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 当前服务实例内的 WebSocket 连接注册表。
@@ -150,6 +154,74 @@ public class LocalWebSocketConnectionRegistry {
         }
     }
 
+    /** 仅登记内存句柄，Redis 注册不得在本注册表锁内执行。 */
+    public synchronized NotificationSubscription userNotifications(String connectionId) {
+        ConnectionState state = connections.get(connectionId);
+        if (state == null) {
+            throw new IllegalStateException("WS_CONNECTION_NOT_FOUND");
+        }
+        state.touch();
+        if (state.notifications == null) {
+            state.notifications = new NotificationSubscription();
+        }
+        return state.notifications;
+    }
+
+    public boolean ownsUserNotifications(String connectionId, NotificationSubscription subscription) {
+        return get(connectionId).map(state -> state.notifications == subscription && !subscription.isDisposed())
+                .orElse(false);
+    }
+
+    public synchronized void unsubscribeUserNotifications(String connectionId, NotificationSubscription expected) {
+        ConnectionState state = connections.get(connectionId);
+        if (state != null && state.notifications != null
+                && (expected == null || state.notifications == expected)) {
+            NotificationSubscription previous = state.notifications;
+            state.notifications = null;
+            state.touch();
+            previous.dispose();
+        }
+    }
+
+    public static final class NotificationSubscription implements Disposable {
+        private final AtomicBoolean started = new AtomicBoolean();
+        private final Disposable.Composite resources = Disposables.composite();
+        private final Sinks.One<Void> ready = Sinks.one();
+
+        public boolean startOnce() {
+            return started.compareAndSet(false, true);
+        }
+
+        public void add(Disposable resource) {
+            resources.add(resource);
+        }
+
+        public void registered(Disposable resource) {
+            if (resources.add(resource)) {
+                ready.tryEmitEmpty();
+            }
+        }
+
+        public void failed(Throwable error) {
+            ready.tryEmitError(error);
+        }
+
+        public Mono<Void> ready() {
+            return ready.asMono();
+        }
+
+        @Override
+        public void dispose() {
+            resources.dispose();
+            ready.tryEmitError(new IllegalStateException("User notification subscription closed"));
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return resources.isDisposed();
+        }
+    }
+
     /**
      * 判断连接是否已超过空闲时间。
      *
@@ -184,6 +256,7 @@ public class LocalWebSocketConnectionRegistry {
         private final Map<String, SubscriptionState> subscriptions = new ConcurrentHashMap<>();
         private volatile String presence = "foreground";
         private volatile Instant lastActiveAt;
+        private volatile NotificationSubscription notifications;
 
         private ConnectionState(String connectionId, String tenantId, String userId, String username) {
             this.connectionId = connectionId;
@@ -257,6 +330,10 @@ public class LocalWebSocketConnectionRegistry {
         }
 
         private void close() {
+            if (notifications != null) {
+                notifications.dispose();
+                notifications = null;
+            }
             subscriptions.values().forEach(SubscriptionState::dispose);
             subscriptions.clear();
             touch();

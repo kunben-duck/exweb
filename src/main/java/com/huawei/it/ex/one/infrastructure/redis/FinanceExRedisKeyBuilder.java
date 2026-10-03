@@ -14,6 +14,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Locale;
 
 /**
@@ -173,6 +175,14 @@ public class FinanceExRedisKeyBuilder {
      */
     public String chatStreamChannel(String streamTopicId) {
         return prefix(liveEventBusProperties.getRedisChannelPrefix()) + ":" + normalize(streamTopicId);
+    }
+
+    /** 用户通知独立于 Run channel；编码身份段，避免分隔符造成跨用户碰撞。 */
+    public String userNotificationChannel(String tenantId, String userId) {
+        Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
+        return prefix("fin_ex:user_notifications") + ":"
+                + encoder.encodeToString(tenantId.getBytes(StandardCharsets.UTF_8)) + ":"
+                + encoder.encodeToString(userId.getBytes(StandardCharsets.UTF_8));
     }
 
     /**

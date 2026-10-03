@@ -79,6 +79,9 @@ x-websocket:
     streamItemId 当前为 evt_<sequence>。run.waiting_user 与 run.completed/failed/cancelled
     均闭合当前 topic 并产生 done；run.async_running 不闭合 WebSocket topic。
     presence 更新命令使用 state。下面的消息定义不是 HTTP response，完整分支及可选帧见场景手册。
+    可另行发送 subscribe-user-notifications 接收用户级变更提示，不占Run topic名额。
+    通知仅尽力实时投递，不含offset、sequence或业务流payload，不进入Event Resume。
+    标题更新通知后查询单会话详情；异步任务终态通知后合并刷新列表。接入见 ../user-notifications.md。
   identityContext: 复用 WebSocket Upgrade 时企业框架建立的身份上下文和现有 Origin 校验。
   clientMessages:
     connect:
@@ -89,12 +92,18 @@ x-websocket:
       $ref: '#/components/schemas/WebSocketSubscribeCommand'
     unsubscribe:
       $ref: '#/components/schemas/WebSocketUnsubscribeCommand'
+    subscribe-user-notifications:
+      $ref: '#/components/schemas/WebSocketSubscribeUserNotificationsCommand'
+    unsubscribe-user-notifications:
+      $ref: '#/components/schemas/WebSocketUnsubscribeUserNotificationsCommand'
   serverMessages:
     reply:
       $ref: '#/components/schemas/ChatWebSocketEnvelope'
     message:
       $ref: '#/components/schemas/ChatWebSocketEnvelope'
     error:
+      $ref: '#/components/schemas/ChatWebSocketEnvelope'
+    notification:
       $ref: '#/components/schemas/ChatWebSocketEnvelope'
   serverExamples:
     subscribeReply:
@@ -109,6 +118,10 @@ x-websocket:
       $ref: '#/components/examples/WebSocketDone'
     recoverRequired:
       $ref: '#/components/examples/WebSocketRecoverRequired'
+    titleUpdated:
+      $ref: '#/components/examples/WebSocketTitleUpdated'
+    asyncFinishedNotification:
+      $ref: '#/components/examples/WebSocketAsyncFinishedNotification'
   scenarioGuide:
     connection: ../websocket-response-examples.md#s01
     domainAgent: ../websocket-response-examples.md#s02
@@ -122,6 +135,7 @@ x-websocket:
     asyncTask: ../websocket-response-examples.md#s10
     stopAndFailure: ../websocket-response-examples.md#s11
     retentionAndResume: ../websocket-response-examples.md#s12
+    userNotifications: ../user-notifications.md
   errors:
     - WS_AUTH_FAILED
     - WS_ORIGIN_FORBIDDEN
@@ -130,6 +144,7 @@ x-websocket:
     - SUBSCRIBE_ERROR
     - NOT_SUBSCRIBED
     - RECOVER_REQUIRED
+    - USER_NOTIFICATIONS_UNAVAILABLE
 
 paths:
   /v1/chat/runs:
@@ -2219,6 +2234,24 @@ components:
               - $ref: '#/components/schemas/ApiErrorResponse'
 
   examples:
+    WebSocketTitleUpdated:
+      summary: 自动标题已提交；查询单会话详情读取标题
+      value:
+        type: notification
+        notification:
+          type: session.title.updated
+          data:
+            sessionId: session_example
+    WebSocketAsyncFinishedNotification:
+      summary: 异步任务终态已提交；不替代Run结果流
+      value:
+        type: notification
+        notification:
+          type: session.async.finished
+          data:
+            sessionId: session_example
+            runId: run_example
+            status: COMPLETED
     WebSocketSubscribeReply:
       summary: 订阅受理，不表示历史补发完成
       value:
@@ -4790,6 +4823,47 @@ components:
         type: unsubscribe
         topicId: chat-run-run_002
 
+    WebSocketSubscribeUserNotificationsCommand:
+      type: object
+      required: [type]
+      description: 每连接幂等订阅一次，重连需重新订阅；身份来自握手，不接受客户端指定用户。注册返回且收到该用户频道订阅确认后才回复成功；新共享监听在2秒内未就绪则返回USER_NOTIFICATIONS_UNAVAILABLE，可退避重试，不影响已订阅Run的输出。
+      properties:
+        id:
+          type: string
+          description: 前端生成的命令关联ID，reply/error原样回显
+        type:
+          type: string
+          enum: [subscribe-user-notifications]
+      example:
+        id: req_1
+        type: subscribe-user-notifications
+    WebSocketUnsubscribeUserNotificationsCommand:
+      type: object
+      required: [type]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [unsubscribe-user-notifications]
+      example:
+        id: req_2
+        type: unsubscribe-user-notifications
+    UserNotification:
+      type: object
+      required: [type, data]
+      description: |
+        16KiB以内的best-effort用户级提示，不提供离线补发或Run序号。
+        session.title.updated的data仅含sessionId；session.async.finished含sessionId/runId/status，
+        status为COMPLETED、FAILED或CANCELLED，超时为FAILED。前端忽略未来未知通知类型。
+      properties:
+        type:
+          type: string
+          minLength: 1
+          maxLength: 128
+        data:
+          type: object
+          additionalProperties: true
     ChatWebSocketEnvelope:
       type: object
       required: [type]
@@ -4804,7 +4878,7 @@ components:
           description: 命令 reply/error 回显请求 ID；主动 message/恢复提示通常省略
         type:
           type: string
-          enum: [reply, message, error]
+          enum: [reply, message, error, notification]
         topicId:
           type: string
           nullable: true
@@ -4836,6 +4910,11 @@ components:
           nullable: true
           additionalProperties: true
           description: 恢复诊断按原因提供 recoveryAfterSeq、actualSeq、lastSentSeq 等；恢复起点可能小于本地最高游标
+        notification:
+          allOf:
+            - $ref: '#/components/schemas/UserNotification'
+          nullable: true
+          description: 仅用户级notification消息出现；无topicId/offset，不参与Run终态处理
       example:
         type: message
         topicId: chat-run-run_002

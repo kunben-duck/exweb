@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -19,9 +20,12 @@ import com.huawei.it.ex.one.domain.chat.ErrorEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.notification.UserNotification;
+import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,6 +46,12 @@ public class DomainAgentAsyncTaskCallbackCommitService {
     private final ChatEventBatcher eventBatcher;
     private final ObjectMapper objectMapper;
     private final AgentDataPersistenceEventPolicy retentionPolicy = new AgentDataPersistenceEventPolicy();
+    private UserNotificationPublisher notificationPublisher = (recipient, notification) -> { };
+
+    @Autowired
+    void setNotificationPublisher(UserNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = notificationPublisher;
+    }
 
     public DomainAgentAsyncTaskCallbackCommitService(
             ChatRunRepository runRepository,
@@ -111,6 +121,9 @@ public class DomainAgentAsyncTaskCallbackCommitService {
                 new UserContext(initial.tenantId(), initial.userId(), initial.userId()),
                 session,
                 terminal.sequence());
+        notificationPublisher.publish(new UserNotificationRecipient(initial.tenantId(), initial.userId()),
+                new UserNotification("session.async.finished", Map.of(
+                        "sessionId", initial.sessionId(), "runId", initial.id(), "status", terminalStatus.name())));
         return new CommitResult(true, committedRun, existing.id(), List.copyOf(sequenced));
     }
 

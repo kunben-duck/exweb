@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.interfaces.chat.websocket;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationBus;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.application.service.chat.StreamRecoveryRequiredException;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
@@ -14,6 +15,7 @@ import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 import com.huawei.it.ex.one.interfaces.chat.ChatEventTranslator;
 import com.huawei.it.ex.one.interfaces.chat.ChatTurnStreamTranslator;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
@@ -24,9 +26,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -52,6 +56,12 @@ public class ChatWebSocketProtocolService {
     private final ChatTurnStreamTranslator turnStreamTranslator;
     private final ChatStreamProperties chatStreamProperties;
     private final ObjectMapper objectMapper;
+    private UserNotificationBus notificationBus;
+
+    @Autowired
+    void setNotificationBus(UserNotificationBus notificationBus) {
+        this.notificationBus = notificationBus;
+    }
 
     public ChatWebSocketProtocolService(PermissionChecker permissionChecker,
                                         ChatStreamApplicationService chatStreamService,
@@ -156,6 +166,14 @@ public class ChatWebSocketProtocolService {
         if ("subscribe".equals(type)) {
             return subscribe(connectionId, user, outbound, root, commandId);
         }
+        if ("subscribe-user-notifications".equals(type)) {
+            return subscribeUserNotifications(connectionId, user, outbound, commandId);
+        }
+        if ("unsubscribe-user-notifications".equals(type)) {
+            connectionRegistry.unsubscribeUserNotifications(connectionId, null);
+            outbound.emit(ChatWebSocketEnvelopeDto.reply(commandId, Map.of("type", type)));
+            return Mono.empty();
+        }
         if ("unsubscribe".equals(type)) {
             String topicId = root.path("topicId").asText(null);
             if (topicId == null || topicId.isBlank()) {
@@ -169,6 +187,46 @@ public class ChatWebSocketProtocolService {
         outbound.emit(ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE",
                 "不支持的 WebSocket command type: " + type));
         return Mono.empty();
+    }
+
+    private Mono<Void> subscribeUserNotifications(String connectionId, UserContext user,
+            ChatWebSocketOutbound outbound, String commandId) {
+        return Mono.defer(() -> {
+            LocalWebSocketConnectionRegistry.NotificationSubscription subscription =
+                    connectionRegistry.userNotifications(connectionId);
+            if (subscription.startOnce()) {
+                try {
+                    subscription.add(notificationBus.subscribe(
+                                    new UserNotificationRecipient(user.tenantId(), user.ownerUserId()),
+                                    notification -> {
+                                        if (connectionRegistry.ownsUserNotifications(connectionId, subscription)) {
+                                            outbound.emit(ChatWebSocketEnvelopeDto.notification(notification));
+                                        }
+                                    })
+                            .subscribe(subscription::registered, subscription::failed));
+                } catch (RuntimeException ex) {
+                    subscription.failed(ex);
+                }
+            }
+            return subscription.ready()
+                    .doOnSuccess(ignored -> {
+                        if (connectionRegistry.ownsUserNotifications(connectionId, subscription)) {
+                            outbound.emit(ChatWebSocketEnvelopeDto.reply(commandId,
+                                    Map.of("type", "subscribe-user-notifications")));
+                        }
+                    })
+                    .doFinally(signal -> {
+                        if (signal == SignalType.CANCEL || signal == SignalType.ON_ERROR) {
+                            connectionRegistry.unsubscribeUserNotifications(connectionId, subscription);
+                        }
+                    });
+        }).onErrorResume(ignored -> {
+            if (connectionRegistry.get(connectionId).isPresent()) {
+                outbound.emit(ChatWebSocketEnvelopeDto.error(commandId, "USER_NOTIFICATIONS_UNAVAILABLE",
+                        "用户通知暂不可用，请稍后重试"));
+            }
+            return Mono.empty();
+        });
     }
 
     private Mono<Void> subscribe(String connectionId, UserContext user, ChatWebSocketOutbound outbound,

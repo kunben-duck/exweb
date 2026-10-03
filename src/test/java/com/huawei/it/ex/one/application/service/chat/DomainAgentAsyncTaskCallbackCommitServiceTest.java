@@ -17,6 +17,7 @@ import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
@@ -28,6 +29,8 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
+import com.huawei.it.ex.one.domain.notification.UserNotification;
+import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -51,6 +54,9 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
                         fixture.running.id(), true, null));
 
         assertThat(result.accepted()).isTrue();
+        verify(fixture.notifications).publish(new UserNotificationRecipient("tenant1", "user1"),
+                new UserNotification("session.async.finished", Map.of(
+                        "sessionId", "session1", "runId", "run1", "status", "COMPLETED")));
         assertThat(result.events()).extracting(item -> item.event().type()).containsExactly(
                 "run.async_finished", "message.completed", "run.completed");
         assertThat(result.events().getFirst().event().payload())
@@ -84,6 +90,9 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
         assertThat(result.events()).extracting(item -> item.event().type()).containsExactly(
                 "run.async_finished", "message.completed", "run.failed");
         assertThat(result.events().getFirst().event().payload()).containsEntry("status", "FAILED");
+        verify(fixture.notifications).publish(new UserNotificationRecipient("tenant1", "user1"),
+                new UserNotification("session.async.finished", Map.of(
+                        "sessionId", "session1", "runId", "run1", "status", "FAILED")));
         assertThat(result.events().getLast().event().payload())
                 .containsEntry("code", "DOMAIN_AGENT_ASYNC_FAILED")
                 .containsEntry("error", error);
@@ -207,7 +216,18 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
         verify(fixture.executionRepository, never()).markTerminal(any(), any());
     }
 
+    @Test
+    void lostTerminalClaimDoesNotNotify() {
+        Fixture fixture = new Fixture();
+        fixture.prepare(ChatRunStatus.COMPLETED, 12, 10);
+        when(fixture.runRepository.tryClaimExternalTerminal(any())).thenReturn(false);
+        assertThat(fixture.service.commit(new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                "run1", true, null)).accepted()).isFalse();
+        org.mockito.Mockito.verifyNoInteractions(fixture.notifications);
+    }
+
     private static final class Fixture {
+        private final UserNotificationPublisher notifications = mock(UserNotificationPublisher.class);
         private final ChatRunRepository runRepository = mock(ChatRunRepository.class);
         private final ChatRunExecutionRepository executionRepository = mock(ChatRunExecutionRepository.class);
         private final SessionRepository sessionRepository = mock(SessionRepository.class);
@@ -233,6 +253,7 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
             this.service = new DomainAgentAsyncTaskCallbackCommitService(
                     runRepository, executionRepository, sessionRepository,
                     sessionService, streamService, eventBatcher, objectMapper);
+            this.service.setNotificationPublisher(notifications);
         }
 
         private void prepare(ChatRunStatus terminalStatus, long terminalSequence, long firstSequence) {

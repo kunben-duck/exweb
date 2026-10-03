@@ -12,6 +12,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
@@ -20,6 +21,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppend
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
@@ -43,6 +45,8 @@ import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.notification.UserNotification;
+import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
@@ -455,6 +459,8 @@ class ChatRunTerminalCommitServiceTest {
         ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
         ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
                 streamService, sessionService, runRepository, leaseService, null, null, Duration.ZERO);
+        UserNotificationPublisher notifications = mock(UserNotificationPublisher.class);
+        service.setNotificationPublisher(notifications);
         Instant now = Instant.now();
         ChatRun staleRun = new ChatRun(
                 "run1", "tenant1", "user1", "session1", ChatRunStatus.CANCELLING,
@@ -495,16 +501,20 @@ class ChatRunTerminalCommitServiceTest {
                 .doesNotContain("skill-stale")
                 .doesNotContain("skill-old");
         assertThat(result.committed()).isTrue();
+        verifyNoInteractions(notifications);
     }
 
-    @Test
-    void stopClosesAsyncWaitingRunWithoutReplacingExistingAssistantContent() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void stopOrTimeoutClosesAsyncWaitingRunWithoutReplacingExistingAssistantContent(boolean timeout) {
         ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
         SessionApplicationService sessionService = mock(SessionApplicationService.class);
         ChatRunRepository runRepository = mock(ChatRunRepository.class);
         ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
         ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
                 streamService, sessionService, runRepository, leaseService, null, null, Duration.ZERO);
+        UserNotificationPublisher notifications = mock(UserNotificationPublisher.class);
+        service.setNotificationPublisher(notifications);
         Instant now = Instant.now();
         ChatRun stopping = new ChatRun(
                 "run-async", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
@@ -513,8 +523,17 @@ class ChatRunTerminalCommitServiceTest {
                 DomainAgentAsyncTaskMetadata.runningOverlay(
                         "msg-assistant", now.plus(Duration.ofHours(1))), now, now)
                 .cancelling("USER_STOP");
-        ChatRun claimed = stopping.cancelled(0L);
-        ChatRun committed = claimed.withMetadataSnapshot(Map.of()).cancelled(12L);
+        if (timeout) {
+            stopping = new ChatRun(
+                    "run-async", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
+                    "DOMAIN_AGENT", "skill-a", "domain-agent", null, ChatRunMode.NEXT,
+                    null, "msg-user", "msg-assistant", 1L, 4L, null, now, null,
+                    DomainAgentAsyncTaskMetadata.runningOverlay("msg-assistant", now.minusSeconds(1)), now, now);
+        }
+        ChatRunStatus expected = timeout ? ChatRunStatus.FAILED : ChatRunStatus.CANCELLED;
+        ChatRun claimed = timeout ? stopping.failed(0L) : stopping.cancelled(0L);
+        ChatRun committed = (timeout ? claimed.failed(12L) : claimed.cancelled(12L))
+                .withMetadataSnapshot(Map.of());
         ChatSession session = new ChatSession(
                 "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
         ChatMessage assistant = new ChatMessage(
@@ -523,10 +542,11 @@ class ChatRunTerminalCommitServiceTest {
                 "run-async", "NORMAL", false, null, null, null, null,
                 "{\"skillId\":\"skill-a\",\"domainAgentAsyncTask\":{\"status\":\"ASYNC_RUNNING\"}}",
                 now);
-        ChatEvent event = RunCancelledEvent.of(
-                stopping.id(), stopping.sessionId(), "USER_STOP", true, assistant.id());
-        ChatEvent stored = new RunCancelledEvent(
-                stopping.id(), stopping.sessionId(), 12L, now, event.payload());
+        ChatEvent event = timeout ? ErrorEvent.of(stopping.id(), stopping.sessionId(), "ASYNC_TIMEOUT", "timeout")
+                : RunCancelledEvent.of(stopping.id(), stopping.sessionId(), "USER_STOP", true, assistant.id());
+        ChatEvent stored = timeout
+                ? new ErrorEvent(stopping.id(), stopping.sessionId(), 12L, now, "ASYNC_TIMEOUT", "timeout", event.payload())
+                : new RunCancelledEvent(stopping.id(), stopping.sessionId(), 12L, now, event.payload());
         when(sessionService.requireSessionForInternalUpdate(
                 stopping.tenantId(), stopping.userId(), stopping.sessionId())).thenReturn(session);
         when(sessionService.requireAssistantForInternalUpdate(session, assistant.id())).thenReturn(assistant);
@@ -538,7 +558,8 @@ class ChatRunTerminalCommitServiceTest {
         when(runRepository.finalizeExternalTerminal(any())).thenReturn(committed);
 
         ChatRunTerminalCommitService.ExternalTerminalCommitResult result = service.commitExternalTerminal(
-                ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, stopping, null));
+                timeout ? ChatRunTerminalCommitService.ExternalTerminalCommitCommand.asyncTimeout(event, stopping)
+                        : ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, stopping, null));
 
         ArgumentCaptor<AssistantMessageUpdateCommand> assistantCaptor =
                 ArgumentCaptor.forClass(AssistantMessageUpdateCommand.class);
@@ -548,14 +569,18 @@ class ChatRunTerminalCommitServiceTest {
         assertThat(assistantCaptor.getValue().appendAnswerPart()).isFalse();
         assertThat(assistantCaptor.getValue().metadataJson())
                 .contains("\"skillId\":\"skill-a\"")
-                .contains("\"status\":\"CANCELLED\"");
+                .contains("\"status\":\"" + expected.name() + "\"");
         ArgumentCaptor<ChatRun> savedRunCaptor = ArgumentCaptor.forClass(ChatRun.class);
         verify(runRepository).save(savedRunCaptor.capture());
         assertThat(savedRunCaptor.getValue().metadata())
                 .doesNotContainKey(DomainAgentAsyncTaskMetadata.RUN_METADATA_KEY);
-        verify(leaseService).markTerminal(stopping.id(), ChatRunExecutionStatus.CANCELLED);
+        verify(leaseService).markTerminal(stopping.id(), timeout
+                ? ChatRunExecutionStatus.FAILED : ChatRunExecutionStatus.CANCELLED);
         assertThat(result.committed()).isTrue();
-        assertThat(result.run().status()).isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(result.run().status()).isEqualTo(expected);
+        verify(notifications).publish(new UserNotificationRecipient("tenant1", "user1"),
+                new UserNotification("session.async.finished", Map.of(
+                        "sessionId", "session1", "runId", "run-async", "status", expected.name())));
     }
 
     @Test
@@ -611,6 +636,8 @@ class ChatRunTerminalCommitServiceTest {
         RejectingRunRepository runRepository = new RejectingRunRepository(operations);
         ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
                 null, recordingSessionService(operations), runRepository, null, null, null, Duration.ofDays(3));
+        UserNotificationPublisher notifications = mock(UserNotificationPublisher.class);
+        service.setNotificationPublisher(notifications);
         Instant now = Instant.now();
         ChatRun run = new ChatRun("run1", "tenant1", "user1", "session1", ChatRunStatus.CANCELLING,
                 "AGENT_RUNTIME", null, "relay", null, ChatRunMode.NEXT, null, "msg-user",
@@ -630,6 +657,7 @@ class ChatRunTerminalCommitServiceTest {
         assertThat(result.committed()).isFalse();
         assertThat(result.event()).isNull();
         assertThat(operations).containsExactly("session-lock", "run-cas");
+        verifyNoInteractions(notifications);
     }
 
     @Test

@@ -5,10 +5,16 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.notification.UserNotification;
+import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Map;
 
 /** 在短事务中提交自动标题，防止迟到响应覆盖人工标题或更新版本。 */
 @Service
@@ -17,10 +23,16 @@ class SessionTitleCommitService {
 
     private final SessionRepository sessionRepository;
     private final SessionTitleMetadata metadata;
+    private UserNotificationPublisher notificationPublisher = (recipient, notification) -> { };
 
     SessionTitleCommitService(SessionRepository sessionRepository, SessionTitleMetadata metadata) {
         this.sessionRepository = sessionRepository;
         this.metadata = metadata;
+    }
+
+    @Autowired
+    void setNotificationPublisher(UserNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = notificationPublisher;
     }
 
     @Transactional(timeout = 2)
@@ -41,6 +53,9 @@ class SessionTitleCommitService {
         String nextMetadata = metadata.markAuto(
                 session.metadataJson(), candidate.queryCount(), candidate.nodeOrder());
         sessionRepository.updateTitleWithoutTouch(session, title, nextMetadata);
+        notificationPublisher.publish(
+                new UserNotificationRecipient(candidate.tenantId(), candidate.userId()),
+                new UserNotification("session.title.updated", Map.of("sessionId", session.id())));
         return true;
     }
 }

@@ -28,6 +28,7 @@
 | Stop、超时、实例丢失、恢复提示及断连 | [S11](#s11) |
 | FULL/no-store、心跳、done、多 topic 与刷新 | [S12](#s12) |
 | 列表刷新后恢复多个活动Run订阅，无须进入详情 | [列表重连](#session-list-reconnect) |
+| 用户级通知订阅、标题更新、异步任务终态 | [公共通知手册](user-notifications.md) |
 
 ## 一、协议与字段字典
 
@@ -38,7 +39,8 @@
 | 字段 | 类型 | 出现条件 / 含义 |
 |---|---|---|
 | `id` | string | reply 或命令关联 error 回显客户端命令 ID；未传 ID、主动恢复错误、业务 message 通常省略。建议每个命令显式传 ID |
-| `type` | string | `reply` 控制受理、`message` 流片段、`error` 连接/订阅层错误；不是 ChatEvent.type |
+| `type` | string | `reply` 控制受理、`message` 流片段、`error` 连接/订阅层错误、`notification` 用户级变更提示；不是 ChatEvent.type |
+| `notification` | object | 仅notification出现，包含type和data；不含Run游标，不进入Resume |
 | `topicId` | string | message 及 RECOVER_REQUIRED；当前 Run topic 为 `chat-run-{runId}`，优先使用启动响应值 |
 | `offset` | string | stream-item 等于 ChatEvent.sequence 的十进制字符串；RECOVER_REQUIRED 为诊断 actualSeq；heartbeat/done 省略 |
 | `payload` | object | message 的 ConversationTurnStream；路径为外层 `payload.payload.encodedItem.data` |
@@ -55,6 +57,8 @@
 | presence | `state:string` | 受理的前后台状态；请求字段也是 `state` |
 | subscribe | `topicId:string, recovered:boolean, lastSeq:int64` | `recovered = afterSeq > 0`，`lastSeq = 请求afterSeq`；**不表示补发完成，也不是数据库最新水位** |
 | unsubscribe | `topicId:string` | 取消 topic 监听，不停止 Run |
+| subscribe-user-notifications | 无额外字段 | 注册返回且用户频道订阅确认成功后回复，不占Run topic名额；失败不关闭Run订阅 |
+| unsubscribe-user-notifications | 无额外字段 | 取消用户通知，不影响Run监听 |
 
 ### 2. 流式片段
 
@@ -6105,7 +6109,7 @@ REST会话项相关字段示例（非WS消息）：
 
 ### 4. 明确不存在的通知与安全边界
 
-- 标题提炼更新、独立意图反馈/偏好保存、会话管理 REST 成功，不会凭空产生标题更新或反馈更新 WebSocket 事件；用现有查询接口刷新。
+- 自动标题提交成功及DomainAgent异步任务终态会向已订阅连接尽力发送用户级notification，见[公共通知手册](user-notifications.md)；不属于Run事件。独立意图反馈/偏好保存、人工重命名及其他会话管理成功仍不生成对应通知。
 - 不把 ChatService 到 Relay 的 config/chat_expert/approval-response、DomainAgent 的请求体或内部异步回调当成前端收到的 WS 帧。
 - 不将私有 metadata、Cookie、鉴权头或问卷私有上下文写入前端示例。业务 payload 中敏感字段会按 Normalizer 规则脱敏；这不是允许前端回传服务端关联标识。
 - 本文保证的是当前后端封装和响应契约。卡片脚本、Markdown、思维链/问卷渲染及自动动作仍需前端联调；分享是否能加载外部组件取决于其实现与环境。

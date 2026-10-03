@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingExpirationPolicy;
@@ -27,6 +28,8 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.notification.UserNotification;
+import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
@@ -48,7 +51,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Chat run 终态数据库提交器。
  *
- * <p>本服务只做本地事实源写入，不发布 Redis/WebSocket，也不订阅 Reactor 流。这样
+ * <p>本服务只做本地事实源写入，用户通知仅登记提交后任务，不同步发布 Redis/WebSocket，也不订阅 Reactor 流。这样
  * {@code run.waiting_user} 这类前端依赖多张表的终态可以在短事务内一次提交成功，避免出现
  * event 已可恢复但 Interaction 请求或 assistant part 缺失的半截状态。</p>
  */
@@ -72,6 +75,12 @@ public class ChatRunTerminalCommitService {
     private final Duration runtimeBindingTtl;
     private final MessageSkillMetadata messageSkillMetadata;
     private final ObjectMapper objectMapper;
+    private UserNotificationPublisher notificationPublisher = (recipient, notification) -> { };
+
+    @Autowired
+    void setNotificationPublisher(UserNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = notificationPublisher;
+    }
 
     @Autowired
     public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
@@ -262,7 +271,8 @@ public class ChatRunTerminalCommitService {
                 .orElseThrow(() -> new IllegalStateException(
                         "外部终态抢占成功后run回读失败: " + command.run().id()));
         String skillId = MessageSkillContext.runSkillId(latestRun.metadata());
-        if (DomainAgentAsyncTaskMetadata.isAsyncRunning(latestRun)) {
+        boolean asyncTask = DomainAgentAsyncTaskMetadata.isAsyncRunning(latestRun);
+        if (asyncTask) {
             persistAsyncTerminalAssistant(latestRun, terminalStatus);
             latestRun = runRepository.save(latestRun.withMetadataSnapshot(
                     DomainAgentAsyncTaskMetadata.clearRunMetadata(latestRun.metadata())));
@@ -288,6 +298,13 @@ public class ChatRunTerminalCommitService {
             releaseContinuationInteractionClaim(committedRun, command.interactionId());
         }
         markExecutionTerminal(stored);
+        if (asyncTask) {
+            notificationPublisher.publish(
+                    new UserNotificationRecipient(committedRun.tenantId(), committedRun.userId()),
+                    new UserNotification("session.async.finished", Map.of(
+                            "sessionId", committedRun.sessionId(), "runId", committedRun.id(),
+                            "status", terminalStatus.name())));
+        }
         return new ExternalTerminalCommitResult(stored, committedRun, true);
     }
 

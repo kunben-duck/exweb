@@ -115,7 +115,24 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 移动端会话创建和列表隔离复用现有 `channel`：移动端在自动创建 run 及三个列表接口中统一传小写 `mobile`；PC 端省略该字段，新会话继续默认保存为 `web`，列表仍可查看全部渠道。已有会话只有在请求显式携带 `channel` 时才校验一致性，因此该过滤属于展示和创建隔离，不替代会话的 `tenantId + userId` 归属校验。带 channel 的游标使用绑定 `appId/title/channel` 的 v4 格式；无 channel 的 v2/v3 游标继续兼容。
 
-启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题调用不阻塞首事件、Intent或Runtime，不产生实时事件；前端在后续会话列表或详情查询中读取结果。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。自动结果只覆盖服务端默认或自动标题，显式标题、手动重命名、只读分支及没有私有状态标记的存量会话均受保护。标题编排通过`SessionTitleAppExclusionProvider`按当前可信会话AppId判断是否跳过；默认实现读取逗号分隔的`excluded-app-ids`，配置项会trim、去空并去重，再按大小写敏感的精确值匹配，`appId=null`的主站会话不受影响。企业可提供自定义Provider替换配置来源；查询失败或返回空结果时继续标题提炼。排除规则不会回滚已有自动标题，仅阻止后续提炼及晚轮补偿。开启功能时必须显式配置 `base-url`、正数且不超过30秒的 `timeout` 和有效的 `session-title` 鉴权 provider；默认路径为 `/session_title`，默认最大标题长度为50个Unicode码点。每实例默认最多保留8个在途标题请求，可通过 `max-concurrent-requests` 在1到64之间调整；容量已满时仅跳过本次标题总结，不阻塞或中止聊天主流程。
+启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题任务独立订阅，Run不等待标题生成或保存，不产生标题实时事件；前端在后续会话列表或详情查询中读取结果。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。
+
+自动结果只覆盖服务端默认或自动标题，显式标题、手动重命名、只读分支及没有私有状态标记的存量会话均受保护。标题编排通过`SessionTitleAppExclusionProvider`按当前可信会话AppId判断是否跳过；默认实现读取逗号分隔的`excluded-app-ids`，配置项会trim、去空并去重，再按大小写敏感的精确值匹配，`appId=null`的主站会话不受影响。企业可提供自定义Provider替换配置来源；查询失败或返回空结果时继续标题提炼。排除规则不会回滚已有自动标题，仅阻止后续提炼及晚轮补偿。
+
+`financeex.session-title.mode` 默认 `HTTP`，可配置为 `MODEL`；不自动互相降级，也不重复请求两个服务。功能默认关闭；开启时必须配置正数且不超过60秒的 `timeout`，以及当前模式的必要配置。60秒是允许上限，不会覆盖已有较小配置；配置错误仍启动失败；自定义`SessionTitleProvider`继续覆盖默认Provider。
+
+| 模式 | 必要配置及环境变量 | 出站行为 |
+|---|---|---|
+| `HTTP`（默认） | 原`base-url`、`path`及有效的`session-title`集成鉴权 | 仍发送`session_id/queries/language`，默认路径`/session_title`，原行为不变 |
+| `MODEL` | `model.endpoint` / `FINANCEEX_SESSION_TITLE_MODEL_ENDPOINT` | 完整Chat Completions URL，如`https://<model-gateway>/v1/chat/completions`；不追加路径 |
+| `MODEL` | `model.name` / `FINANCEEX_SESSION_TITLE_MODEL_NAME` | 实际模型名称，如`GLM-V5` |
+| `MODEL` | `model.api-key` / `FINANCEEX_SESSION_TITLE_MODEL_API_KEY` | 服务端静态`Authorization: Bearer <key>`，无需旧URL或SGOV配置，禁止提交真实密钥到仓库 |
+
+选择模型直调时设置`FINANCEEX_SESSION_TITLE_ENABLED=true`、`FINANCEEX_SESSION_TITLE_MODE=MODEL`、`FINANCEEX_SESSION_TITLE_TIMEOUT=60s`及上述三个模型变量。切换或回退为HTTP沿用配置发布/重启流程，不提供热切换。模型Provider使用现有WebClient，不引入AgentScope或额外SDK；请求仅含`model/messages/stream=false`，最多三个问题，每个按500个Unicode码点截断并追加`...`。提示词要求仅返回标题、保留业务编号并忽略多媒体；`zh_CN/en_US`大小写不敏感，其他语言回退中文。仅解析`choices[0].message.content`，不使用思考字段；继续规范化空白并按`max-title-length`截断，默认50个Unicode码点。模型质量和业务编号保留效果仍需实际联调验证。
+
+MODEL响应体上限64KiB；网络错误、429或5xx最多重试一次，退避基准500ms并带抖动，所有尝试及退避共用`timeout`总期限。其他4xx、空/非法/超大响应及总期限到期不重试；不记录密钥、完整提示词、问题或模型响应。每实例默认最多8个在途标题请求，`max-concurrent-requests`可设为1到64；容量已满直接跳过。调度前异常、排队拒绝、查询/模型/标题保存失败只保留当前标题并记录脱敏告警，不传播为Run失败。
+
+标题使用现有专用Scheduler（最多4线程、每线程128个排队任务），模型HTTP不在数据库事务内执行；生成成功后才调度原2秒标题提交事务，锁后校验人工标题和版本。生成期限不覆盖排队、候选查询和提交阶段；这些阶段仍共享Hikari并竞争Session锁，不能把异步隔离描述为资源层面绝对无影响。进程退出可丢失未完成标题任务，不新增可靠补跑队列。
 
 会话列表和详情通过 `hasUnread/latestMessageSeq/lastReadSeq` 返回未读状态。只有成功保存 assistant 的 `run.completed` 和产生用户交互内容的 `run.waiting_user` 会推进最新消息水位；失败、取消和没有 assistant 的完成态不会产生未读。前端应在对应历史消息或实时终态实际展示后调用 `/read`，并提交当时观察到的 sequence；服务端会单调推进且截断超前值，避免旧页签清除后来到达的新消息。
 

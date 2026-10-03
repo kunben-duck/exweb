@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.infrastructure.sessiontitle;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
@@ -18,12 +19,85 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.Map;
 
 class SessionTitleProviderConfigurationTest {
+    @Test
+    void modelModeDoesNotRequireLegacyUrlOrIntegrationAuthentication() {
+        SessionTitleProperties properties = modelProperties();
+        AuthHeaderProviderRegistry auth = mock(AuthHeaderProviderRegistry.class);
+
+        SessionTitleProvider provider = new SessionTitleProviderConfiguration().sessionTitleProvider(
+                WebClient.builder(), properties, new IntegrationAuthProperties(), auth, Schedulers.immediate());
+
+        assertThat(provider).isInstanceOf(ModelSessionTitleProvider.class);
+        verifyNoInteractions(auth);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"endpoint", "name", "api-key", "timeout"})
+    void modelModeValidatesItsOwnRequiredConfiguration(String missing) {
+        SessionTitleProperties properties = modelProperties();
+        switch (missing) {
+            case "endpoint" -> properties.getModel().setEndpoint(" ");
+            case "name" -> properties.getModel().setName(null);
+            case "api-key" -> properties.getModel().setApiKey(" ");
+            default -> properties.setTimeout("");
+        }
+        assertThatThrownBy(() -> new SessionTitleProviderConfiguration().sessionTitleProvider(
+                WebClient.builder(), properties, new IntegrationAuthProperties(),
+                mock(AuthHeaderProviderRegistry.class), Schedulers.immediate()))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining(missing);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"61s", "60001ms", "0s", "-1s", "invalid"})
+    void modelModeRejectsInvalidTimeout(String timeout) {
+        SessionTitleProperties properties = modelProperties();
+        properties.setTimeout(timeout);
+        assertThatThrownBy(() -> new SessionTitleProviderConfiguration().sessionTitleProvider(
+                WebClient.builder(), properties, new IntegrationAuthProperties(),
+                mock(AuthHeaderProviderRegistry.class), Schedulers.immediate()))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("timeout");
+    }
+
+    @Test
+    void disabledModelAndCustomProviderDoNotRequireModelCredentials() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(SessionTitleProviderConfiguration.class)
+                .withPropertyValues("financeex.session-title.mode=MODEL")
+                .withBean(WebClient.Builder.class, WebClient::builder)
+                .withBean(IntegrationAuthProperties.class, IntegrationAuthProperties::new)
+                .withBean(AuthHeaderProviderRegistry.class, () -> mock(AuthHeaderProviderRegistry.class))
+                .run(context -> assertThat(context).hasNotFailed());
+
+        SessionTitleProvider custom = request -> Mono.just("custom");
+        new ApplicationContextRunner()
+                .withUserConfiguration(SessionTitleProviderConfiguration.class)
+                .withPropertyValues("financeex.session-title.enabled=true", "financeex.session-title.mode=MODEL")
+                .withBean(SessionTitleProvider.class, () -> custom)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(SessionTitleProvider.class)).isSameAs(custom);
+                });
+    }
+
+    @Test
+    void modelModeRejectsNonHttpEndpoint() {
+        SessionTitleProperties properties = modelProperties();
+        properties.getModel().setEndpoint("file:///model");
+        assertThatThrownBy(() -> new SessionTitleProviderConfiguration().sessionTitleProvider(
+                WebClient.builder(), properties, new IntegrationAuthProperties(),
+                mock(AuthHeaderProviderRegistry.class), Schedulers.immediate()))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("valid HTTP URL");
+    }
+
     @Test
     void enabledDefaultProviderRequiresUrlTimeoutAndAuthentication() {
         SessionTitleProviderConfiguration configuration = new SessionTitleProviderConfiguration();
@@ -59,13 +133,44 @@ class SessionTitleProviderConfigurationTest {
         SessionTitleProperties properties = new SessionTitleProperties();
         properties.setEnabled(true);
         properties.setBaseUrl("https://session-title.example.test");
-        properties.setTimeout("31s");
+        properties.setTimeout("61s");
 
         assertThatThrownBy(() -> configuration.sessionTitleProvider(
                 WebClient.builder(), properties, configuredAuth(),
                 mock(AuthHeaderProviderRegistry.class), Schedulers.immediate()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("must not exceed 30s");
+                .hasMessageContaining("must not exceed 60s");
+    }
+
+    @ParameterizedTest
+    @EnumSource(SessionTitleProperties.Mode.class)
+    void bothModesAcceptSixtySecondTimeout(SessionTitleProperties.Mode mode) {
+        SessionTitleProperties properties = modelProperties();
+        properties.setMode(mode);
+        properties.setBaseUrl("https://session-title.example.test");
+        properties.setTimeout("60s");
+
+        SessionTitleProvider provider = new SessionTitleProviderConfiguration().sessionTitleProvider(
+                WebClient.builder(), properties, configuredAuth(),
+                mock(AuthHeaderProviderRegistry.class), Schedulers.immediate());
+
+        assertThat(provider).isInstanceOf(mode == SessionTitleProperties.Mode.MODEL
+                ? ModelSessionTitleProvider.class : DefaultSessionTitleProvider.class);
+        assertThat(properties.effectiveRequestTimeout()).hasSeconds(60);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"60001ms", "0s", "-1s", "invalid"})
+    void httpModeRejectsInvalidTimeout(String timeout) {
+        SessionTitleProperties properties = new SessionTitleProperties();
+        properties.setEnabled(true);
+        properties.setBaseUrl("https://session-title.example.test");
+        properties.setTimeout(timeout);
+
+        assertThatThrownBy(() -> new SessionTitleProviderConfiguration().sessionTitleProvider(
+                WebClient.builder(), properties, configuredAuth(),
+                mock(AuthHeaderProviderRegistry.class), Schedulers.immediate()))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("financeex.session-title.timeout");
     }
 
     @Test
@@ -124,6 +229,17 @@ class SessionTitleProviderConfigurationTest {
         properties.setServices(Map.of("session-title", service));
         properties.getSgov().setAppId("app-id");
         properties.getSgov().setSecret("secret");
+        return properties;
+    }
+
+    private SessionTitleProperties modelProperties() {
+        SessionTitleProperties properties = new SessionTitleProperties();
+        properties.setEnabled(true);
+        properties.setMode(SessionTitleProperties.Mode.MODEL);
+        properties.setTimeout("2s");
+        properties.getModel().setEndpoint("https://model.example.test/v1/chat/completions");
+        properties.getModel().setName("GLM-V5");
+        properties.getModel().setApiKey("test-secret");
         return properties;
     }
 }

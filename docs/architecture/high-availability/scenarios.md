@@ -852,7 +852,7 @@ sequenceDiagram
     participant L as 同区域ALB内部文根 U
     participant D as 四服务共享数据库 U
     participant R as 四服务共享Redis U
-    participant T as 标题HTTP Provider
+    participant T as 标题HTTP或MODEL Provider
     participant I as 第三方Intent U
     participant TOOL as ToolService ADS U
     participant DA as 第三方DomainAgent U
@@ -896,13 +896,17 @@ sequenceDiagram
     TTL->>TTL: S11-D3 schedule独立订阅 专用4线程及队列
     TTL->>DB: S11-D4 collectCandidate 查询Session 完整轻量路径及关联Run
     TTL->>TTL: S11-D5 generateTitle才获取8许可
-    TTL->>PROVIDER: S11-D6 generate 有HTTP或应用timeout
+    TTL->>PROVIDER: S11-D6 generate HTTP或MODEL 共用应用timeout
     PROVIDER-->>TTL: 生成文本
     TTL->>COM: S11-D7 generateAndCommit调度apply
     COM->>DB: S11-D8 TX2s锁Session校验ACTIVE 人工标题和nodeOrder
     DB-->>TTL: applied或skipped
     Note over TTL,DB: 前置Q和提交排队不由生成许可/HTTP期限覆盖<br/>进程退出可能丢标题任务 无可靠补跑承诺
 ```
+
+标题`mode=HTTP`为默认旧路径，保留集成鉴权和原请求；`mode=MODEL`由`ModelSessionTitleProvider`通过WebClient直调完整模型URL，使用服务端静态Bearer密钥，不再调用旧服务或SGOV。两个模式均使用现有独立标题订阅、4线程/每线程128队列参数和默认8个生成许可；主Run不等待其生成或保存。MODEL只增加网络/429/5xx的一次重试，500ms基准抖动退避包含在现有最多60秒生成期限内，响应体限64KiB；两种模式不互相降级。
+
+S11-D3的触发判断、上下文构造和调度异常也在标题旁路收口；队列拒绝、候选读取、模型及提交失败保留原标题，不转为Run失败。S11-D7/D8继续在独立2秒事务锁后检查版本及人工标题，HTTP期间不持锁。配置错误仍在启动阶段失败；资源共享、候选查询无完整期限、提交锁竞争和退出丢任务的R25风险仍存在，本次未新增独立数据库池或可靠队列。MODEL最多发送前三问、每问500个Unicode码点，不等于S11-D4数据库只读三条。
 
 | 配置变体/步骤 | 当前事实与风险 | 加固/验收关注 |
 |---|---|---|

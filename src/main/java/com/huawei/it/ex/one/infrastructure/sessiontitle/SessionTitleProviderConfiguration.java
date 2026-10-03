@@ -24,7 +24,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.net.URI;
 import java.time.Duration;
 
-/** 会话标题默认 Provider 与阻塞鉴权调度器装配。 */
+/** 会话标题 HTTP/模型 Provider 与标题旁路调度器装配。 */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(SessionTitleProperties.class)
 public class SessionTitleProviderConfiguration {
@@ -51,6 +51,12 @@ public class SessionTitleProviderConfiguration {
         if (properties.isEnabled()) {
             validateRequiredConfiguration(properties, authProperties);
         }
+        if (properties.getMode() == SessionTitleProperties.Mode.MODEL) {
+            if (properties.getModel().normalizedEndpoint() == null) {
+                return request -> Mono.error(new IllegalStateException("Session title model is not configured"));
+            }
+            return new ModelSessionTitleProvider(webClientBuilder, properties);
+        }
         if (properties.normalizedBaseUrl() == null) {
             return request -> Mono.error(new IllegalStateException("Session title provider is not configured"));
         }
@@ -60,16 +66,23 @@ public class SessionTitleProviderConfiguration {
     private void validateRequiredConfiguration(
             SessionTitleProperties properties,
             IntegrationAuthProperties authProperties) {
-        validateBaseUrl(properties.normalizedBaseUrl());
-        if (properties.normalizedPath() == null) {
-            throw missingConfiguration("financeex.session-title.path");
+        if (properties.getMode() == null) {
+            throw missingConfiguration("financeex.session-title.mode");
+        }
+        if (properties.getMode() == SessionTitleProperties.Mode.MODEL) {
+            validateModelConfiguration(properties.getModel());
+        } else {
+            validateHttpUrl(properties.normalizedBaseUrl(), "financeex.session-title.base-url");
+            if (properties.normalizedPath() == null) {
+                throw missingConfiguration("financeex.session-title.path");
+            }
         }
         Duration timeout = properties.normalizedTimeout();
         if (timeout == null) {
             throw missingConfiguration("financeex.session-title.timeout");
         }
         if (timeout.compareTo(SessionTitleProperties.MAX_REQUEST_TIMEOUT) > 0) {
-            throw new IllegalStateException("financeex.session-title.timeout must not exceed 30s");
+            throw new IllegalStateException("financeex.session-title.timeout must not exceed 60s");
         }
         properties.normalizedMaxConcurrentRequests();
         if (properties.normalizedDefaultLanguage().length() > 32) {
@@ -77,6 +90,10 @@ public class SessionTitleProviderConfiguration {
         }
         if (properties.getMaxTitleLength() < 1 || properties.getMaxTitleLength() > 256) {
             throw new IllegalStateException("financeex.session-title.max-title-length must be between 1 and 256");
+        }
+        // MODEL仅使用模型网关的静态密钥，不能要求旧HTTP服务的SGOV配置。
+        if (properties.getMode() == SessionTitleProperties.Mode.MODEL) {
+            return;
         }
         String provider = authProperties.providerFor("session-title");
         if ("none".equals(provider)) {
@@ -87,18 +104,28 @@ public class SessionTitleProviderConfiguration {
         }
     }
 
-    private void validateBaseUrl(String baseUrl) {
-        if (baseUrl == null) {
-            throw missingConfiguration("financeex.session-title.base-url");
+    private void validateModelConfiguration(SessionTitleProperties.Model model) {
+        validateHttpUrl(model.normalizedEndpoint(), "financeex.session-title.model.endpoint");
+        if (model.normalizedName() == null) {
+            throw missingConfiguration("financeex.session-title.model.name");
+        }
+        if (model.normalizedApiKey() == null) {
+            throw missingConfiguration("financeex.session-title.model.api-key");
+        }
+    }
+
+    private void validateHttpUrl(String url, String propertyName) {
+        if (url == null) {
+            throw missingConfiguration(propertyName);
         }
         try {
-            URI uri = URI.create(baseUrl);
+            URI uri = URI.create(url);
             if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
                     || uri.getHost() == null) {
                 throw new IllegalArgumentException("unsupported URI");
             }
         } catch (IllegalArgumentException ex) {
-            throw new IllegalStateException("financeex.session-title.base-url must be a valid HTTP URL", ex);
+            throw new IllegalStateException(propertyName + " must be a valid HTTP URL", ex);
         }
     }
 

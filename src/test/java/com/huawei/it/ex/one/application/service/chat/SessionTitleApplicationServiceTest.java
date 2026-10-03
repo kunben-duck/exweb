@@ -5,11 +5,15 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -33,11 +37,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -379,12 +388,148 @@ class SessionTitleApplicationServiceTest {
     }
 
     @Test
+    void applicationTimeoutAllowsTitleAfterFortyFiveSeconds() {
+        properties.setTimeout("60s");
+        service = serviceWith(request -> Mono.delay(Duration.ofSeconds(45)).thenReturn("慢模型标题"));
+
+        StepVerifier.withVirtualTime(() -> Mono.fromRunnable(() -> scheduleQuestion("slow-model", 1L))
+                        .then(Mono.delay(Duration.ofSeconds(45))))
+                .thenAwait(Duration.ofSeconds(30))
+                .then(() -> assertThat(session.get().title()).isEqualTo("初始标题"))
+                .thenAwait(Duration.ofSeconds(15)).expectNext(0L).verifyComplete();
+
+        assertThat(session.get().title()).isEqualTo("慢模型标题");
+    }
+
+    @Test
+    void sixtySecondApplicationTimeoutKeepsTitleAndReleasesPermit() {
+        properties.setTimeout("60s");
+        properties.setMaxConcurrentRequests(1);
+        AtomicInteger subscriptions = new AtomicInteger();
+        AtomicInteger cancellations = new AtomicInteger();
+        service = serviceWith(request -> subscriptions.incrementAndGet() == 1
+                ? Mono.<String>never().doOnCancel(cancellations::incrementAndGet)
+                : Mono.just("下一次标题"));
+
+        StepVerifier.withVirtualTime(() -> Mono.fromRunnable(() -> {
+                    scheduleQuestion("timeout", 1L);
+                    scheduleQuestion("capacity-full", 2L);
+                }).then(Mono.delay(Duration.ofSeconds(60))))
+                .thenAwait(Duration.ofSeconds(59))
+                .then(() -> {
+                    assertThat(cancellations).hasValue(0);
+                    assertThat(subscriptions).hasValue(1);
+                })
+                .thenAwait(Duration.ofSeconds(1)).expectNext(0L).verifyComplete();
+
+        assertThat(cancellations).hasValue(1);
+        assertThat(session.get().title()).isEqualTo("初始标题");
+        scheduleQuestion("after-timeout", 3L);
+        assertThat(subscriptions).hasValue(2);
+        assertThat(session.get().title()).isEqualTo("下一次标题");
+    }
+
+    @Test
     void rejectsInvalidConcurrencyWhenFeatureIsEnabled() {
         properties.setMaxConcurrentRequests(65);
 
         assertThatThrownBy(() -> serviceWith(request -> Mono.just("标题")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("max-concurrent-requests");
+    }
+
+    @Test
+    void failuresBeforeSubscriptionDoNotEscapeSchedule() {
+        SessionTitleProvider provider = mock(SessionTitleProvider.class);
+        metadata = mock(SessionTitleMetadata.class);
+        when(metadata.read(anyString())).thenThrow(new IllegalStateException("trigger failed"));
+        service = serviceWith(provider);
+        assertThatCode(() -> scheduleQuestion("trigger-failure", 1)).doesNotThrowAnyException();
+
+        metadata = new SessionTitleMetadata(new ObjectMapper(), properties);
+        properties = spy(properties);
+        doThrow(new IllegalStateException("context failed")).when(properties).normalizeLanguage(null);
+        service = serviceWith(provider);
+        assertThatCode(() -> scheduleQuestion("context-failure", 2)).doesNotThrowAnyException();
+        verifyNoInteractions(provider, sessionRepository, messageRepository, runRepository);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"candidate", "model", "commit"})
+    void backgroundFailuresKeepTitleAndDoNotEscapeSchedule(String phase) {
+        SessionTitleProvider provider = request -> Mono.error(new IllegalStateException("model failed"));
+        if ("candidate".equals(phase)) {
+            when(sessionRepository.findByTenantIdAndUserIdAndId(anyString(), anyString(), anyString()))
+                    .thenThrow(new IllegalStateException("database unavailable"));
+        } else if ("commit".equals(phase)) {
+            provider = request -> Mono.just("new title");
+            doThrow(new IllegalStateException("commit failed")).when(sessionRepository)
+                    .lockForMessageMutation(anyString(), anyString(), anyString());
+        }
+        service = serviceWith(provider);
+
+        assertThatCode(() -> scheduleQuestion("failure", 1)).doesNotThrowAnyException();
+
+        assertThat(session.get().title()).isEqualTo("初始标题");
+    }
+
+    @Test
+    void boundedQueueRejectionDoesNotExecuteWorkOnCaller() throws InterruptedException {
+        Scheduler scheduler = Schedulers.newBoundedElastic(1, 1, "title-rejection-test");
+        CountDownLatch occupied = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        SessionTitleProvider provider = mock(SessionTitleProvider.class);
+        try {
+            scheduler.schedule(() -> {
+                occupied.countDown();
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertThat(occupied.await(2, TimeUnit.SECONDS)).isTrue();
+            scheduler.schedule(() -> { });
+            service = serviceWith(appId -> Mono.just(false), provider, scheduler);
+
+            assertThatCode(() -> scheduleQuestion("queue-full", 1)).doesNotThrowAnyException();
+            verifyNoInteractions(provider, sessionRepository, messageRepository, runRepository);
+        } finally {
+            release.countDown();
+            scheduler.dispose();
+        }
+    }
+
+    @Test
+    void databaseReadRunsOffCallerAndScheduleReturnsWhileItIsBlocked() throws InterruptedException {
+        Scheduler scheduler = Schedulers.newBoundedElastic(1, 4, "title-isolation-test");
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        Thread caller = Thread.currentThread();
+        AtomicReference<Thread> databaseThread = new AtomicReference<>();
+        when(sessionRepository.findByTenantIdAndUserIdAndId(anyString(), anyString(), anyString()))
+                .thenAnswer(ignored -> {
+                    databaseThread.set(Thread.currentThread());
+                    entered.countDown();
+                    assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+                    finished.countDown();
+                    return Optional.empty();
+                });
+        SessionTitleProvider provider = mock(SessionTitleProvider.class);
+        service = serviceWith(appId -> Mono.just(false), provider, scheduler);
+        try {
+            scheduleQuestion("slow-db", 1);
+            assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(databaseThread.get()).isNotSameAs(caller);
+            assertThat(finished.getCount()).isEqualTo(1);
+            verifyNoInteractions(provider);
+        } finally {
+            release.countDown();
+            assertThat(finished.await(2, TimeUnit.SECONDS)).isTrue();
+            scheduler.dispose();
+        }
+        verify(sessionRepository).findByTenantIdAndUserIdAndId("tenant-1", "user-1", "session-1");
     }
 
     private SessionTitleApplicationService serviceWith(SessionTitleProvider provider) {
@@ -394,6 +539,13 @@ class SessionTitleApplicationServiceTest {
     private SessionTitleApplicationService serviceWith(
             SessionTitleAppExclusionProvider exclusionProvider,
             SessionTitleProvider provider) {
+        return serviceWith(exclusionProvider, provider, Schedulers.immediate());
+    }
+
+    private SessionTitleApplicationService serviceWith(
+            SessionTitleAppExclusionProvider exclusionProvider,
+            SessionTitleProvider provider,
+            Scheduler scheduler) {
         return new SessionTitleApplicationService(
                 properties,
                 exclusionProvider,
@@ -403,7 +555,7 @@ class SessionTitleApplicationServiceTest {
                 sessionRepository,
                 messageRepository,
                 runRepository,
-                Schedulers.immediate());
+                scheduler);
     }
 
     private SessionTitleProvider recordingTitleProvider() {

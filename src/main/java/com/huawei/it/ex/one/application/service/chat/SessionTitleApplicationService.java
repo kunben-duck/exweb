@@ -83,13 +83,14 @@ class SessionTitleApplicationService {
 
     void schedule(UserContext user, ChatCommand command, ChatSession session,
                   ChatRunMessagePlan messagePlan, ChatRun run) {
-        if (!eligibleTrigger(command, session, messagePlan, run)) {
-            return;
-        }
-        Trigger trigger = new Trigger(
-                user.tenantId(), user.ownerUserId(), session.id(), run.id(),
-                messagePlan.userMessage().id(), properties.normalizeLanguage(command.language()));
+        // 调度前判断也属于旁路；其异常不得使已提交准入的Run启动失败。
         try {
+            if (!eligibleTrigger(command, session, messagePlan, run)) {
+                return;
+            }
+            Trigger trigger = new Trigger(
+                    user.tenantId(), user.ownerUserId(), session.id(), run.id(),
+                    messagePlan.userMessage().id(), properties.normalizeLanguage(command.language()));
             appExcluded(session.appId(), trigger)
                     .subscribeOn(ioScheduler)
                     .filter(excluded -> !excluded)
@@ -103,7 +104,7 @@ class SessionTitleApplicationService {
                             }))
                     .subscribe(ignored -> { }, failure -> logFailure(trigger, 0));
         } catch (RuntimeException ignored) {
-            logFailure(trigger, 0);
+            logFailure(run == null ? null : run.id(), session == null ? null : session.id(), 0);
         }
     }
 
@@ -266,10 +267,14 @@ class SessionTitleApplicationService {
     }
 
     private void logFailure(Trigger trigger, int queryCount) {
+        logFailure(trigger.runId(), trigger.sessionId(), queryCount);
+    }
+
+    private void logFailure(String runId, String sessionId, int queryCount) {
         log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
                         "Session title summary failed; keeping the current title")
-                .runId(trigger.runId())
-                .sessionId(trigger.sessionId())
+                .runId(runId)
+                .sessionId(sessionId)
                 .operation("session-title.generate")
                 .attribute("queryCount", queryCount)
                 .retryable(false)

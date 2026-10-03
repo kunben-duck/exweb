@@ -7,6 +7,8 @@ package com.huawei.it.ex.one.application.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.env.YamlPropertySourceLoader;
@@ -15,10 +17,29 @@ import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.io.FileSystemResource;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
 class SessionTitlePropertiesTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1s", "10s", "30s", "45s", "60s"})
+    void effectiveTimeoutPreservesConfiguredValuesWithinLimit(String timeout) {
+        SessionTitleProperties properties = new SessionTitleProperties();
+        properties.setTimeout(timeout);
+
+        assertThat(properties.effectiveRequestTimeout()).isEqualTo(properties.normalizedTimeout());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "61s", "invalid"})
+    void runtimeFallbackUsesSixtySecondHardLimit(String timeout) {
+        SessionTitleProperties properties = new SessionTitleProperties();
+        properties.setTimeout(timeout);
+
+        assertThat(properties.effectiveRequestTimeout()).isEqualTo(Duration.ofSeconds(60));
+    }
 
     @Test
     void normalizesExcludedAppIds() {
@@ -36,6 +57,29 @@ class SessionTitlePropertiesTest {
         properties.setExcludedAppIds(null);
 
         assertThat(properties.getExcludedAppIds()).isEmpty();
+        assertThat(properties.getMode()).isEqualTo(SessionTitleProperties.Mode.HTTP);
+        assertThat(properties.isEnabled()).isFalse();
+    }
+
+    @Test
+    void applicationYamlBindsModelEnvironmentVariables() throws IOException {
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("model-environment", Map.of(
+                "FINANCEEX_SESSION_TITLE_MODE", "MODEL",
+                "FINANCEEX_SESSION_TITLE_MODEL_ENDPOINT", " https://model.example.test/v1/chat/completions ",
+                "FINANCEEX_SESSION_TITLE_MODEL_NAME", " GLM-V5 ",
+                "FINANCEEX_SESSION_TITLE_MODEL_API_KEY", " test-secret ")));
+        new YamlPropertySourceLoader()
+                .load("application", new FileSystemResource("src/main/resources/application.yml"))
+                .forEach(environment.getPropertySources()::addLast);
+
+        SessionTitleProperties properties = Binder.get(environment)
+                .bind("financeex.session-title", Bindable.of(SessionTitleProperties.class)).get();
+
+        assertThat(properties.getMode()).isEqualTo(SessionTitleProperties.Mode.MODEL);
+        assertThat(properties.getModel().normalizedEndpoint()).isEqualTo("https://model.example.test/v1/chat/completions");
+        assertThat(properties.getModel().normalizedName()).isEqualTo("GLM-V5");
+        assertThat(properties.getModel().normalizedApiKey()).isEqualTo("test-secret");
     }
 
     @Test

@@ -82,10 +82,17 @@ financeex:
       use-case-library:
         provider: ${FINANCEEX_USE_CASE_LIBRARY_AUTH_PROVIDER:sgov}
   session-title:
-    # 默认关闭；开启时base-url、timeout及集成鉴权必须显式配置并在启动阶段通过校验。
+    # HTTP保留原标题服务；MODEL直调模型网关，二者不自动互相降级。
+    mode: ${FINANCEEX_SESSION_TITLE_MODE:HTTP}
+    model:
+      endpoint: ${FINANCEEX_SESSION_TITLE_MODEL_ENDPOINT:}
+      name: ${FINANCEEX_SESSION_TITLE_MODEL_NAME:}
+      api-key: ${FINANCEEX_SESSION_TITLE_MODEL_API_KEY:}
+    # 默认关闭；开启时需显式配置timeout及当前模式的URL/鉴权，启动时校验。
     enabled: ${FINANCEEX_SESSION_TITLE_ENABLED:false}
     base-url: ${FINANCEEX_SESSION_TITLE_BASE_URL:}
     path: ${FINANCEEX_SESSION_TITLE_PATH:/session_title}
+    # 正数且最多60s；MODEL包含所有尝试与退避，不覆盖排队、候选读取或标题保存。
     timeout: ${FINANCEEX_SESSION_TITLE_TIMEOUT:}
     # 单实例标题服务在途请求上限；达到上限时跳过本次旁路总结，不阻塞聊天主流程。
     max-concurrent-requests: ${FINANCEEX_SESSION_TITLE_MAX_CONCURRENT_REQUESTS:8}

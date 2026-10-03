@@ -14,12 +14,14 @@ import java.util.List;
 /** 会话标题自动总结配置。 */
 @ConfigurationProperties(prefix = "financeex.session-title")
 public class SessionTitleProperties {
-    public static final Duration MAX_REQUEST_TIMEOUT = Duration.ofSeconds(30);
+    public static final Duration MAX_REQUEST_TIMEOUT = Duration.ofSeconds(60);
 
     private static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 8;
     private static final int MAX_CONCURRENT_REQUESTS = 64;
 
     private boolean enabled;
+    private Mode mode = Mode.HTTP;
+    private final Model model = new Model();
     private String baseUrl = "";
     private String path = "/session_title";
     private String timeout = "";
@@ -34,6 +36,18 @@ public class SessionTitleProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public Mode getMode() {
+        return mode;
+    }
+
+    public void setMode(Mode mode) {
+        this.mode = mode;
+    }
+
+    public Model getModel() {
+        return model;
     }
 
     public String getBaseUrl() {
@@ -95,7 +109,7 @@ public class SessionTitleProperties {
         }
         LinkedHashSet<String> normalized = new LinkedHashSet<>();
         excludedAppIds.stream()
-                .map(this::normalize)
+                .map(SessionTitleProperties::normalize)
                 .filter(value -> value != null)
                 .forEach(normalized::add);
         this.excludedAppIds = List.copyOf(normalized);
@@ -151,7 +165,53 @@ public class SessionTitleProperties {
         return normalized == null ? normalizedDefaultLanguage() : normalized;
     }
 
-    private String normalize(String value) {
+    private static String normalize(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    public enum Mode {
+        HTTP, MODEL
+    }
+
+    public static class Model {
+        private String endpoint = "";
+        private String name = "";
+        private String apiKey = "";
+
+        public String getEndpoint() {
+            return endpoint;
+        }
+
+        public void setEndpoint(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public String normalizedEndpoint() {
+            return normalize(endpoint);
+        }
+
+        public String normalizedName() {
+            return normalize(name);
+        }
+
+        public String normalizedApiKey() {
+            return normalize(apiKey);
+        }
     }
 }

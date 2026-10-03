@@ -266,7 +266,7 @@ class MyBatisXmlMapperConsistencyTest {
         assertThat(start).isGreaterThanOrEqualTo(0);
         assertThat(end).isGreaterThan(start);
         assertThat(mapper.substring(start, end))
-                .contains("SELECT session_id, status")
+                .contains("SELECT session_id, status, id")
                 .contains("tenant_id = #{tenantId}")
                 .contains("user_id = #{userId}")
                 .contains("session_id IN")
@@ -275,7 +275,8 @@ class MyBatisXmlMapperConsistencyTest {
                 .contains("PARTITION BY session_id")
                 .contains("ORDER BY created_at DESC, id DESC")
                 .contains("WHERE row_num = 1")
-                .doesNotContain("chatRunColumns", "metadata_json");
+                .doesNotContain("chatRunColumns", "metadata_json", "JOIN", "FOR UPDATE", "fin_ex_chat_event_t");
+        assertThat(mapper).contains("<result column=\"id\" property=\"runId\"/>");
     }
 
     @Test
@@ -292,6 +293,7 @@ class MyBatisXmlMapperConsistencyTest {
         int windowStart = query.indexOf("FROM (");
         int windowEnd = query.indexOf(") latest");
         assertThat(query)
+                .contains("SELECT latest.id,")
                 .contains("tenant_id = #{tenantId}")
                 .contains("user_id = #{userId}")
                 .contains("session_id IN")

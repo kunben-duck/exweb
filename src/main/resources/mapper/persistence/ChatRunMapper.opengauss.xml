@@ -27,12 +27,14 @@
 
     <resultMap id="chatSessionLastRunStatusResultMap"
                type="com.huawei.it.ex.one.infrastructure.persistence.ChatSessionLastRunStatusRow">
+        <result column="id" property="runId"/>
         <result column="session_id" property="sessionId"/>
         <result column="status" property="status"/>
     </resultMap>
 
     <resultMap id="chatSessionLastRunSummaryResultMap"
                type="com.huawei.it.ex.one.infrastructure.persistence.ChatSessionLastRunSummaryRow">
+        <result column="id" property="runId"/>
         <result column="session_id" property="sessionId"/>
         <result column="status" property="status"/>
         <result column="metadata_json" property="metadataJson"/>
@@ -497,13 +499,14 @@
     </select>
 
     <!--
-      按租户、用户和当前页会话集合批量查询每个会话最后创建的 run 状态。
+      按租户、用户和当前页会话集合批量查询每个会话最后创建的 run ID及状态，不加载metadata。
       入参: tenantId/userId 为归属边界，sessionIds 为当前页会话 ID 集合；调用方保证集合非空。
     -->
     <select id="findLastRunStatuses" resultMap="chatSessionLastRunStatusResultMap">
-        SELECT session_id, status
+        SELECT session_id, status, id
         FROM (
-            SELECT session_id,
+            SELECT id,
+                   session_id,
                    status,
                    ROW_NUMBER() OVER (
                        PARTITION BY session_id
@@ -521,12 +524,13 @@
     </select>
 
     <!--
-      按租户、用户和当前页会话集合批量查询每个会话最后创建的run状态及metadata。
+      按租户、用户和当前页会话集合批量查询每个会话最后创建的run ID、状态及metadata。
       窗口阶段只携带索引字段，命中每个会话最后run后再按主键读取metadata，避免历史metadata参与排序。
       入参: tenantId/userId为归属边界，sessionIds为当前页会话ID集合；调用方保证集合非空。
     -->
     <select id="findLastRunSummaries" resultMap="chatSessionLastRunSummaryResultMap">
-        SELECT latest.session_id,
+        SELECT latest.id,
+               latest.session_id,
                latest.status,
                r.metadata_json
         FROM (

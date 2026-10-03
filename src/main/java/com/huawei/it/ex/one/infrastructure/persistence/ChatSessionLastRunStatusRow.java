@@ -8,8 +8,17 @@ package com.huawei.it.ex.one.infrastructure.persistence;
  * 会话最后一个 run 的轻量状态行。
  */
 public class ChatSessionLastRunStatusRow {
+    private String runId;
     private String sessionId;
     private String status;
+
+    public String getRunId() {
+        return runId;
+    }
+
+    public void setRunId(String runId) {
+        this.runId = runId;
+    }
 
     public String getSessionId() {
         return sessionId;

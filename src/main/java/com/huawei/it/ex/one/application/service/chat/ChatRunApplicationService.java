@@ -514,8 +514,26 @@ public class ChatRunApplicationService {
                 user.tenantId(), user.ownerUserId(), normalizedSessionIds);
     }
 
+    /** 游标列表只读取最后run的ID及状态，不执行stream-status的恢复和关联查询。 */
+    public Map<String, ChatSessionLastRunSummary> findLastRunBriefs(
+            UserContext user, Collection<String> sessionIds) {
+        permissionChecker.checkChatPermission(user);
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> normalizedSessionIds = sessionIds.stream()
+                .filter(sessionId -> sessionId != null && !sessionId.isBlank())
+                .distinct()
+                .toList();
+        if (normalizedSessionIds.isEmpty()) {
+            return Map.of();
+        }
+        return repository.findLastRunBriefs(
+                user.tenantId(), user.ownerUserId(), normalizedSessionIds);
+    }
+
     /**
-     * 批量查询页码列表中每个会话最后创建的run状态及最终Runtime调用标识。
+     * 批量查询页码列表中每个会话最后创建的run ID、状态及最终Runtime调用标识。
      */
     public Map<String, ChatSessionLastRunSummary> findLastRunSummaries(
             UserContext user, Collection<String> sessionIds) {

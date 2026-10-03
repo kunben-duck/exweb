@@ -28,6 +28,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
+import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.interfaces.chat.dto.BatchDeleteChatSessionsDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.BatchDeleteChatSessionsRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageAttachmentDto;
@@ -180,11 +181,11 @@ public class ChatSessionController {
                             user, new SessionListFilter(appId, title, channel, appScope), cursor, limit);
                     Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
                             facade.findFirstAssistantSummaries(user, page.items());
-                    Map<String, ChatRunStatus> lastRunStatuses = lastRunStatuses(user, page.items());
+                    Map<String, ChatSessionLastRunSummary> lastRunBriefs = lastRunBriefs(user, page.items());
                     return new ChatSessionPageDto(
                             page.items().stream()
                                     .map(session -> toDto(session, firstAssistantSummaries.get(session.id()),
-                                            lastRunStatuses == null ? null : lastRunStatuses.get(session.id())))
+                                            lastRunBriefs == null ? null : lastRunBriefs.get(session.id())))
                                     .toList(),
                             page.nextCursor()
                     );
@@ -235,8 +236,7 @@ public class ChatSessionController {
                                         ChatSessionLastRunSummary summary = lastRunSummaries == null
                                                 ? null : lastRunSummaries.get(session.id());
                                         return toDto(session, firstAssistantSummaries.get(session.id()),
-                                                summary == null ? null : summary.status(),
-                                                summary == null ? null : summary.skillId());
+                                                summary);
                                     })
                                     .toList(),
                             page.curPage(),
@@ -464,20 +464,22 @@ public class ChatSessionController {
     }
 
     private ChatSessionDto toDto(ChatSession session) {
-        return toDto(session, null, null, null);
+        return toDto(session, null, null);
     }
 
     private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant) {
-        return toDto(session, firstAssistant, null, null);
+        return toDto(session, firstAssistant, null);
     }
 
     private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant,
-                                 ChatRunStatus lastRunStatus) {
-        return toDto(session, firstAssistant, lastRunStatus, null);
-    }
-
-    private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant,
-                                 ChatRunStatus lastRunStatus, String lastRunSkillId) {
+                                 ChatSessionLastRunSummary lastRun) {
+        ChatRunStatus lastRunStatus = lastRun == null ? null : lastRun.status();
+        // ID与状态来自同一条批量查询结果，不能再按会话查询以免混入下一轮Run。
+        String activeRunId = lastRunStatus == ChatRunStatus.RUNNING || lastRunStatus == ChatRunStatus.CANCELLING
+                ? lastRun.runId() : null;
+        if (activeRunId != null && activeRunId.isBlank()) {
+            activeRunId = null;
+        }
         return new ChatSessionDto(
                 session.id(),
                 session.tenantId(),
@@ -485,7 +487,7 @@ public class ChatSessionController {
                 session.title(),
                 session.status(),
                 lastRunStatus == null ? null : lastRunStatus.name(),
-                lastRunSkillId,
+                lastRun == null ? null : lastRun.skillId(),
                 session.channel(),
                 session.appId(),
                 session.appName(),
@@ -499,11 +501,13 @@ public class ChatSessionController {
                 firstAssistant == null ? null : firstAssistant.content(),
                 firstAssistant == null ? null : firstAssistant.metadataJson(),
                 session.createdAt(),
-                session.updatedAt()
+                session.updatedAt(),
+                activeRunId,
+                activeRunId == null ? null : ChatStreamTopics.runTopic(activeRunId)
         );
     }
 
-    private Map<String, ChatRunStatus> lastRunStatuses(UserContext user, List<ChatSession> sessions) {
+    private Map<String, ChatSessionLastRunSummary> lastRunBriefs(UserContext user, List<ChatSession> sessions) {
         if (sessions == null || sessions.isEmpty()) {
             return Map.of();
         }
@@ -511,7 +515,7 @@ public class ChatSessionController {
                 .map(ChatSession::id)
                 .toList();
         try {
-            return chatRunService.findLastRunStatuses(user, sessionIds);
+            return chatRunService.findLastRunBriefs(user, sessionIds);
         } catch (RuntimeException ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
                             "Last run status batch lookup failed; returning session list without run status")

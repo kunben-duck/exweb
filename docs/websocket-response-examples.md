@@ -27,6 +27,7 @@
 | 异步等待、通知完成、APPEND/REPLACE/失败 | [S10](#s10) |
 | Stop、超时、实例丢失、恢复提示及断连 | [S11](#s11) |
 | FULL/no-store、心跳、done、多 topic 与刷新 | [S12](#s12) |
+| 列表刷新后恢复多个活动Run订阅，无须进入详情 | [列表重连](#session-list-reconnect) |
 
 ## 一、协议与字段字典
 
@@ -5999,7 +6000,7 @@ Servlet 单连接发送队列溢出、发送失败、空闲超时或网关断连
 
 ### 2. 刷新页面与 Resume
 
-刷新后物理 WS 已断开，旧订阅不会自动迁移。推荐：
+刷新后物理 WS 已断开，旧订阅不会自动迁移。打开具体会话详情时推荐：
 
 1. 查询 `GET /v1/chat/sessions/{sessionId}/messages` 恢复历史路径，再读 `GET /v1/chat/sessions/{sessionId}/stream-status`。
 2. 有 waitingInteraction 时按最新状态恢复卡片；不要仅靠旧 run.waiting_user 判断可提交。自动动作需同时检查期限和 Interaction 状态。
@@ -6038,6 +6039,48 @@ SSE 的 data 是 WS 外层 payload，而不是完整 WS Envelope。例如：
 ```
 
 实际 SSE 使用 `event: conversation-turn-stream`，不额外套 type=message/topicId/offset。普通 Run 恢复终态会产生 done；有限补发可能在没有终态时自然结束，不能据此推断任务完成。
+
+<a id="session-list-reconnect"></a>
+
+### 列表刷新后恢复多个任务订阅
+
+无需进入详情。`GET /v1/chat/sessions`与`GET /v1/chat/sessions/page`中每项均增加可空的
+`activeRunId/activeStreamTopicId`，与`lastRunStatus`来自同一最后Run；仅`RUNNING/CANCELLING`填充。
+其他状态、没有Run、非列表接口或摘要读取失败时为空，不能将摘要缺失当作任务完成。
+REST会话项相关字段示例（非WS消息）：
+
+```json
+{
+  "sessionId": "session_demo",
+  "status": "ACTIVE",
+  "lastRunStatus": "RUNNING",
+  "activeRunId": "run_demo",
+  "activeStreamTopicId": "chat-run-run_demo",
+  "hasUnread": false
+}
+```
+
+客户端 → 服务端，使用列表给出的topic；本例没有可靠本地游标：
+
+```json
+{
+  "id": "subscribe-list-run_demo",
+  "type": "subscribe",
+  "topicId": "chat-run-run_demo",
+  "afterSeq": 0
+}
+```
+
+- 四个运行中会话复用一条WS连接，分别订阅四个topic；按topic去重，列表与详情共用订阅，不同时另开HTTP Resume live。
+- 有可靠游标时使用已处理sequence；`latestMessageSeq/lastReadSeq`、reply或heartbeat水位均不能代替。监听游标不等于正文已展示，更不等于已读，进入详情须独立恢复缺失正文。
+- 列表返回后、订阅前完成的Run，通过现有数据库补发收到终态。补发可能包含全部已留存业务帧，不是“仅状态”订阅；前端无需为未打开会话渲染正文，但应维护游标。
+- 收到`run.completed/run.failed/run.cancelled/run.waiting_user`分别处理并合并刷新列表；只有Run ID仍匹配时才更新当前任务状态，旧Run不能覆盖新Run。绿点以`hasUnread`为准，后台监听不调用已读接口。
+- 不新增常态轮询；终态、断线重连、`SUBSCRIBE_ERROR/RECOVER_REQUIRED`触发按需校准，失败退避。Redis/WS故障不保证可靠实时送达，不能仅凭连接存活认定状态一定最新。
+- 默认一条连接最多8个topic，不自动扩大限额；超出时明确降级，不无限新增连接。本方案只恢复已加载会话，不扫描所有历史分页。
+- 异步等待仍是`RUNNING`，应继续订阅等待回调。no-store仅能恢复已持久化控制事实，不保证补发正文或思维链。
+- `stream-status`继续用于详情的Binding、Interaction、自动动作期限、异步阶段和恢复判断；列表不替代该接口，也不逐会话调用它。
+
+以上为前端联调契约，不代表本仓库已实现浏览器端订阅管理或通过真实前端联调。
 
 ### 3. 异步等待刷新专项
 

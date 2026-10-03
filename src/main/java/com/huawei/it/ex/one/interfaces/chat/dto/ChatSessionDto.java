@@ -30,6 +30,8 @@ import java.time.Instant;
  * @param firstAssistantMetadataJson 首条 assistant 消息的原始 metadata JSON；非列表场景可为空。
  * @param createdAt 创建时间。
  * @param updatedAt 最近更新时间。
+ * @param activeRunId 最后Run为RUNNING/CANCELLING时的ID；仅两个会话列表装配。
+ * @param activeStreamTopicId 对应活动Run的WebSocket topic；不表示客户端已完成订阅。
  */
 public record ChatSessionDto(
         String sessionId,
@@ -52,5 +54,7 @@ public record ChatSessionDto(
         String firstAssistantAnswer,
         String firstAssistantMetadataJson,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        String activeRunId,
+        String activeStreamTopicId
 ) {}

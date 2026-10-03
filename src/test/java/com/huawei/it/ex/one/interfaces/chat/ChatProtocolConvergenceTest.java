@@ -7,11 +7,15 @@ package com.huawei.it.ex.one.interfaces.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.AgentRuntimeForwardCookieProperties;
@@ -759,8 +763,9 @@ class ChatProtocolConvergenceTest {
                 .thenReturn(Map.of(session.id(), summary));
         when(facade.getSession(user, session.id())).thenReturn(session);
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
-        when(runService.findLastRunStatuses(user, List.of(session.id())))
-                .thenReturn(Map.of(session.id(), ChatRunStatus.WAITING_USER));
+        when(runService.findLastRunBriefs(user, List.of(session.id())))
+                .thenReturn(Map.of(session.id(), new ChatSessionLastRunSummary(
+                        ChatRunStatus.WAITING_USER, null, "run1")));
         when(runService.findLastRunSummaries(user, List.of(session.id())))
                 .thenReturn(Map.of(session.id(), new ChatSessionLastRunSummary(
                         ChatRunStatus.WAITING_USER, "skill-latest")));
@@ -791,9 +796,12 @@ class ChatProtocolConvergenceTest {
         assertThat(detail.firstAssistantMetadataJson()).isNull();
         assertThat(detail.lastRunStatus()).isNull();
         assertThat(detail.lastRunSkillId()).isNull();
+        assertThat(detail.activeRunId()).isNull();
+        assertThat(detail.activeStreamTopicId()).isNull();
         verify(facade, times(2)).findFirstAssistantSummaries(user, List.of(session));
-        verify(runService).findLastRunStatuses(user, List.of(session.id()));
+        verify(runService).findLastRunBriefs(user, List.of(session.id()));
         verify(runService).findLastRunSummaries(user, List.of(session.id()));
+        verifyNoMoreInteractions(runService);
     }
 
     @Test
@@ -834,19 +842,21 @@ class ChatProtocolConvergenceTest {
                         "session-" + status.name(), "tenant1", "user1", status.name(),
                         "ACTIVE", "web", now, now))
                 .toList();
-        Map<String, ChatRunStatus> statuses = Arrays.stream(ChatRunStatus.values())
-                .collect(Collectors.toMap(status -> "session-" + status.name(), status -> status));
+        Map<String, ChatSessionLastRunSummary> briefs = Arrays.stream(ChatRunStatus.values())
+                .collect(Collectors.toMap(status -> "session-" + status.name(),
+                        status -> new ChatSessionLastRunSummary(status, null, "run-" + status.name())));
         Map<String, ChatSessionLastRunSummary> summaries = Arrays.stream(ChatRunStatus.values())
                 .collect(Collectors.toMap(
                         status -> "session-" + status.name(),
-                        status -> new ChatSessionLastRunSummary(status, "skill-" + status.name())));
+                        status -> new ChatSessionLastRunSummary(status, "skill-" + status.name(),
+                                "run-" + status.name())));
         when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
                 .thenReturn(new ChatSessionPage(sessions, null));
         when(facade.listSessionsByPage(user, SessionListFilter.empty(), 1, 20))
                 .thenReturn(new ChatSessionNumberPage(sessions, 1, 20, sessions.size(), 1));
         when(facade.findFirstAssistantSummaries(user, sessions)).thenReturn(Map.of());
-        when(runService.findLastRunStatuses(user, sessions.stream().map(ChatSession::id).toList()))
-                .thenReturn(statuses);
+        when(runService.findLastRunBriefs(user, sessions.stream().map(ChatSession::id).toList()))
+                .thenReturn(briefs);
         when(runService.findLastRunSummaries(user, sessions.stream().map(ChatSession::id).toList()))
                 .thenReturn(summaries);
         ChatSessionController controller = new ChatSessionController(
@@ -871,10 +881,27 @@ class ChatProtocolConvergenceTest {
                 .containsExactlyElementsOf(expected);
         assertThat(numberPage.items()).extracting(ChatSessionDto::lastRunSkillId)
                 .containsExactlyElementsOf(expected.stream().map(status -> "skill-" + status).toList());
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        for (List<ChatSessionDto> items : List.of(cursorPage.items(), numberPage.items())) {
+            for (ChatSessionDto item : items) {
+                boolean active = List.of("RUNNING", "CANCELLING").contains(item.lastRunStatus());
+                String runId = active ? "run-" + item.lastRunStatus() : null;
+                String topic = active ? ChatStreamTopics.runTopic(runId) : null;
+                assertThat(item.activeRunId()).isEqualTo(runId);
+                assertThat(item.activeStreamTopicId()).isEqualTo(topic);
+                assertThat(item.status()).isEqualTo("ACTIVE");
+                assertThat(mapper.valueToTree(item).get("activeRunId")).isEqualTo(mapper.valueToTree(runId));
+                assertThat(mapper.valueToTree(item).get("activeStreamTopicId")).isEqualTo(mapper.valueToTree(topic));
+            }
+        }
+        verify(runService).findLastRunBriefs(user, sessions.stream().map(ChatSession::id).toList());
+        verify(runService).findLastRunSummaries(user, sessions.stream().map(ChatSession::id).toList());
+        verifyNoMoreInteractions(runService);
+        verify(facade, never()).markSessionRead(any(), any(), anyLong());
     }
 
     @Test
-    void cursorSessionListReturnsNullWhenSessionHasNoRun() {
+    void bothSessionListsReturnNullWhenSessionHasNoRun() {
         ChatSessionFacade facade = mock(ChatSessionFacade.class);
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
         UserContext user = user();
@@ -884,7 +911,10 @@ class ChatProtocolConvergenceTest {
         when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
                 .thenReturn(new ChatSessionPage(List.of(session), null));
         when(facade.findFirstAssistantSummaries(user, List.of(session))).thenReturn(Map.of());
-        when(runService.findLastRunStatuses(user, List.of(session.id()))).thenReturn(Map.of());
+        when(facade.listSessionsByPage(user, SessionListFilter.empty(), 1, 20))
+                .thenReturn(new ChatSessionNumberPage(List.of(session), 1, 20, 1, 1));
+        when(runService.findLastRunBriefs(user, List.of(session.id()))).thenReturn(Map.of());
+        when(runService.findLastRunSummaries(user, List.of(session.id()))).thenReturn(Map.of());
         ChatSessionController controller = new ChatSessionController(
                 facade,
                 mock(ChatFeedbackApplicationService.class),
@@ -898,6 +928,13 @@ class ChatProtocolConvergenceTest {
         assertThat(page).isNotNull();
         assertThat(page.items().getFirst().lastRunStatus()).isNull();
         assertThat(page.items().getFirst().lastRunSkillId()).isNull();
+        assertThat(page.items().getFirst().activeRunId()).isNull();
+        assertThat(page.items().getFirst().activeStreamTopicId()).isNull();
+        var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
+        assertThat(numberPage).isNotNull();
+        assertThat(numberPage.items().getFirst().lastRunStatus()).isNull();
+        assertThat(numberPage.items().getFirst().activeRunId()).isNull();
+        assertThat(numberPage.items().getFirst().activeStreamTopicId()).isNull();
     }
 
     @Test
@@ -913,7 +950,7 @@ class ChatProtocolConvergenceTest {
         when(facade.listSessionsByPage(user, SessionListFilter.empty(), 1, 20))
                 .thenReturn(new ChatSessionNumberPage(List.of(session), 1, 20, 1, 1));
         when(facade.findFirstAssistantSummaries(user, List.of(session))).thenReturn(Map.of());
-        when(runService.findLastRunStatuses(user, List.of(session.id())))
+        when(runService.findLastRunBriefs(user, List.of(session.id())))
                 .thenThrow(new IllegalStateException("database unavailable"));
         when(runService.findLastRunSummaries(user, List.of(session.id())))
                 .thenThrow(new IllegalStateException("database unavailable"));
@@ -936,6 +973,15 @@ class ChatProtocolConvergenceTest {
         assertThat(numberPage.items()).hasSize(1);
         assertThat(numberPage.items().getFirst().lastRunStatus()).isNull();
         assertThat(numberPage.items().getFirst().lastRunSkillId()).isNull();
+        for (ChatSessionDto item : List.of(page.items().getFirst(), numberPage.items().getFirst())) {
+            assertThat(item.activeRunId()).isNull();
+            assertThat(item.activeStreamTopicId()).isNull();
+            assertThat(item.title()).isEqualTo(session.title());
+            assertThat(item.hasUnread()).isEqualTo(session.hasUnread());
+        }
+        verify(runService).findLastRunBriefs(user, List.of(session.id()));
+        verify(runService).findLastRunSummaries(user, List.of(session.id()));
+        verifyNoMoreInteractions(runService);
     }
 
     @Test
@@ -964,7 +1010,38 @@ class ChatProtocolConvergenceTest {
         assertThat(numberPage).isNotNull();
         assertThat(numberPage.items()).isEmpty();
         verify(runService, times(0)).findLastRunStatuses(user, List.of());
+        verify(runService, times(0)).findLastRunBriefs(user, List.of());
         verify(runService, times(0)).findLastRunSummaries(user, List.of());
+    }
+
+    @Test
+    void nonListSessionResponsesDoNotQueryRunsForSubscriptionFields() {
+        UserContext user = user();
+        ChatSessionFacade facade = mock(ChatSessionFacade.class);
+        ChatRunApplicationService runs = mock(ChatRunApplicationService.class);
+        ChatSession session = new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                Instant.EPOCH, Instant.EPOCH);
+        when(facade.createSession(user, null, null, null, null)).thenReturn(session);
+        when(facade.getSession(user, session.id())).thenReturn(session);
+        when(facade.renameSession(user, session.id(), null)).thenReturn(session);
+        when(facade.archiveSession(user, session.id())).thenReturn(session);
+        when(facade.restoreSession(user, session.id())).thenReturn(session);
+        when(facade.deleteSession(user, session.id())).thenReturn(session);
+        ChatSessionController controller = new ChatSessionController(facade,
+                mock(ChatFeedbackApplicationService.class), runs, () -> user,
+                new PermissionChecker(), new ChatMessageVersionViewAssembler());
+
+        for (ChatSessionDto dto : List.of(controller.create(null).block(), controller.get(session.id()).block(),
+                controller.update(session.id(), null).block(), controller.archive(session.id()).block(),
+                controller.restore(session.id()).block(), controller.delete(session.id()).block())) {
+            assertThat(dto.activeRunId()).isNull();
+            assertThat(dto.activeStreamTopicId()).isNull();
+            assertThat(dto.lastRunStatus()).isNull();
+            assertThat(dto.lastRunSkillId()).isNull();
+            assertThat(dto.title()).isEqualTo(session.title());
+            assertThat(dto.status()).isEqualTo(session.status());
+        }
+        verifyNoInteractions(runs);
     }
 
     @Test

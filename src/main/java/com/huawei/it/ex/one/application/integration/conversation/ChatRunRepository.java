@@ -155,8 +155,17 @@ public interface ChatRunRepository {
         throw new UnsupportedOperationException("当前ChatRun仓储不支持批量最后run状态查询");
     }
 
+    /** 批量读取最后run的ID及状态，不加载metadata，不允许退化为逐会话查询。 */
+    default Map<String, ChatSessionLastRunSummary> findLastRunBriefs(
+            String tenantId, String userId, Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        throw new UnsupportedOperationException("当前ChatRun仓储不支持批量最后run轻量摘要查询");
+    }
+
     /**
-     * 批量查询当前页每个会话最后创建的run状态和最终Runtime调用标识。
+     * 批量查询当前页每个会话最后创建的run ID、状态和最终Runtime调用标识。
      *
      * <p>该入口供页码列表使用；生产实现必须以单条批量SQL完成，禁止逐会话读取run。</p>
      *

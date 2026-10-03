@@ -3823,6 +3823,16 @@ components:
           nullable: true
           example: skill_finance_query
           description: 最后创建的业务Run最终Runtime调用标识；仅页码会话列表保证装配，无Run、无可记录标识、其他接口或批量查询失败时为null。
+        activeRunId:
+          type: string
+          nullable: true
+          example: run_xxx
+          description: 仅两个会话列表装配，与lastRunStatus来自同一Run记录；最后Run为RUNNING或CANCELLING时返回其ID，其他状态、无Run、非列表接口或摘要查询失败时为null。摘要缺失不代表任务已完成。异步等待沿用RUNNING状态。
+        activeStreamTopicId:
+          type: string
+          nullable: true
+          example: chat-run-run_xxx
+          description: activeRunId对应的服务端WebSocket topic。刷新后可直接恢复已加载会话的订阅，无须逐会话查询stream-status；同一topic应去重订阅。没有可靠已消费游标时使用afterSeq=0，不能使用latestMessageSeq代替。该字段不表示已订阅或任务仍未完成，订阅会补发已持久化终态。完整Binding、Interaction及异步阶段仍通过stream-status读取。
         channel:
           type: string
           nullable: true

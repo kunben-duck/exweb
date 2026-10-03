@@ -6,9 +6,18 @@ package com.huawei.it.ex.one.infrastructure.persistence;
 
 /** 会话最后一个run的轻量状态及metadata行。 */
 public class ChatSessionLastRunSummaryRow {
+    private String runId;
     private String sessionId;
     private String status;
     private String metadataJson;
+
+    public String getRunId() {
+        return runId;
+    }
+
+    public void setRunId(String runId) {
+        this.runId = runId;
+    }
 
     public String getSessionId() {
         return sessionId;

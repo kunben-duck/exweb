@@ -307,6 +307,23 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
             readOnly = true,
             timeoutString = "${financeex.session-search.database-query-timeout-seconds:2}"
     )
+    public Map<String, ChatSessionLastRunSummary> findLastRunBriefs(
+            String tenantId, String userId, Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, ChatSessionLastRunSummary> summaries = new LinkedHashMap<>();
+        mapper.findLastRunStatuses(tenantId, userId, sessionIds).forEach(row ->
+                summaries.put(row.getSessionId(), new ChatSessionLastRunSummary(
+                        ChatRunStatus.valueOf(row.getStatus()), null, row.getRunId())));
+        return Map.copyOf(summaries);
+    }
+
+    @Override
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.session-search.database-query-timeout-seconds:2}"
+    )
     public Map<String, ChatSessionLastRunSummary> findLastRunSummaries(
             String tenantId, String userId, Collection<String> sessionIds) {
         if (sessionIds == null || sessionIds.isEmpty()) {
@@ -317,7 +334,7 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
             Map<String, Object> metadata = fromJson(row.getMetadataJson());
             summaries.put(row.getSessionId(), new ChatSessionLastRunSummary(
                     ChatRunStatus.valueOf(row.getStatus()),
-                    MessageSkillContext.runSkillId(metadata)));
+                    MessageSkillContext.runSkillId(metadata), row.getRunId()));
         });
         return Map.copyOf(summaries);
     }

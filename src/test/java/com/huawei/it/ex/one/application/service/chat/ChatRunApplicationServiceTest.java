@@ -20,6 +20,7 @@ import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
@@ -55,11 +56,36 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 class ChatRunApplicationServiceTest {
+    @Test
+    void lastRunBriefsNormalizeIdsWithoutCacheOrSessionReads() {
+        ChatRunRepository repository = mock(ChatRunRepository.class);
+        ChatRunCache cache = mock(ChatRunCache.class);
+        SessionRepository sessions = mock(SessionRepository.class);
+        ChatEventStore events = mock(ChatEventStore.class);
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache, events,
+                new PermissionChecker(), sessions);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        Map<String, ChatSessionLastRunSummary> result = Map.of("session1",
+                new ChatSessionLastRunSummary(ChatRunStatus.RUNNING, null, "run1"));
+        when(repository.findLastRunBriefs("tenant1", "user1", List.of("session1"))).thenReturn(result);
+
+        assertThat(service.findLastRunBriefs(user, Arrays.asList("session1", null, " ", "session1")))
+                .isSameAs(result);
+        assertThat(service.findLastRunBriefs(user, List.of())).isEmpty();
+        assertThat(service.findLastRunBriefs(user, null)).isEmpty();
+        assertThat(service.findLastRunBriefs(user, Arrays.asList(null, " "))).isEmpty();
+
+        verify(repository).findLastRunBriefs("tenant1", "user1", List.of("session1"));
+        verifyNoMoreInteractions(repository);
+        verifyNoInteractions(cache, sessions, events);
+    }
+
     @Test
     void skippedMessageEventsNeverReadOrWriteRunStorage() {
         ChatRunRepository repository = mock(ChatRunRepository.class);

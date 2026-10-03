@@ -211,8 +211,8 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
 | --- | --- | --- | --- |
 | `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
-| `GET /chat/sessions` | Query：`appId/appScope/title/channel` 可选；`appScope=MAIN_SITE`只查主站；`limit`页大小；`cursor`上一页游标 | `items[]`、`nextCursor`；item带首条assistant摘要及`lastRunStatus` | MAIN_SITE不能同时传appId；后续页沿用全部过滤条件 |
-| `GET /chat/sessions/page` | Query：`appId/appScope/keyword/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带首条assistant正文、metadata、`lastRunStatus`及`lastRunSkillId` | keyword搜索标题及已持久化问答；旧title非空返回400；搜索超时返回503 |
+| `GET /chat/sessions` | Query：`appId/appScope/title/channel` 可选；`appScope=MAIN_SITE`只查主站；`limit`页大小；`cursor`上一页游标 | `items[]`、`nextCursor`；item带首条assistant摘要、`lastRunStatus`及`activeRunId/activeStreamTopicId` | MAIN_SITE不能同时传appId；后续页沿用全部过滤条件 |
+| `GET /chat/sessions/page` | Query：`appId/appScope/keyword/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带首条assistant正文、metadata、`lastRunStatus/lastRunSkillId`及`activeRunId/activeStreamTopicId` | keyword搜索标题及已持久化问答；旧title非空返回400；搜索超时返回503 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 为上一页游标，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo`，并原样返回 `metadataJson` 字符串 | 首页取最近消息；后续页 prepend。cursor 固定首次 leaf，损坏、跨会话或 leaf 不匹配返回400 |
@@ -253,8 +253,8 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
 | `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | Query：`channel` 可选。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 移动端传 `mobile`；PC 端省略后返回全部渠道分类。 |
-| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含首条assistant摘要及`lastRunStatus`。 | 完整恢复和WAIT详情仍查stream-status。 |
-| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/appScope/keyword/channel`可选；`curPage`默认1；`pageSize`默认20，最大200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每项含`lastRunStatus/lastRunSkillId`。 | keyword按标题、user问题和assistant回答搜索；建议300ms防抖；不返回`DELETED`会话。 |
+| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含首条assistant摘要、`lastRunStatus`及`activeRunId/activeStreamTopicId`。 | 可直接恢复列表订阅；完整恢复和WAIT详情仍查stream-status。 |
+| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/appScope/keyword/channel`可选；`curPage`默认1；`pageSize`默认20，最大200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每项含`lastRunStatus/lastRunSkillId`及`activeRunId/activeStreamTopicId`。 | keyword按标题、user问题和assistant回答搜索；建议300ms防抖；不返回`DELETED`会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 为上一页返回值。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 首页返回路径最近一页；后续页读取更早消息并 prepend。cursor 固定首次 leaf，后续可调整 limit。 |
@@ -382,6 +382,8 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `status` | `ACTIVE`、`ARCHIVED`、`DELETED` 等会话状态；`DELETED` 会话对列表和详情不可见 |
 | `lastRunStatus` | 两个会话列表接口返回最后创建的Run状态，可为`RUNNING/CANCELLING/COMPLETED/WAITING_USER/FAILED/CANCELLED`；无Run、其他接口或批量读取失败时为`null` |
 | `lastRunSkillId` | 页码会话列表返回与`lastRunStatus`同一最后Run的最终Runtime调用标识；DomainAgent为技能ID，专家/敏感Relay为规范化accessName，合法NO_MATCH为`NO_MATCH`；普通Relay fallback、无Run、其他接口或批量读取失败时为`null` |
+| `activeRunId` | 两个列表中，最后Run为`RUNNING/CANCELLING`时返回同一Run的ID；其余状态、无Run、非列表接口或批量读取失败时为`null`。异步等待仍属于`RUNNING` |
+| `activeStreamTopicId` | 上述活动Run对应的WebSocket topic；用于不进入详情也能恢复订阅，不代表订阅已经建立 |
 | `channel` | 会话来源渠道，例如 `web`、`mobile`、`web-local-test` |
 | `appId` | 可选、大小写敏感的应用分组键；最大 128 字符，未分组会话为 `null` |
 | `appName` | 可选应用展示名称快照；最大 256 字符，创建后不可变，未传为 `null` |
@@ -993,6 +995,8 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&l
       "status": "ACTIVE",
       "lastRunStatus": "RUNNING",
       "lastRunSkillId": null,
+      "activeRunId": "run_xxx",
+      "activeStreamTopicId": "chat-run-run_xxx",
       "channel": "web",
       "appId": "fund-app",
       "appName": "资金助手",
@@ -1019,7 +1023,19 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&l
 后续游标页必须继续提交相同的`appScope/appId/title/channel`；切换条件时应丢弃旧`cursor`并从第一页重新查询。
 主站查询使用v5游标；既有v2/v3/v4游标继续兼容。`lastRunStatus`按Run创建时间返回最后一轮业务状态；
 没有任何Run时为`null`。游标列表不读取最后Run metadata，因此`lastRunSkillId=null`。前端可将
-`RUNNING/CANCELLING`视为运行中，其他值均为当前轮终态。
+`RUNNING/CANCELLING`视为运行中；`WAITING_USER`表示需要恢复交互，不能当作成功回答。状态为null表示无Run或摘要不可用，不代表任务已完成。
+
+**刷新后恢复列表任务监听（两个列表均适用）**：
+
+1. 从已加载会话收集`activeRunId/activeStreamTopicId`，使用一条WebSocket按topic去重订阅；四个任务对应四个订阅，不是四条连接。列表与详情共用同一订阅，不同时建立重复HTTP Resume。
+2. 按Run使用可靠的已消费`afterSeq`；没有游标时使用`0`。会话`latestMessageSeq/lastReadSeq`及服务端最新水位不能替代Run游标。监听游标只表示事件已处理，不表示用户已阅读正文，也不能让详情恢复误跳过尚未渲染的数据。
+3. 任务可能在列表查询后、订阅前完成；订阅复用已有历史补发后接实时机制，仍可收到已持久化终态。无游标的补发可能包含正文和Parts事件，不是仅订阅状态，前端可不渲染但需按序处理游标。
+4. 收到`run.completed/run.failed/run.cancelled/run.waiting_user`后按实际状态处理并合并刷新列表；旧Run迟到事件不得清除同会话新Run的转圈提示。绿点继续取刷新后的`hasUnread`，后台监听不调用已读接口。
+5. 不新增常态轮询；终态、重连、订阅异常时按需合并校准，失败退避。摘要读取失败时保留未知状态，不伪造完成。WebSocket和Redis不是可靠通知队列，不能保证任意故障下实时获知终态。
+6. 每连接默认最多8个topic，保留现有限额；超过容量时明确降级为非实时状态，不无限建连接。未加载分页不保证实时提示。异步等待没有正文时继续监听；no-store只恢复已持久化控制事实，不承诺补发业务正文。
+
+列表仍采用原有单次Run批量查询，无逐会话`stream-status`查询。打开详情时保留`stream-status`调用，以恢复Binding、Interaction、自动动作期限及异步阶段；该接口并未被列表取代。
+上述列表订阅管理需要前端实现；完整控制帧示例见[WebSocket手册](websocket-response-examples.md#session-list-reconnect)。
 
 查询会话列表，页码分页用于传统分页组件：
 
@@ -1047,6 +1063,8 @@ assistant回答执行大小写不敏感的连续子串匹配，并与`appId/appS
       "status": "ACTIVE",
       "lastRunStatus": "COMPLETED",
       "lastRunSkillId": "skill_finance_query",
+      "activeRunId": null,
+      "activeStreamTopicId": null,
       "channel": "web",
       "appId": "fund-app",
       "appName": "资金助手",

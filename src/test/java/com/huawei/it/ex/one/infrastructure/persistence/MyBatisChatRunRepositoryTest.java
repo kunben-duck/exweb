@@ -13,6 +13,8 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
@@ -33,6 +35,42 @@ import java.util.List;
 import java.util.Map;
 
 class MyBatisChatRunRepositoryTest {
+    @Test
+    void lastRunBriefsReuseOneLightweightQueryWithoutMetadataParsing() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        ObjectMapper objectMapper = mock(ObjectMapper.class);
+        List<String> sessionIds = List.of("session1", "session2");
+        when(mapper.findLastRunStatuses("tenant1", "user1", sessionIds))
+                .thenReturn(List.of(lastRunStatusRow("session1", ChatRunStatus.RUNNING),
+                        lastRunStatusRow("session2", ChatRunStatus.CANCELLING)));
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, objectMapper);
+
+        assertThat(repository.findLastRunBriefs("tenant1", "user1", sessionIds))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(
+                        "session1", new ChatSessionLastRunSummary(ChatRunStatus.RUNNING, null, "run-session1"),
+                        "session2", new ChatSessionLastRunSummary(ChatRunStatus.CANCELLING, null, "run-session2")));
+
+        verify(mapper).findLastRunStatuses("tenant1", "user1", sessionIds);
+        verifyNoMoreInteractions(mapper);
+        verifyNoInteractions(objectMapper);
+    }
+
+    @Test
+    void lastRunBriefsSkipEmptyPagesAndKeepReadTimeout() throws Exception {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+        assertThat(repository.findLastRunBriefs("tenant1", "user1", List.of())).isEmpty();
+        assertThat(repository.findLastRunBriefs("tenant1", "user1", null)).isEmpty();
+        verifyNoInteractions(mapper);
+
+        Transactional transactional = MyBatisChatRunRepository.class
+                .getMethod("findLastRunBriefs", String.class, String.class, Collection.class)
+                .getAnnotation(Transactional.class);
+        assertThat(transactional.readOnly()).isTrue();
+        assertThat(transactional.timeoutString())
+                .isEqualTo("${financeex.session-search.database-query-timeout-seconds:2}");
+    }
+
     @Test
     void lastRunStatusesUseSingleOwnerScopedMapperCall() {
         ChatRunMapper mapper = mock(ChatRunMapper.class);
@@ -87,11 +125,12 @@ class MyBatisChatRunRepositoryTest {
 
         assertThat(repository.findLastRunSummaries("tenant1", "user1", sessionIds))
                 .containsExactlyInAnyOrderEntriesOf(Map.of(
-                        "session1", new ChatSessionLastRunSummary(ChatRunStatus.COMPLETED, "skill-a"),
-                        "session2", new ChatSessionLastRunSummary(ChatRunStatus.FAILED, null)));
+                        "session1", new ChatSessionLastRunSummary(ChatRunStatus.COMPLETED, "skill-a", "run-session1"),
+                        "session2", new ChatSessionLastRunSummary(ChatRunStatus.FAILED, null, "run-session2")));
 
         verify(mapper).findLastRunSummaries("tenant1", "user1", sessionIds);
         verify(mapper, never()).findLastRunStatuses(any(), any(), any());
+        verifyNoMoreInteractions(mapper);
     }
 
     @Test
@@ -313,6 +352,7 @@ class MyBatisChatRunRepositoryTest {
 
     private ChatSessionLastRunStatusRow lastRunStatusRow(String sessionId, ChatRunStatus status) {
         ChatSessionLastRunStatusRow row = new ChatSessionLastRunStatusRow();
+        row.setRunId("run-" + sessionId);
         row.setSessionId(sessionId);
         row.setStatus(status.name());
         return row;
@@ -321,6 +361,7 @@ class MyBatisChatRunRepositoryTest {
     private ChatSessionLastRunSummaryRow lastRunSummaryRow(
             String sessionId, ChatRunStatus status, String metadataJson) {
         ChatSessionLastRunSummaryRow row = new ChatSessionLastRunSummaryRow();
+        row.setRunId("run-" + sessionId);
         row.setSessionId(sessionId);
         row.setStatus(status.name());
         row.setMetadataJson(metadataJson);

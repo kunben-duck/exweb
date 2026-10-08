@@ -123,12 +123,12 @@ class SessionApplicationServiceTest {
 
         assertThat(created.appId()).isEqualTo("fund-app");
         assertThat(created.appName()).isEqualTo("资金助手");
-        ChatCommand matching = new ChatCommand("cmd", "tenant1", "user1", created.id(), null, "web",
+        ChatCommand matching = new ChatCommand("cmd", "tenant1", "user1", created.id(), null, "mobile",
                 "继续提问", List.of(), Map.of(), null, null, ChatRunMode.NEXT, null, null, null,
                 null, null, null, null, Map.of(), "fund-app", null);
         assertThat(service.loadOrCreate(matching).id()).isEqualTo(created.id());
 
-        ChatCommand mismatched = new ChatCommand("cmd", "tenant1", "user1", created.id(), null, "web",
+        ChatCommand mismatched = new ChatCommand("cmd", "tenant1", "user1", created.id(), null, "mobile",
                 "错误分组", List.of(), Map.of(), null, null, ChatRunMode.NEXT, null, null, null,
                 null, null, null, null, Map.of(), "tax-app", "税务助手");
         assertThatThrownBy(() -> service.loadOrCreate(mismatched))
@@ -147,7 +147,7 @@ class SessionApplicationServiceTest {
     }
 
     @Test
-    void runChannelCreatesMobileSessionAndValidatesOnlyExplicitExistingChannel() {
+    void crossChannelContinuationPreservesSessionCreationChannel() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         SessionApplicationService service = service(sessions, messages);
@@ -167,30 +167,66 @@ class SessionApplicationServiceTest {
         assertThat(service.loadOrCreate(new ChatCommand(
                 "pc-all", "tenant1", "user1", mobile.id(), null, null,
                 "PC继续提问", List.of(), Map.of())).id()).isEqualTo(mobile.id());
-        assertThatThrownBy(() -> service.loadOrCreate(new ChatCommand(
-                "wrong-channel", "tenant1", "user1", mobile.id(), null, "web",
-                "错误渠道", List.of(), Map.of())))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("channel 与已有会话不一致");
+        assertThat(service.loadOrCreate(new ChatCommand(
+                "web-continues-mobile", "tenant1", "user1", mobile.id(), null, "web",
+                "PC继续移动端会话", List.of(), Map.of())))
+                .satisfies(session -> {
+                    assertThat(session.id()).isEqualTo(mobile.id());
+                    assertThat(session.channel()).isEqualTo("mobile");
+                });
+        assertThat(service.loadOrCreate(new ChatCommand(
+                "mobile-continues-web", "tenant1", "user1", web.id(), null, " mobile ",
+                "移动端继续PC会话", List.of(), Map.of())))
+                .satisfies(session -> {
+                    assertThat(session.id()).isEqualTo(web.id());
+                    assertThat(session.channel()).isEqualTo("web");
+                });
+        assertThat(sessions.sessions).hasSize(2);
+        assertThat(service.loadOrCreate(new ChatCommand(
+                "blank-channel", "tenant1", "user1", null, null, "  ",
+                "空白渠道", List.of(), Map.of())).channel()).isEqualTo("web");
     }
 
     @Test
-    void interactionSessionContextValidatesChannelAndAppTagWithOneLookup() {
+    void crossChannelInteractionStillValidatesAppTagWithOneLookup() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         ChatSession session = sessions.save(sessionWithChannel(
                 "mobile-fund", "移动资金分析", "fund-app", "mobile", Instant.now()));
         SessionApplicationService service = service(sessions, messages);
 
-        service.validateSessionContext(user(), session.id(), " mobile ", "fund-app", "应用");
+        service.validateSessionContext(user(), session.id(), "web", "fund-app", "应用");
 
         assertThat(sessions.ownerLookupCalls).hasValue(1);
+        assertThat(sessions.sessions.get(session.id())).isEqualTo(session);
         assertThatCode(() -> service.validateSessionContext(user(), session.id(), "  ", null, null))
                 .doesNotThrowAnyException();
         assertThatThrownBy(() -> service.validateSessionContext(
-                user(), session.id(), "web", "fund-app", "应用"))
+                user(), session.id(), "web", "fund-app", "其他应用"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("channel 与已有会话不一致");
+                .hasMessageContaining("appName 与已有会话不一致");
+    }
+
+    @Test
+    void crossChannelContinuationStillRequiresOwnedNonDeletedSession() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        SessionApplicationService service = service(sessions, new InMemoryMessageRepository());
+        ChatSession session = service.createSession(user(), "PC会话", "web");
+
+        for (UserContext other : List.of(new UserContext("tenant2", "user1", "Other Tenant"),
+                new UserContext("tenant1", "user2", "Other User"))) {
+            assertThatThrownBy(() -> service.loadOrCreate(new ChatCommand(
+                    "other", other.tenantId(), other.ownerUserId(), session.id(), null, "mobile",
+                    "继续", List.of(), Map.of()))).isInstanceOf(SecurityException.class);
+            assertThatThrownBy(() -> service.validateSessionContext(
+                    other, session.id(), "mobile", null, null)).isInstanceOf(SecurityException.class);
+        }
+        service.deleteSession(user(), session.id());
+        assertThatThrownBy(() -> service.loadOrCreate(new ChatCommand(
+                "deleted", "tenant1", "user1", session.id(), null, "mobile",
+                "继续", List.of(), Map.of()))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.validateSessionContext(
+                user(), session.id(), "mobile", null, null)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -308,6 +344,10 @@ class SessionApplicationServiceTest {
         assertThat(service.listSessions(user(), SessionListFilter.empty(), null, 20).items())
                 .extracting(ChatSession::id)
                 .containsExactlyInAnyOrder("mobile-fund", "web-fund", "mobile-tax");
+        ChatSessionNumberPage allChannels = service.listSessionsByPage(
+                user(), SessionListFilter.forPage("fund-app", "利润", null, null), 1, 20);
+        assertThat(allChannels.items()).extracting(ChatSession::id).containsExactly("mobile-fund", "web-fund");
+        assertThat(allChannels.totalRows()).isEqualTo(2);
         assertThat(service.listSessions(
                 user(), new SessionListFilter(null, null, "   "), null, 20).items())
                 .extracting(ChatSession::id)

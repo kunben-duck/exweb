@@ -666,11 +666,12 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
     }
 
     private ChatRunStartResult startResponse(ChatInteractionRequest waiting, boolean approved, Map<String, Object> answers) {
-        var started = service.startRun(user, new ChatCommand(null, null, null, waiting.sessionId(), null, "web", null,
+        var started = service.startRun(user, new ChatCommand(null, null, null, waiting.sessionId(), null, "mobile", null,
                 List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                 null, waiting.id(), approved, "once", answers), RuntimeForwardHeaders.empty())
                 .block(Duration.ofSeconds(10));
         assertThat(started.userMessageId()).isEqualTo(waiting.userMessageId());
+        assertThat(sessions.sessions.get(waiting.sessionId()).channel()).isEqualTo("web");
         return started;
     }
 

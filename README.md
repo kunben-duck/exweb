@@ -61,9 +61,9 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 
 - `POST /v1/chat/runs`：唯一任务提交入口。普通提问创建后台 run；`runMode=CONTINUE_INTERACTION` 时提交澄清/审批/确认响应并启动续接 run；返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
 - `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为不可变分组标识和名称快照。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
-- `GET /v1/chat/sessions/apps?channel=mobile`：查询当前用户非删除会话中的全部 App 分类；`channel` 可选，返回去重后的 `appId/appName`，按分类最近活动时间倒序排列。
-- `GET /v1/chat/sessions?appScope=MAIN_SITE&title=利润&channel=mobile&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appScope=MAIN_SITE` 仅返回 `appId=null` 的主站会话，省略时保持全量语义；也可改传具体 `appId`，并返回每个会话第一条 assistant 的 `firstAssistantAnswer/firstAssistantMetadataJson`。
-- `GET /v1/chat/sessions/page?appScope=MAIN_SITE&keyword=利润&channel=mobile&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`keyword`统一模糊匹配标题、已持久化user问题和assistant回答，返回 `totalRows/totalPages`、每个会话第一条 assistant 的正文及原始 metadata 字符串，并返回同一最后Run的`lastRunStatus/lastRunSkillId`。搜索事务默认限时2秒，超时返回`503/SESSION_SEARCH_TIMEOUT`。
+- `GET /v1/chat/sessions/apps`：查询当前用户非删除会话中的全部 App 分类；`channel` 可选，双端默认省略以查询全部渠道，返回去重后的 `appId/appName`，按分类最近活动时间倒序排列。
+- `GET /v1/chat/sessions?appScope=MAIN_SITE&title=利润&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appScope=MAIN_SITE` 仅返回 `appId=null` 的主站会话，省略时保持全量语义；也可改传具体 `appId`，并返回每个会话第一条 assistant 的 `firstAssistantAnswer/firstAssistantMetadataJson`。
+- `GET /v1/chat/sessions/page?appScope=MAIN_SITE&keyword=利润&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`keyword`统一模糊匹配标题、已持久化user问题和assistant回答，返回 `totalRows/totalPages`、每个会话第一条 assistant 的正文及原始 metadata 字符串，并返回同一最后Run的`lastRunStatus/lastRunSkillId`。搜索事务默认限时2秒，超时返回`503/SESSION_SEARCH_TIMEOUT`。
 
 页码会话关键字搜索、游标列表最后Run状态读取及页码列表最后Run摘要读取，共用`FINANCEEX_SESSION_SEARCH_DATABASE_QUERY_TIMEOUT_SECONDS`数据库事务超时，允许`1..30`秒，默认2秒；非法值会使服务启动失败。关键字搜索超时返回`503/SESSION_SEARCH_TIMEOUT`；最后Run辅助查询超时则保持列表成功，游标列表返回`lastRunStatus=null`，页码列表返回`lastRunStatus/lastRunSkillId=null`；普通列表主体查询不使用该超时配置。
 - `GET /v1/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
@@ -113,7 +113,9 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 会话 App Tag 仅用于产品分组和可选列表过滤，不替代 `tenantId + userId` 归属校验。`appId/appName` 均可省略；`appName` 不能脱离 `appId` 单独传入，空字符串按未传处理。未绑定 `appId` 的会话定义为主站会话，列表使用 `appScope=MAIN_SITE` 查询；省略 `appScope/appId` 仍查询全量，`MAIN_SITE` 不能与具体 `appId` 同时使用。已有会话中显式传入的 tag 必须与创建快照完全一致，分支会话继承源 tag，重命名、归档和恢复不会修改它。`/sessions/apps` 排除已删除和主站会话，相同 `appId` 只返回一次，展示名称取最近的非空 `appName` 快照。tag 不进入 run metadata、RouteMemory、IntentAgent、Relay 或 DomainAgent 请求。
 
-移动端会话创建和列表隔离复用现有 `channel`：移动端在自动创建 run 及三个列表接口中统一传小写 `mobile`；PC 端省略该字段，新会话继续默认保存为 `web`，列表仍可查看全部渠道。已有会话只有在请求显式携带 `channel` 时才校验一致性，因此该过滤属于展示和创建隔离，不替代会话的 `tenantId + userId` 归属校验。带 channel 的游标使用绑定 `appId/title/channel` 的 v4 格式；无 channel 的 v2/v3 游标继续兼容。
+同一 `tenantId + userId` 下，PC 与移动端可互相查看并继续会话。创建或续聊请求可分别传 `channel=web/mobile`；新建会话将 trim 后的值保存为创建来源，未传或空白默认 `web`，长度上限仍为64字符。跨端续聊不比较或改写原会话 `channel`，继续复用原消息路径、Binding 和专家范围；App Tag、归属、Session状态、同会话单活动Run及Interaction claim保护不变。
+
+两端默认查询 `/sessions`、`/sessions/page` 和 `/sessions/apps` 时均省略 `channel`，查看满足其他条件的全部渠道会话；需要按创建来源筛选时仍可显式传入，精确匹配且区分大小写。从 `channel=mobile` 改为全渠道查询时必须清空旧 `cursor`，从第一页重新加载。原有游标过滤条件绑定及兼容规则不变。跨端继续使用原 `sessionId`，通过历史、`stream-status` 和既有WS/Resume恢复；本次不新增跨端操作广播，前端查询参数需同步调整。
 
 启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题任务独立订阅，Run不等待标题生成或保存。标题提交后向已订阅连接尽力发送用户级提示，前端查询单会话详情读取结果，不产生Run事件。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。
 

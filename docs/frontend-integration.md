@@ -252,7 +252,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
-| `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | Query：`channel` 可选。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 移动端传 `mobile`；PC 端省略后返回全部渠道分类。 |
+| `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | Query：`channel` 可选。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | PC与移动端默认均省略channel，返回全部渠道分类；显式传入仅按创建来源筛选。 |
 | `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含首条assistant摘要、`lastRunStatus`及`activeRunId/activeStreamTopicId`。 | 可直接恢复列表订阅；完整恢复和WAIT详情仍查stream-status。 |
 | `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/appScope/keyword/channel`可选；`curPage`默认1；`pageSize`默认20，最大200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每项含`lastRunStatus/lastRunSkillId`及`activeRunId/activeStreamTopicId`。 | keyword按标题、user问题和assistant回答搜索；建议300ms防抖；不返回`DELETED`会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
@@ -275,7 +275,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：现有字段外增加可选 `channel`，最大64字符。 | `ChatRunStartDto`：`runId`、`sessionId`、`userMessageId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 移动端统一传 `mobile`；自动建会话时保存该值，省略则默认 `web`。已有会话显式传入时必须一致，PC 省略后仍可访问任意渠道。 |
+| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：可选 `channel`，最大64字符。 | `ChatRunStartDto`：`runId`、`sessionId`、`userMessageId`、`firstSeq`、`createdAt`、`streamTopicId`。 | PC/mobile请求可分别传web/mobile；自动建会话时保存，未传或空白默认web。已有会话允许跨端续聊，不比较或改写原channel。 |
 | `POST /v1/chat/intent-candidates` | 用户主动查看某条user消息的Intent候选技能。 | JSON body：`messageId`必填，trim后最大64字符。 | 候选裸数组；每项为`intentId/accessName/skillId/intentName/confidence`。 | 仅允许当前用户的user消息；`accessName`保留下游原值，`skillId`只移除一次服务端通用前缀。不缓存候选；本机容量满返回`429/INTENT_CANDIDATES_BUSY`，上游失败返回502，HTTP响应超时重试耗尽返回504。前端收到BUSY后应延迟重试。 |
 | `POST /v1/chat/intent-preference-corrections` | 用户勾选“记录我的偏好”后独立保存所选意图。 | `selectionType=INTENT_CANDIDATE`时提交`sourceMessageId + selectedIntent`；`AMBIGUOUS_ROUTE`时提交`interactionId`；两者均可提交`intentAccessName`。 | `204 No Content`。 | 必须先等待对应Run成功受理，再异步调用本接口。偏好失败返回`503/INTENT_PREFERENCE_UNAVAILABLE`，不得取消当前Run；可独立重试。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户停止运行中的回答，或取消当前会话的等待输入。 | Path：运行态传 `activeRunId`；等待态传 `waitingSourceRunId`。 | `ChatRunStopDto`：原有字段，以及 `waitingUserInput`、`interactionId`、`interactionStatus`、`interactionCancelledAt`、`effectiveRunId`。 | 幂等；停止语义不是关闭 WebSocket。等待态历史 run-A 不改写为 `CANCELLED`。 |
@@ -318,9 +318,9 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | 接口 | 最小入参示例 |
 | --- | --- |
 | `POST /v1/chat/sessions` | Body：`{"title":"资金分析","channel":"web","appId":"fund-app","appName":"资金助手"}`；四个字段都可省略，但 `appName` 不能单独出现。 |
-| `GET /v1/chat/sessions/apps` | 移动端 Query：`?channel=mobile`；PC 端不传 channel。 |
-| `GET /v1/chat/sessions` | Query：`?appScope=MAIN_SITE&title=利润&channel=mobile&limit=20&cursor=cursor_xxx`；也可使用具体`appId`，同一cursor不得切换过滤条件。 |
-| `GET /v1/chat/sessions/page` | Query：`?appScope=MAIN_SITE&keyword=利润&channel=mobile&curPage=1&pageSize=20`；省略`appScope/appId`时查询全量。 |
+| `GET /v1/chat/sessions/apps` | 两端默认不传channel；只查看某一创建来源时才增加`?channel=mobile`等筛选。 |
+| `GET /v1/chat/sessions` | Query：`?appScope=MAIN_SITE&title=利润&limit=20&cursor=cursor_xxx`；也可使用具体`appId`，同一cursor不得切换过滤条件。 |
+| `GET /v1/chat/sessions/page` | Query：`?appScope=MAIN_SITE&keyword=利润&curPage=1&pageSize=20`；省略`appScope/appId`时查询全量。 |
 | `GET /v1/chat/sessions/{sessionId}` | Path：`session_xxx`。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | Body：`{"readThroughSeq":63252}`；使用已经实际展示的会话水位或实时终态 sequence。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | Query：`?limit=50`；查看指定版本路径时传 `?leafMessageId=msg_xxx&limit=50`。 |
@@ -384,7 +384,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `lastRunSkillId` | 页码会话列表返回与`lastRunStatus`同一最后Run的最终Runtime调用标识；DomainAgent为技能ID，专家/敏感Relay为规范化accessName，合法NO_MATCH为`NO_MATCH`；普通Relay fallback、无Run、其他接口或批量读取失败时为`null` |
 | `activeRunId` | 两个列表中，最后Run为`RUNNING/CANCELLING`时返回同一Run的ID；其余状态、无Run、非列表接口或批量读取失败时为`null`。异步等待仍属于`RUNNING` |
 | `activeStreamTopicId` | 上述活动Run对应的WebSocket topic；用于不进入详情也能恢复订阅，不代表订阅已经建立 |
-| `channel` | 会话来源渠道，例如 `web`、`mobile`、`web-local-test` |
+| `channel` | 会话创建来源，例如 `web`、`mobile`、`web-local-test`；跨端续聊不改写，不表示最近使用端 |
 | `appId` | 可选、大小写敏感的应用分组键；最大 128 字符，未分组会话为 `null` |
 | `appName` | 可选应用展示名称快照；最大 256 字符，创建后不可变，未传为 `null` |
 | `currentLeafMessageId` | 当前激活消息树路径的叶子；历史查询默认返回 root 到该 leaf |
@@ -944,10 +944,14 @@ curl -X POST http://localhost:8080/v1/chat/sessions \
 
 前端展示可以使用 `sessionId` 作为会话路由参数，并按 `appId` 分组、用 `appName` 展示分组名称。tag 创建后不可变；分支会话自动继承。移动端创建会话时传 `channel=mobile`，PC端省略后默认创建 `web` 会话。租户和用户字段只用于调试展示，不应回传给聊天接口。
 
+同一租户、同一用户的PC与移动端可互相查看并继续会话。已有会话请求仍可分别传`channel=web/mobile`，包括`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`及各类`CONTINUE_INTERACTION`；原`sessionId/channel`、消息路径、Binding和专家范围不会因渠道不同而更换。会话channel只表示创建来源。App Tag、消息与Interaction归属、Session状态和并发保护仍有效，不能同时创建两个活动Run或重复回答同一问卷。
+
+两端默认查询以下三个列表时均省略channel；从旧的`channel=mobile`列表切换到全渠道时，清空cursor并从第一页加载，不能复用旧过滤游标。跨端进入会话后仍通过历史、`stream-status`及已有WS/Resume恢复消息和等待状态。本次没有新增跨端操作广播，需由前端同步调整查询参数；双端身份必须解析为相同`tenantId + ownerUserId`。
+
 初始化分类栏时查询：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions/apps?channel=mobile"
+curl "http://localhost:8080/v1/chat/sessions/apps"
 ```
 
 ```json
@@ -967,19 +971,19 @@ curl "http://localhost:8080/v1/chat/sessions/apps?channel=mobile"
 
 分类按各 `appId` 最近一条非删除会话的活动时间倒序返回；时间相同时按 `appId` 升序。同一 `appId`
 只返回一次，`appName` 使用最近更新会话中的非空快照。接口包含 `ACTIVE/ARCHIVED` 会话，排除
-`DELETED` 和未设置 `appId` 的主站会话；“全部”和“主站”入口由前端自行增加。示例中的 `channel=mobile`
-只返回移动端会话，PC端省略该参数即可查询全部渠道。
+`DELETED` 和未设置 `appId` 的主站会话；“全部”和“主站”入口由前端自行增加。PC与移动端默认均省略
+`channel`以查询全部渠道；显式增加`channel=mobile`仍只返回移动端创建的会话分类。
 
 查询会话列表，游标分页用于无限滚动：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B6%A6&channel=mobile&limit=20"
+curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B6%A6&limit=20"
 ```
 
 主站会话使用独立范围参数：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&limit=20"
+curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&limit=20"
 ```
 
 响应按更新时间倒序返回：
@@ -1040,7 +1044,7 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&l
 查询会话列表，页码分页用于传统分页组件：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&keyword=%E5%88%A9%E6%B6%A6&channel=mobile&curPage=1&pageSize=20"
+curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&keyword=%E5%88%A9%E6%B6%A6&curPage=1&pageSize=20"
 ```
 
 `keyword` trim后为空表示不搜索，非空时为1到128个Unicode码点，支持单个汉字、英文字母或Emoji；它对会话标题、已持久化user问题和
@@ -1405,7 +1409,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
 | `appName` | string | 否 | 会话分组展示名称快照，最大 256；不能脱离 `appId`，已有会话中显式传入时必须与原值完全一致 |
 | `language` | string | 否 | 会话标题总结语言，最大32字符；中文使用 `zh_CN`，英文使用 `en_US`，trim后为空使用服务端默认 `zh_CN`。不进入 metadata、IntentAgent、DomainAgent 或 Relay 请求，不改变本轮路由和回答 |
-| `channel` | string | 否 | 会话来源渠道，最大64字符。移动端统一传小写 `mobile`；自动创建会话时省略则默认 `web`。已有会话显式传入时必须与会话原值一致，`CONTINUE_INTERACTION` 在 claim 前执行相同校验；PC省略时不限制访问渠道 |
+| `channel` | string | 否 | 请求来源渠道，最大64字符，trim后使用。新会话保存该值，未传或空白默认`web`；已有会话及`CONTINUE_INTERACTION`允许跨端提交`web/mobile`，不比较或改写会话的创建来源，归属和App Tag等其他校验不变 |
 
 响应：
 

@@ -160,7 +160,7 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         assertThat(first).noneMatch(event -> "selectedDomainExpert".equals(event.payload().get("sourceType")));
 
         List<ChatEvent> next = service.executeRun(user, new ChatCommand(
-                        "cmd-next", null, null, expert.chatSessionId(), null, "web", "继续分析",
+                        "cmd-next", null, null, expert.chatSessionId(), null, "mobile", "继续分析",
                         List.of(), Map.of()))
                 .collectList().block();
         assertThat(next).isNotNull();
@@ -429,12 +429,15 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
 
         String sessionId = runs.runs.values().stream().findFirst().orElseThrow().sessionId();
         service.executeRun(user, new ChatCommand(
-                        "cmd-parent-next", null, null, sessionId, null, "web", "继续查询",
+                        "cmd-parent-next", null, null, sessionId, null, "mobile", "继续查询",
                         List.of(), Map.of()))
                 .collectList().block();
 
         assertThat(intentCalls).hasValue(1);
         assertThat(capturedRequest.get().domainAgentId()).isEqualTo("child-a");
+        assertThat(sessions.sessions.get(sessionId).channel()).isEqualTo("web");
+        assertThat(IntentExpertContext.fromSessionMetadata(
+                sessions.sessions.get(sessionId).metadataJson())).contains(expertA);
         assertThat(bindings.bindingsForProvider("domain-agent"))
                 .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
                 .singleElement()

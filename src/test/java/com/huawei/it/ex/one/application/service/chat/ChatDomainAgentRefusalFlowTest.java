@@ -1876,7 +1876,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                         "one-portal", List.of(Map.of("onestop", "CountryCFO")),
                         "docList", List.of(Map.of("docId", "domain-doc-from-confirmation"))));
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, waiting.sessionId(), null, "web", null,
+                        null, null, null, waiting.sessionId(), null, "mobile", null,
                         List.of(new AttachmentRef(
                                 "route-switch-doc", "forged-name.txt", "text/plain", 1L)),
                         agentConfirmationMetadata,
@@ -1951,7 +1951,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .verify();
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, relayWaiting.sessionId(), null, "web", null, List.of(), Map.of(),
+                        null, null, null, relayWaiting.sessionId(), null, "mobile", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, relayWaiting.id(), false, null, Map.of()), RuntimeForwardHeaders.empty()))
                 .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
@@ -1989,7 +1989,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 "sceneParam", Map.of(
                         "docList", List.of(Map.of("docId", "relay-doc-from-confirmation"))));
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, nextRelayWaiting.sessionId(), null, "web", null, List.of(),
+                        null, null, null, nextRelayWaiting.sessionId(), null, "mobile", null, List.of(),
                         relayConfirmationMetadata,
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, nextRelayWaiting.id(), true, null, Map.of()), RuntimeForwardHeaders.empty()))

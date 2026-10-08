@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.config.RunAdmissionProperties;
@@ -14,6 +15,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -38,18 +40,32 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
     @ParameterizedTest
-    @CsvSource({"NEXT,false", "NEXT,true", "EDIT_USER,false", "REGENERATE_ASSISTANT,false"})
-    void startReturnsTrustedUserMessageBeforeRuntimeOutput(ChatRunMode mode, boolean attachmentOnly) {
+    @CsvSource({"NEXT,false,web,web", "NEXT,true,web,web", "EDIT_USER,false,web,web",
+            "REGENERATE_ASSISTANT,false,web,web", "NEXT,false,web,mobile", "NEXT,true,web,mobile",
+            "EDIT_USER,false,web,mobile", "REGENERATE_ASSISTANT,false,web,mobile",
+            "NEXT,false,mobile,web", "EDIT_USER,false,mobile,web", "REGENERATE_ASSISTANT,false,mobile,web"})
+    void startReturnsTrustedUserMessageBeforeRuntimeOutput(
+            ChatRunMode mode, boolean attachmentOnly, String sourceChannel, String requestChannel) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
-        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository() {
+            @Override
+            public Optional<ChatRun> findActiveBySession(String tenantId, String userId, String sessionId) {
+                return runs.values().stream()
+                        .filter(run -> tenantId.equals(run.tenantId()) && userId.equals(run.userId()))
+                        .filter(run -> sessionId.equals(run.sessionId()))
+                        .filter(run -> run.status() == ChatRunStatus.RUNNING || run.status() == ChatRunStatus.CANCELLING)
+                        .findFirst();
+            }
+        };
         InMemoryEventStore events = new InMemoryEventStore();
         UserContext user = new UserContext("tenant1", "user1", "User One");
         Instant now = Instant.now();
-        sessions.save(new ChatSession("session1", "tenant1", "user1", "原会话", "ACTIVE", "web",
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "原会话", "ACTIVE", sourceChannel,
                 "original-user", "original-assistant", null, null, 2L, null, now, now));
         messages.save(new ChatMessage("original-user", "tenant1", "user1", "session1",
                 null, 1L, 0, 1, "user", "原问题", null, "original-run",
@@ -72,7 +88,7 @@ class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
         };
         FinanceEXChatService service = financeServiceWithTerminalCommit(
                 sessions, messages, runs, events, runtimeRouteService(), runtime);
-        ChatCommand command = new ChatCommand("cmd1", null, null, "session1", null, "web",
+        ChatCommand command = new ChatCommand("cmd1", null, null, "session1", null, requestChannel,
                 attachmentOnly || mode == ChatRunMode.REGENERATE_ASSISTANT ? null : "新问题",
                 attachmentOnly ? List.of(new AttachmentRef("doc1", null, null, null)) : List.of(),
                 Map.of("userMessageId", "forged"), null, null, mode, null,
@@ -105,10 +121,16 @@ class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
                             assertThat(message.runId()).isEqualTo(result.runId());
                         }
                     });
+            assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                            "conflicting", null, null, "session1", null, sourceChannel,
+                            "另一端同时提问", List.of(), Map.of()), RuntimeForwardHeaders.empty())
+                    .block(Duration.ofSeconds(5))).isInstanceOf(ActiveRunExistsException.class);
+            assertThat(runs.runs).hasSize(1);
         } finally {
             release.tryEmitEmpty();
         }
         awaitEvent(events, "run.completed");
+        assertThat(sessions.findById("session1").orElseThrow().channel()).isEqualTo(sourceChannel);
     }
 
     @Test

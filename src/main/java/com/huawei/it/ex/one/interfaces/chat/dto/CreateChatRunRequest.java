@@ -41,7 +41,7 @@ import java.util.Map;
  * @param agentMode 可选 Agent 模式完整快照；空 selections 表示显式清除。
  * @param interactionAction Interaction 专用动作；当前仅 AMBIGUOUS_ROUTE 支持 AUTO_SELECT。
  * @param language 会话标题总结语言；为空时使用服务端默认语言，不进入下游请求。
- * @param channel 会话来源渠道；仅在自动创建会话或校验已有会话时使用，为空时新会话默认 web。
+ * @param channel 请求来源渠道；自动创建会话时保存，为空时默认 web；跨端续聊不校验或改写原会话渠道。
  * @param intentAccessName 可选Intent入口名称；空值使用服务端默认配置。
  * @param selectedExpert 聚合意图专家展示摘要；仅与targetType=INTENT_EXPERT同时使用。
  */

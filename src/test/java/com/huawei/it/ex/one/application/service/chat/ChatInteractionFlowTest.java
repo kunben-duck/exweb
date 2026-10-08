@@ -308,7 +308,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 .hasMessageContaining("sessionId 与 Interaction 所属会话不一致");
 
         assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
-                        null, null, null, session.id(), null, "mobile", null, List.of(), Map.of(),
+                        null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), null, null, Map.of("请补充范围", "账务"),
                         "tax-app", "税务助手"), RuntimeForwardHeaders.empty()).block())
@@ -318,18 +318,20 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
                         null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
-                        null, waiting.id(), null, null, Map.of("请补充范围", "账务")),
+                        null, waiting.id(), null, null, Map.of("请补充范围", "账务"),
+                        "fund-app", "其他助手"),
                         RuntimeForwardHeaders.empty()).block())
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("channel 与已有会话不一致");
+                .hasMessageContaining("appName 与已有会话不一致");
 
         assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
-                        null, null, null, session.id(), null, "Mobile", null, List.of(), Map.of(),
+                        null, null, null, null, null, "web", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
-                        null, waiting.id(), null, null, Map.of("请补充范围", "账务")),
+                        null, waiting.id(), null, null, Map.of("请补充范围", "账务"),
+                        "fund-app", "资金助手"),
                         RuntimeForwardHeaders.empty()).block())
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("channel 与已有会话不一致");
+                .hasMessageContaining("携带 App Tag 时 sessionId 不能为空");
 
         assertThat(interactions.claimCalls).hasValue(0);
         assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
@@ -495,7 +497,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
-    void questionnaireApprovalRequestCompletesRunAsWaitingUser() {
+    void questionnaireApprovalRequestWaitsAndCanBeAnsweredFromAnotherChannel() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -504,7 +506,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         InMemoryInteractionRequestRepository interactionRequests = new InMemoryInteractionRequestRepository();
         CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
         UserContext user = new UserContext("tenant1", "user1", "User One");
-        IdGenerator ids = new FixedIdGenerator();
+        IdGenerator ids = new SequentialIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.it.ex.one.application.config.ResourceIsolationProperties());
@@ -544,12 +546,14 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
             }
             @Override public Mono<Void> cancel(AgentRuntimeCancelRequest request) { return Mono.empty(); }
         };
+        AtomicReference<AgentRuntimeInteractionResponseRequest> answerRequest = new AtomicReference<>();
         AgentRuntimeInteraction interaction = new AgentRuntimeInteraction() {
             @Override public boolean supportsWaitingUserResponse(String runtimeProvider) {
                 return "relay".equals(runtimeProvider);
             }
             @Override public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
-                return Flux.empty();
+                answerRequest.set(request);
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "问卷回答完成"));
             }
         };
 
@@ -618,6 +622,28 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                     assertThat(session.latestMessageSeq()).isEqualTo(waitingUser.sequence());
                     assertThat(session.hasUnread()).isTrue();
                 });
+
+        ChatInteractionRequest waiting = interactionRequests.requests.values().iterator().next();
+        String originalBindingId = bindings.saved.id();
+        String originalRuntimeSessionId = bindings.saved.runtimeSessionId();
+        ChatCommand answer = new ChatCommand(null, null, null, run.sessionId(), null, "mobile", null,
+                List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                null, waiting.id(), true, "once", Map.of("label", Map.of("请选择技术方案", "方案A")));
+        assertThat(service.startRun(user, answer, RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5)))
+                .satisfies(result -> {
+                    assertThat(result.sessionId()).isEqualTo(run.sessionId());
+                    assertThat(result.userMessageId()).isEqualTo(run.userMessageId());
+                });
+        awaitEvent(events, "run.completed");
+        assertThat(answerRequest.get().runtimeSessionId()).isEqualTo(originalRuntimeSessionId);
+        assertThat(bindings.saved.id()).isEqualTo(originalBindingId);
+        assertThat(sessions.sessions.get(run.sessionId()).channel()).isEqualTo("web");
+        assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
+        assertThat(messages.messages).filteredOn(message -> message.id().equals(assistant.id()))
+                .singleElement().satisfies(message -> assertThat(message.content()).isEqualTo("问卷回答完成"));
+        assertThatThrownBy(() -> service.startRun(user, answer, RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(ChatInteractionUnavailableException.class);
+        assertThat(runs.runs).hasSize(2);
     }
 
     @Test
@@ -745,7 +771,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         interactionRequests.insert(waiting);
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, "session1", null, "web", null,
+                        null, null, null, "session1", null, "mobile", null,
                         List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
                         Map.of(
                                 "language", "zh_CN",

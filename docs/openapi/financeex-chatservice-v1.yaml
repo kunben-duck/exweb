@@ -2089,7 +2089,7 @@ components:
       name: channel
       in: query
       required: false
-      description: 会话来源渠道；trim 后为空表示不筛选，使用区分大小写的精确匹配；移动端统一传 mobile
+      description: 会话创建来源筛选；PC与移动端默认均省略以查询满足其他条件的全部渠道会话。trim后为空表示不筛选，显式传入仍按区分大小写的精确匹配过滤。改变或移除该条件时须清空cursor，从第一页重新加载。
       schema:
         type: string
         maxLength: 64
@@ -2872,9 +2872,10 @@ components:
           maxLength: 64
           nullable: true
           description: |
-            会话来源渠道。自动创建会话时保存该值，未传时默认 web；已有会话中显式提交时必须与
-            会话原值完全一致，CONTINUE_INTERACTION 同样在 claim 前校验。PC 端省略该字段，
-            移动端统一提交小写 mobile。
+            请求来源渠道，trim后使用。自动创建会话时保存该值，未传或空白默认web。
+            同一租户、同一用户可跨端继续原会话：PC/mobile可分别传web/mobile，
+            已有会话及CONTINUE_INTERACTION均不比较或改写原channel。
+            归属、App Tag、Session状态、消息关联及活动Run/Interaction并发限制不变。
       x-interaction-rules:
         ordinaryIntentClarification: questionnaireAnswers 或有效 attachments；不得提交 message。
         ambiguousCandidate: targetType=DOMAIN_AGENT 且 targetId 必须精确匹配服务端候选 skillId。
@@ -3869,6 +3870,7 @@ components:
         channel:
           type: string
           nullable: true
+          description: 会话创建来源；跨端续聊不会改写，不表示最近使用端。
         appId:
           type: string
           nullable: true

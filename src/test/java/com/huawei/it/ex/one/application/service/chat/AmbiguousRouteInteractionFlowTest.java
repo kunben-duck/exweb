@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.config.RouteSignalProperties;
@@ -327,7 +328,9 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
                 .singleElement().satisfies(event -> assertThat(event.payload())
                         .containsEntry("userMessageId", replacement.userMessageId()));
         assertThat(runs.findById(continued.runId()).orElseThrow().status()).isEqualTo(ChatRunStatus.CANCELLED);
-        assertThat(cancelledRunId).hasValue(continued.runId());
+        // DomainAgent取消是异步best-effort，不以替代Run完成作为下游取消回调的完成屏障。
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(cancelledRunId).hasValue(continued.runId()));
         assertThat(runs.findById(replacement.runId()).orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);
         assertThat(messages.messages).filteredOn(message -> "user".equals(message.role())).hasSize(1);
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role())).hasSize(2);
@@ -626,7 +629,7 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
                 null,
                 "session-1",
                 null,
-                "web",
+                "mobile",
                 null,
                 List.of(),
                 metadata,

@@ -175,7 +175,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                     hasText(initialTitle) ? SessionTitleSummarySource.AUTO : SessionTitleSummarySource.DEFAULT));
         }
         ChatSession session = requireOwnedSession(command.tenantId(), command.userId(), command.sessionId());
-        validateChannel(session, command.channel());
+        // channel 仅记录创建来源；跨端续聊仍沿用原会话，归属和 App Tag 约束不变。
         validateAppTag(session, command.appId(), command.appName());
         return touch(session);
     }
@@ -1109,20 +1109,12 @@ public class SessionApplicationService implements ChatSessionFacade {
         validateSessionContext(user, sessionId, null, appId, appName);
     }
 
-    /** 校验 Interaction 显式携带的 channel 与 App Tag，一次读取完成全部会话上下文比较。 */
+    /** 校验 Interaction 的会话归属、状态与 App Tag；保留 channel 入参兼容调用，不限制跨端续跑。 */
     public void validateSessionContext(
             UserContext user, String sessionId, String channel, String appId, String appName) {
         checkChatUser(user);
         ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId);
-        validateChannel(session, channel);
         validateAppTag(session, appId, appName);
-    }
-
-    private void validateChannel(ChatSession session, String channel) {
-        String normalizedChannel = normalizeTag(channel);
-        if (normalizedChannel != null && !normalizedChannel.equals(session.channel())) {
-            throw new IllegalArgumentException("channel 与已有会话不一致");
-        }
     }
 
     private void validateAppTag(ChatSession session, String appId, String appName) {

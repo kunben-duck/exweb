@@ -102,7 +102,8 @@ final class ChatFlowTestAssembler {
                         chatRunLeaseService,
                         eventScheduler,
                         eventScheduler,
-                        bindingCompensator);
+                        bindingCompensator,
+                        routeSwitchPersistenceGate);
         FirstEventTimeoutCompensator timeoutCompensator =
                 new FirstEventTimeoutCompensator(
                         chatInteractionService,
@@ -209,7 +210,8 @@ final class ChatFlowTestAssembler {
                         refusalCoordinator,
                         systemResponseExecutor,
                         agentRuntimeExecutor,
-                        bindingCompensator);
+                        bindingCompensator,
+                        routeSwitchPersistenceGate);
         InteractionRunCoordinator interactionRunCoordinator =
                 interactionRunCoordinator(new InteractionAssembly(
                         sessionService,

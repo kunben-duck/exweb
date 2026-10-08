@@ -17,6 +17,8 @@ import com.sun.net.httpserver.HttpServer;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -94,6 +96,29 @@ class DefaultDomainAgentSkillConfigurationProviderTest {
         startServer(200, response(item("another-skill", "N")), Duration.ZERO, new AtomicReference<>());
         assertThat(resolve(provider("2s"), "skill-1", RuntimeForwardHeaders.empty()))
                 .isEqualTo(DomainAgentSkillConfiguration.unconfigured("skill-1"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 2, 10, Integer.MAX_VALUE})
+    void mapsNonnegativeIntegerCountWithoutChangingOtherConfiguration(int limit) throws Exception {
+        startServer(200, response("{\"skillId\":\"skill-1\",\"skillName\":\"技能一\","
+                        + "\"isSaveSession\":\"N\",\"attachmentType\":\".pdf\",\"allowedUploadCount\":" + limit + "}"),
+                Duration.ZERO, new AtomicReference<>());
+
+        assertThat(resolve(provider("2s"), "skill-1", RuntimeForwardHeaders.empty()))
+                .isEqualTo(new DomainAgentSkillConfiguration("skill-1", "技能一", false, ".pdf", limit));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "-1", "1.5", "1.0", "\"2\"", "true", "{}", "[]", "2147483648",
+            "999999999999999999999999999999"})
+    void invalidOrNullCountDoesNotDiscardTypeOrRetention(String jsonValue) throws Exception {
+        startServer(200, response("{\"skillId\":\"skill-1\",\"skillName\":\"技能一\","
+                        + "\"isSaveSession\":\"N\",\"attachmentType\":\".pdf\",\"allowedUploadCount\":"
+                        + jsonValue + "}"), Duration.ZERO, new AtomicReference<>());
+
+        assertThat(resolve(provider("2s"), "skill-1", RuntimeForwardHeaders.empty()))
+                .isEqualTo(new DomainAgentSkillConfiguration("skill-1", "技能一", false, ".pdf"));
     }
 
     @Test

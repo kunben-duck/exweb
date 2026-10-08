@@ -140,6 +140,8 @@ Interaction、异步和路由的非通用字段还需注意以下类型和出现
 | `asyncTask` | boolean | 回调完成/失败等事件中的异步标识 |
 | `supportedAttachmentTypes/unsupportedAttachmentTypes` | string[] | 小写点前缀扩展名；不支持上传时 supported 为空，unsupportedTypes 不包括无扩展名空值 |
 | `unsupportedAttachments` | object[] | documentId/name/extension 均为 string；无后缀附件的 extension="" |
+| `actualAttachmentCount/maxAttachmentCount` | integer | 数量拒绝的实际附件数及触发拒绝的上限，code=DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED |
+| `limitSource` | string | SERVICE为服务端上限，SKILL为技能配置上限；只在数量拒绝中出现 |
 | `skillInvocationStarted` | boolean | 附件拒绝 message.completed 为 false，不把技能已选中等价成调用已开始 |
 | `error` | string | 异步 FAILED 的简短失败说明，可省略；不是任意业务 JSON |
 
@@ -4589,7 +4591,7 @@ REST 上传文档并在 Run 中提交可信 documentId；最终选择 DomainAgen
 
 前端：supportedAttachmentTypes 为空时展示“该技能不支持上传附件”，非空时展示不支持的类型。progress.status=FAILED 是**校验结果**，最终 Run 是 completed，不要误画成系统异常。无附件、Relay 不走此拒绝；配置接口异常仍按既有降级策略处理，不能和配置为空混同。Binding 按附件拒绝的完成事务生效；FULL 保存结构化 Parts，no-store 保留必要控制事实。
 
-附件超过 DomainAgent 上限则是异常路径，不产生上述成功收口卡片。默认上限 10 时，Run 已启动后检测到超限的失败段示例：
+数量超过服务端或技能上限也按校验业务完成收口，不调用Agent。以下是服务端默认上限10、上传11个附件的连续消息示例；服务端上限在配置查询前拒绝，所以skillName回退为skillId。
 
 ```json
 [
@@ -4607,15 +4609,122 @@ REST 上传文档并在 Run 中提交可信 documentId；最终选择 DomainAgen
         "serverTimestampMs": 1789516802021,
         "encodedItem": {
           "encoding": "chat-event-json-v1",
-          "event": "run.failed",
+          "event": "runtime.progress",
           "data": {
             "runId": "run_count",
             "sessionId": "session_demo",
             "sequence": 2021,
-            "type": "run.failed",
+            "type": "runtime.progress",
             "payload": {
-              "code": "RUN_ERROR",
-              "message": "DomainAgent 附件数量超过上限: 10"
+              "source": "chatservice",
+              "sourceType": "domain-agent-attachment-validation",
+              "code": "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED",
+              "skillId": "skill_tax_opinion",
+              "skillName": "skill_tax_opinion",
+              "actualAttachmentCount": 11,
+              "maxAttachmentCount": 10,
+              "limitSource": "SERVICE",
+              "message": "服务端最多支持上传10个附件，本次上传11个，请减少附件后重试。",
+              "stage": "attachment_validation",
+              "status": "FAILED"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "message",
+    "topicId": "chat-run-run_count",
+    "offset": "2022",
+    "payload": {
+      "type": "conversation-turn-stream",
+      "payload": {
+        "type": "stream-item",
+        "conversationId": "session_demo",
+        "turnId": "run_count",
+        "streamItemId": "evt_2022",
+        "serverTimestampMs": 1789516802022,
+        "encodedItem": {
+          "encoding": "chat-event-json-v1",
+          "event": "runtime.card",
+          "data": {
+            "runId": "run_count",
+            "sessionId": "session_demo",
+            "sequence": 2022,
+            "type": "runtime.card",
+            "payload": {
+              "source": "chatservice",
+              "sourceType": "domain-agent-attachment-validation",
+              "code": "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED",
+              "skillId": "skill_tax_opinion",
+              "skillName": "skill_tax_opinion",
+              "actualAttachmentCount": 11,
+              "maxAttachmentCount": 10,
+              "limitSource": "SERVICE",
+              "message": "服务端最多支持上传10个附件，本次上传11个，请减少附件后重试。",
+              "cardType": "domainAgentAttachmentUnsupported",
+              "cardSources": [
+                "attachmentValidation"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "message",
+    "topicId": "chat-run-run_count",
+    "offset": "2023",
+    "payload": {
+      "type": "conversation-turn-stream",
+      "payload": {
+        "type": "stream-item",
+        "conversationId": "session_demo",
+        "turnId": "run_count",
+        "streamItemId": "evt_2023",
+        "serverTimestampMs": 1789516802023,
+        "encodedItem": {
+          "encoding": "chat-event-json-v1",
+          "event": "message.completed",
+          "data": {
+            "runId": "run_count",
+            "sessionId": "session_demo",
+            "sequence": 2023,
+            "type": "message.completed",
+            "payload": {
+              "status": "MESSAGE_COMPLETED",
+              "finishReason": "ATTACHMENT_COUNT_EXCEEDED",
+              "skillInvocationStarted": false
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "message",
+    "topicId": "chat-run-run_count",
+    "offset": "2024",
+    "payload": {
+      "type": "conversation-turn-stream",
+      "payload": {
+        "type": "stream-item",
+        "conversationId": "session_demo",
+        "turnId": "run_count",
+        "streamItemId": "evt_2024",
+        "serverTimestampMs": 1789516802024,
+        "encodedItem": {
+          "encoding": "chat-event-json-v1",
+          "event": "run.completed",
+          "data": {
+            "runId": "run_count",
+            "sessionId": "session_demo",
+            "sequence": 2024,
+            "type": "run.completed",
+            "payload": {
+              "status": "COMPLETED"
             }
           }
         }
@@ -4631,16 +4740,20 @@ REST 上传文档并在 Run 中提交可信 documentId；最终选择 DomainAgen
         "type": "done",
         "conversationId": "session_demo",
         "turnId": "run_count",
-        "serverTimestampMs": 1789516802022,
-        "lastSeq": 2021,
-        "terminalEventType": "run.failed"
+        "serverTimestampMs": 1789516802025,
+        "lastSeq": 2024,
+        "terminalEventType": "run.completed"
       }
     }
   }
 ]
 ```
 
-HTTP DTO 数量/权限校验若在准入前失败，则只有 REST 400 等错误，不保证有 Run 或 WS 事件。不能将所有附件问题统一等价为 run.completed。
+技能配置`allowedUploadCount`为非负JSON整数时生效，0禁止附件；缺失/null不增加技能级限制，非法值仅告警并忽略数量字段。技能数量拒绝使用`limitSource=SKILL`及对应技能上限/名称，事件顺序相同。两种数量拒绝均优先于附件类型检查，不重复生成卡片。
+
+前端按`code`选择数量或类型提示，不用数量卡片缺失的supportedAttachmentTypes推断格式支持。数量字段不从metadata读取，也不累计历史附件；message为进度/卡片提示，不生成正文delta。Binding仍仅在完成事务中生效。FULL/no-store的校验控制事实沿用原留存边界。
+
+HTTP DTO数量上限仍为20，超限或权限校验在准入前失败时只有REST 400等错误，不保证有Run或WS事件。不能将所有附件问题统一等价为run.completed。
 
 <a id="s10"></a>
 ### S10 DomainAgent 异步等待与回填

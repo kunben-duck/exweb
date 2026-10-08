@@ -11,13 +11,20 @@ package com.huawei.it.ex.one.application.integration.domainagentconfig;
  * @param skillName 技能展示名称。
  * @param saveSession {@code false} 表示明确不保存，{@code true} 表示明确保存，{@code null} 表示未配置。
  * @param attachmentType 技能配置的附件扩展名范围原始值；空值表示不支持上传附件。
+ * @param allowedUploadCount 技能附件数量上限；null 不增加限制，0 表示禁止上传。
  */
 public record DomainAgentSkillConfiguration(
         String skillId,
         String skillName,
         Boolean saveSession,
-        String attachmentType
+        String attachmentType,
+        Integer allowedUploadCount
 ) {
+    public DomainAgentSkillConfiguration(
+            String skillId, String skillName, Boolean saveSession, String attachmentType) {
+        this(skillId, skillName, saveSession, attachmentType, null);
+    }
+
     public DomainAgentSkillConfiguration(String skillId, Boolean saveSession) {
         this(skillId, null, saveSession, null);
     }

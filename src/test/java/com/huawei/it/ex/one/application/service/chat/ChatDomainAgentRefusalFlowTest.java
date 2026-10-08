@@ -2010,8 +2010,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 });
     }
 
-    @Test
-    void routeSwitchConfirmationRejectsUnsupportedTrustedAttachmentWithoutCallingNewAgent() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void routeSwitchConfirmationRejectsUnsupportedTrustedAttachmentWithoutCallingNewAgent(boolean countExceeded) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -2056,7 +2057,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 null,
                 documents,
                 new InMemoryExecutionRepository(),
-                attachmentValidationGate(skillId -> ".xlsx"),
+                attachmentValidationGate(skillId -> ".xlsx", countExceeded ? 0 : null),
                 routeMemory);
         UserContext user = new UserContext("tenant1", "user1", "User One");
 
@@ -2080,12 +2081,20 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         assertThat(agentBCalls).hasValue(0);
         assertThat(events.events)
                 .filteredOn(event -> "runtime.card".equals(event.type())
-                        && "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED".equals(
+                        && (countExceeded ? "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED"
+                                : "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED").equals(
                                 event.payload().get("code")))
                 .singleElement()
-                .satisfies(event -> assertThat(event.payload())
-                        .containsEntry("skillId", "agent-b")
-                        .containsEntry("unsupportedAttachmentTypes", List.of(".pdf")));
+                .satisfies(event -> {
+                    assertThat(event.payload()).containsEntry("skillId", "agent-b");
+                    if (countExceeded) {
+                        assertThat(event.payload()).containsEntry("limitSource", "SKILL")
+                                .containsEntry("actualAttachmentCount", 1)
+                                .containsEntry("maxAttachmentCount", 0);
+                    } else {
+                        assertThat(event.payload()).containsEntry("unsupportedAttachmentTypes", List.of(".pdf"));
+                    }
+                });
         ChatEvent routeSwitchApplied = events.events.stream()
                 .filter(event -> "route-switch-applied".equals(event.payload().get("sourceType")))
                 .findFirst()
@@ -2112,7 +2121,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
-    void routeSwitchAttachmentCountFailsBeforeConfigurationAndBindingChanges() {
+    void routeSwitchServiceAttachmentCountCompletesWithoutConfigurationOrRuntime() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -2169,7 +2178,6 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .verifyComplete();
 
         ChatInteractionRequest waiting = awaitWaitingInteraction(interactions);
-        RuntimeBinding bindingBefore = bindings.saved;
         List<AttachmentRef> attachments = java.util.stream.IntStream.rangeClosed(1, 11)
                 .mapToObj(index -> new AttachmentRef(
                         "route-switch-doc-" + index, "forged-" + index + ".xlsx", null, null))
@@ -2182,17 +2190,23 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        awaitEvent(events, "run.failed");
+        awaitEvent(events, "run.completed");
         assertThat(providerCalls).hasValue(0);
         assertThat(agentBCalls).hasValue(0);
-        assertThat(bindings.saved).isEqualTo(bindingBefore);
-        assertThat(bindings.savedHistory).noneSatisfy(binding ->
-                assertThat(binding.metadata()).containsEntry("domainAgentId", "agent-b"));
+        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(bindings.saved.metadata()).containsEntry("domainAgentId", "agent-b");
+        assertThat(events.events).noneMatch(event -> "run.failed".equals(event.type()));
+        assertThat(events.events).filteredOn(event -> "runtime.card".equals(event.type()))
+                .filteredOn(event -> "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED".equals(event.payload().get("code")))
+                .singleElement().satisfies(event -> assertThat(event.payload())
+                        .containsEntry("actualAttachmentCount", 11)
+                        .containsEntry("maxAttachmentCount", 10)
+                        .containsEntry("limitSource", "SERVICE"));
         assertThat(interactions.findByOwnerAndId(
                         user.tenantId(), user.ownerUserId(), waiting.id()))
                 .get()
                 .extracting(ChatInteractionRequest::status)
-                .isEqualTo(ChatInteractionStatus.WAITING);
+                .isEqualTo(ChatInteractionStatus.ANSWERED);
     }
 
     @Test

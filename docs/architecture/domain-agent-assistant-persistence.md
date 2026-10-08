@@ -2,7 +2,7 @@
 
 ## 1. 适用范围
 
-本文描述 FinanceEXChatService 对DomainAgent技能配置的统一查询、缓存、附件类型校验，以及assistant历史与
+本文描述 FinanceEXChatService 对DomainAgent技能配置的统一查询、缓存、附件数量和类型校验，以及assistant历史与
 业务Event留存控制。留存能力不是`NO_STORE`，也不构成端到端零留存承诺。
 
 以下数据保持原有保存行为：
@@ -22,6 +22,7 @@ skillId
 skillName
 saveSession
 attachmentType
+allowedUploadCount
 ```
 
 留存策略来自可信DomainAgent `skillId`对应配置中的`isSaveSession`：
@@ -33,8 +34,9 @@ attachmentType
 | `null`、空白、无目标记录 | `saveSession=null` | `FULL` |
 | 其他非空值或冲突记录 | 协议错误 | fail closed，不调用 DomainAgent |
 
-留存控制默认关闭。此时无附件的调用不读取配置；只要DomainAgent调用携带附件，就会读取同一配置快照完成
-`attachmentType`校验，包括附件均无扩展名的场景。Relay和系统响应始终不读取DomainAgent技能配置。
+留存控制默认关闭。此时无附件的调用不读取配置；DomainAgent附件超过服务端上限时不查配置，直接返回结构化拒绝。
+其他携带附件的调用读取同一快照完成`allowedUploadCount`和`attachmentType`校验，包括附件均无扩展名的场景。
+Relay和系统响应始终不读取DomainAgent技能配置。
 
 ## 3. 防腐层
 
@@ -62,7 +64,7 @@ Cookie: <当前请求Cookie，可选>
 ```
 
 默认 Provider 只读取响应中的 `status`、`data[].skillId`、`data[].skillName`、
-`data[].isSaveSession`和`data[].attachmentType`。Cookie 只存在于
+`data[].isSaveSession`、`data[].attachmentType`和`data[].allowedUploadCount`。Cookie 只存在于
 `RuntimeForwardHeaders` 内存快照和出站 HTTP Header，不进入请求体、Redis、metadata、事件、数据库或
 日志；当前请求没有 Cookie 时仍调用接口，但不发送 Cookie Header。该调用不使用 SGOV、Authorization
 或其他入口 Header，也不增加重试。
@@ -77,17 +79,21 @@ Chat 编排和策略服务不依赖 HTTP 地址、Cookie或外部响应 DTO。�
 flowchart TD
     A["确定可信 Runtime 目标"] --> B{"目标是 DomainAgent?"}
     B -- "否" --> C["保持当前策略，Relay 不查询配置"]
-    B -- "是" --> D{"留存开启或存在带扩展名附件?"}
+    B -- "是" --> N{"超过服务端附件上限?"}
+    N -- "是" --> L["准备未落库Binding草稿并输出结构化业务完成事件"]
+    N -- "否" --> D{"留存开启或存在附件?"}
     D -- "否" --> J["沿用原链路调用 DomainAgent"]
     D -- "是" --> E["按 tenant + skillId 读取完整配置缓存"]
     E --> K{"缓存命中?"}
     K -- "是" --> F["得到不可变配置快照"]
     K -- "否" --> G["通过 Provider 查询技能配置"]
     G --> F
-    F --> H{"附件扩展名均受支持?"}
-    H -- "否" --> L["准备未落库Binding草稿并输出结构化业务完成事件"]
-    H -- "是" --> M["同一 run 内只允许收紧留存策略"]
-    M --> I["owner/fencing 保护下写入最终路由和 run metadata"]
+    F --> M["启用留存时在同一 run 内只允许收紧策略"]
+    M --> O{"超过技能附件上限?"}
+    O -- "是" --> L
+    O -- "否" --> H{"附件扩展名均受支持?"}
+    H -- "否" --> L
+    H -- "是" --> I["owner/fencing 保护下写入最终路由和 run metadata"]
     I --> J
 ```
 
@@ -135,7 +141,23 @@ source run 已固化的策略，不因等待期间配置变化重新查询或放
 `agentDataPersistenceIoScheduler`有界调度器中；默认
 Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时约束。
 
-## 6. 附件类型校验
+## 6. 附件数量与类型校验
+
+数量只统计本次已解析的可信附件列表，不累计历史附件，不计入客户端metadata中的docList。
+顺序为服务端上限（默认10）→配置快照及留存策略→技能数量→类型；API最大20保持不变。
+
+| `allowedUploadCount` | 语义 |
+|---|---|
+| 非负JSON整数 | 技能数量上限，0禁止携带附件；无附件不拒绝 |
+| 缺失/null | 不增加技能级限制，仍受服务端和类型校验约束 |
+| 负数、小数、非整数类型、超出Integer范围 | 告警并只忽略数量字段，不丢弃留存/类型配置 |
+
+技能数量限制不能放宽服务端上限。数量超限优先于类型拒绝，不重复生成卡片；Mapper仍保留服务端数量防御。
+数量拒绝复用下面的事件/Binding流程，`code=DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED`，
+携带`actualAttachmentCount/maxAttachmentCount/limitSource=SERVICE或SKILL/message`，
+完成原因是`ATTACHMENT_COUNT_EXCEEDED`。类型拒绝的既有payload保持不变，数量卡片不伪造支持类型空数组。
+服务端数量超限由原运行失败调整为业务完成，确认切换也随完成事务消费Interaction，不恢复为可重试WAITING。
+旧缓存缺失数量字段等同null，缓存key和默认10分钟TTL不变；刷新前不新增技能级限制。
 
 - 文件事实只使用当前主流程已经解析的`UploadedDocument.originalName`，不增加附件SQL；
 - `.xlsx.xls;.rar;.zip`解析为`.xlsx/.xls/.rar/.zip`，按小写扩展名比较；
@@ -143,7 +165,7 @@ Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时�
 - `attachmentType`缺失或空白表示技能不支持上传任何附件，未匹配到技能配置时使用相同语义；
 - 非空但无法解析合法扩展名时记录告警并放行；任一附件不支持时拒绝整个DomainAgent调用，不生成`message.delta`。
 
-拒绝事件顺序为`runtime.progress -> runtime.card -> message.completed -> run.completed`，公共payload使用
+两种拒绝事件顺序均为`runtime.progress -> runtime.card -> message.completed -> run.completed`。类型拒绝公共payload使用
 `sourceType=domain-agent-attachment-validation`和`code=DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED`，并携带
 技能、支持格式及不支持附件清单。该结果是业务完成而非系统失败；FULL保存结构化Parts，
 ASSISTANT_PLACEHOLDER保存占位正文和必要控制Parts，Event Resume可恢复。校验拒绝时只在run内存中准备最终

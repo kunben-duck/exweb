@@ -2801,6 +2801,12 @@ components:
           description: >-
             文档附件引用。CONTINUE_INTERACTION时仅普通INTENT_CLARIFICATION，或approved=true的
             ROUTE_SWITCH_CONFIRMATION支持；路由切换只使用本次显式提交附件，不继承原run附件。
+            最终目标为DomainAgent时，先检查服务端数量上限（默认10），再共享一次技能配置读取校验
+            allowedUploadCount及attachmentType。数量字段为非负JSON整数，0禁止附件，缺失/null不增加技能限制；
+            非法值仅忽略数量配置并告警。技能限制不能放宽服务端上限。数量拒绝通过runtime.progress/card返回
+            DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED及actualAttachmentCount/maxAttachmentCount/limitSource，
+            message.completed的finishReason为ATTACHMENT_COUNT_EXCEEDED、skillInvocationStarted=false，
+            最终run.completed，不调用Agent；Binding只在完成事务成功后生效。超过本接口maxItems仍返回400。
           items:
             $ref: '#/components/schemas/ChatAttachment'
         targetType:

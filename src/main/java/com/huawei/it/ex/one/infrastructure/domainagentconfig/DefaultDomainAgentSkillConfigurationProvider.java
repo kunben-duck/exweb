@@ -9,6 +9,12 @@ import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgen
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationException;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationProvider;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationQuery;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
@@ -27,6 +33,7 @@ import java.util.concurrent.TimeoutException;
 /** 通过 Cookie 透传 HTTP 接口查询 DomainAgent 技能配置的默认防腐层实现。 */
 public final class DefaultDomainAgentSkillConfigurationProvider
         implements DomainAgentSkillConfigurationProvider {
+    private static final AppLogger log = AppLoggerFactory.getLogger(DefaultDomainAgentSkillConfigurationProvider.class);
     private final WebClient webClient;
     private final DomainAgentSkillConfigurationProperties properties;
 
@@ -127,7 +134,8 @@ public final class DefaultDomainAgentSkillConfigurationProvider
                     requestedSkillId,
                     item.skillName(),
                     item.isSaveSession(),
-                    item.attachmentType());
+                    item.attachmentType(),
+                    parseAllowedUploadCount(requestedSkillId, item.allowedUploadCount()));
             if (matched != null && !Objects.equals(matched.saveSession(), candidate.saveSession())) {
                 throw protocolError("Conflicting DomainAgent skill configuration entries");
             }
@@ -142,19 +150,36 @@ public final class DefaultDomainAgentSkillConfigurationProvider
             String skillId,
             String skillName,
             String value,
-            String attachmentType) {
+            String attachmentType,
+            Integer allowedUploadCount) {
         String normalized = normalize(value).toUpperCase(Locale.ROOT);
         if (normalized.isEmpty()) {
             return new DomainAgentSkillConfiguration(
-                    skillId, nullableText(skillName), null, nullableText(attachmentType));
+                    skillId, nullableText(skillName), null, nullableText(attachmentType), allowedUploadCount);
         }
         return switch (normalized) {
             case "N" -> new DomainAgentSkillConfiguration(
-                    skillId, nullableText(skillName), Boolean.FALSE, nullableText(attachmentType));
+                    skillId, nullableText(skillName), Boolean.FALSE, nullableText(attachmentType), allowedUploadCount);
             case "Y" -> new DomainAgentSkillConfiguration(
-                    skillId, nullableText(skillName), Boolean.TRUE, nullableText(attachmentType));
+                    skillId, nullableText(skillName), Boolean.TRUE, nullableText(attachmentType), allowedUploadCount);
             default -> throw protocolError("Invalid isSaveSession value in DomainAgent skill configuration");
         };
+    }
+
+    private Integer parseAllowedUploadCount(String skillId, JsonNode value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        // 禁止 Jackson 将小数、字符串或溢出值强转为整数；坏字段不应丢失同快照的留存与类型配置。
+        if (value.isIntegralNumber() && value.canConvertToInt() && value.intValue() >= 0) {
+            return value.intValue();
+        }
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.CONFIGURATION_INVALID,
+                        "DomainAgent attachment count configuration is invalid; count limit is skipped")
+                .operation("domain-agent-attachment.config")
+                .attribute("skillId", skillId)
+                .build());
+        return null;
     }
 
     private String nullableText(String value) {

@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.infrastructure.domainagentconfig;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.JsonNode;
 
 /** 企业技能配置服务中ChatService需要的最小配置项。 */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -12,6 +13,11 @@ public record SkillConfigurationItem(
         String skillId,
         String skillName,
         String isSaveSession,
-        String attachmentType
+        String attachmentType,
+        JsonNode allowedUploadCount
 ) {
+    public SkillConfigurationItem(
+            String skillId, String skillName, String isSaveSession, String attachmentType) {
+        this(skillId, skillName, isSaveSession, attachmentType, null);
+    }
 }

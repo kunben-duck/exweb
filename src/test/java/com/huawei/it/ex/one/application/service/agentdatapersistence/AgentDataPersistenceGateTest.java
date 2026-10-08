@@ -25,6 +25,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -141,24 +144,30 @@ class AgentDataPersistenceGateTest {
                 .isSameAs(failure);
     }
 
-    @Test
-    void attachmentCountIsRejectedBeforeConfigurationLookup() {
+    @ParameterizedTest
+    @ValueSource(ints = {11, 20})
+    void attachmentCountIsRejectedBeforeConfigurationLookup(int count) {
         AtomicInteger providerCalls = new AtomicInteger();
         AgentDataPersistenceGate gate = gate(false, query -> {
             providerCalls.incrementAndGet();
             return Mono.just(configuration(query.skillId(), Boolean.TRUE, ".pdf"));
         }, 10);
-        List<UploadedDocument> documents = java.util.stream.IntStream.rangeClosed(1, 11)
+        List<UploadedDocument> documents = java.util.stream.IntStream.rangeClosed(1, count)
                 .mapToObj(index -> document("doc-" + index, "report-" + index + ".pdf"))
                 .toList();
 
-        assertThatThrownBy(() -> gate.evaluate(
+        AgentDataPersistenceGate.Decision decision = gate.evaluate(
                 user, RouteTarget.domainAgent("skill-1", "direct"),
                 new AgentDataPersistenceState("回答已隐藏"), RuntimeForwardHeaders.empty(),
-                documents).block())
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("DomainAgent 附件数量超过上限: 10");
+                documents).block();
 
+        assertThat(decision.unsupportedAttachment()).isTrue();
+        assertThat(decision.payload())
+                .containsEntry("code", "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED")
+                .containsEntry("actualAttachmentCount", count)
+                .containsEntry("maxAttachmentCount", 10)
+                .containsEntry("limitSource", "SERVICE")
+                .containsEntry("skillName", "skill-1");
         assertThat(providerCalls).hasValue(0);
     }
 
@@ -167,12 +176,75 @@ class AgentDataPersistenceGateTest {
         AgentDataPersistenceGate gate = gate(false,
                 query -> Mono.just(configuration(query.skillId(), Boolean.TRUE, ".pdf")), 1);
 
-        assertThatThrownBy(() -> gate.evaluate(
+        AgentDataPersistenceGate.Decision decision = gate.evaluate(
                 user, RouteTarget.domainAgent("skill-1", "direct"),
                 new AgentDataPersistenceState("回答已隐藏"), RuntimeForwardHeaders.empty(),
-                List.of(document("doc-1", "first.pdf"), document("doc-2", "second.pdf"))).block())
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("DomainAgent 附件数量超过上限: 1");
+                List.of(document("doc-1", "first.pdf"), document("doc-2", "second.pdf"))).block();
+        assertThat(decision.unsupportedAttachment()).isTrue();
+        assertThat(decision.payload()).containsEntry("maxAttachmentCount", 1)
+                .containsEntry("limitSource", "SERVICE");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2, 2, false", "2, 3, true", "0, 1, true", "0, 0, false",
+            "10, 10, false", "20, 10, false", ", 10, false"})
+    void skillCountBoundaryUsesTheSameRetentionSnapshot(Integer limit, int count, boolean rejected) {
+        AtomicInteger providerCalls = new AtomicInteger();
+        AgentDataPersistenceGate gate = gate(true, query -> {
+            providerCalls.incrementAndGet();
+            return Mono.just(new DomainAgentSkillConfiguration(
+                    query.skillId(), "技能一", false, ".pdf", limit));
+        });
+        List<UploadedDocument> documents = java.util.stream.IntStream.range(0, count)
+                .mapToObj(index -> document("doc-" + index, "report.pdf")).toList();
+
+        AgentDataPersistenceGate.Decision decision = gate.evaluate(
+                user, RouteTarget.domainAgent("skill-1", "direct"), AgentDataPersistenceState.full(),
+                RuntimeForwardHeaders.empty(), documents).block();
+
+        assertThat(providerCalls).hasValue(1);
+        assertThat(decision.state().placeholderMode()).isTrue();
+        assertThat(decision.unsupportedAttachment()).isEqualTo(rejected);
+        if (rejected) {
+            assertThat(decision.payload()).containsEntry("limitSource", "SKILL")
+                    .containsEntry("maxAttachmentCount", limit)
+                    .containsEntry("actualAttachmentCount", count)
+                    .containsEntry("skillName", "技能一")
+                    .containsEntry("message", "该技能最多支持上传" + limit + "个附件，本次上传"
+                            + count + "个，请减少附件后重试。");
+        }
+    }
+
+    @Test
+    void countRejectionPrecedesTypeRejectionAndZeroDoesNotRejectEmptyRequests() {
+        AtomicInteger calls = new AtomicInteger();
+        AgentDataPersistenceGate gate = gate(false, query -> {
+            calls.incrementAndGet();
+            return Mono.just(new DomainAgentSkillConfiguration(query.skillId(), null, true, null, 0));
+        });
+
+        AgentDataPersistenceGate.Decision empty = gate.evaluate(
+                user, RouteTarget.domainAgent("skill-1", "direct"), AgentDataPersistenceState.full(),
+                RuntimeForwardHeaders.empty(), List.of()).block();
+        assertThat(empty.unsupportedAttachment()).isFalse();
+        assertThat(calls).hasValue(0);
+
+        AgentDataPersistenceGate.Decision rejected = gate.evaluate(
+                user, RouteTarget.domainAgent("skill-1", "direct"), AgentDataPersistenceState.full(),
+                RuntimeForwardHeaders.empty(), List.of(document("doc-1", "README"))).block();
+        assertThat(rejected.payload()).containsEntry("code", "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED")
+                .doesNotContainKeys("supportedAttachmentTypes", "unsupportedAttachments");
+        assertThat(calls).hasValue(1);
+    }
+
+    @Test
+    void relayBypassesDomainAgentCountLimit() {
+        AgentDataPersistenceGate gate = gate(false, query -> {
+            throw new AssertionError("Relay must not query skill configuration");
+        }, 1);
+        assertThat(gate.evaluate(user, RouteTarget.agentRuntime("relay"), AgentDataPersistenceState.full(),
+                RuntimeForwardHeaders.empty(), List.of(document("doc-1", "1.pdf"), document("doc-2", "2.pdf")))
+                .block().unsupportedAttachment()).isFalse();
     }
 
     private AgentDataPersistenceGate gate(

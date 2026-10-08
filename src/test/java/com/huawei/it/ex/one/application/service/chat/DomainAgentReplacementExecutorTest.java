@@ -37,7 +37,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
@@ -49,8 +50,9 @@ import java.util.function.Function;
 
 class DomainAgentReplacementExecutorTest {
 
-    @Test
-    void unsupportedAttachmentRetainsReplacementBindingWithoutInvokingRuntime() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void unsupportedAttachmentRetainsReplacementBindingWithoutInvokingRuntime(boolean countExceeded) {
         AgentRuntimeExecutor runtimeExecutor = mock(AgentRuntimeExecutor.class);
         RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
         AppliedRouteRecorder routeRecorder = mock(AppliedRouteRecorder.class);
@@ -84,7 +86,10 @@ class DomainAgentReplacementExecutorTest {
         when(leaseService.isCurrentOwnerRunning(any())).thenReturn(true);
 
         AgentDataPersistenceState persistenceState = AgentDataPersistenceState.full();
-        Map<String, Object> payload = Map.of(
+        Map<String, Object> payload = countExceeded ? Map.of(
+                "source", "chatservice", "sourceType", "domain-agent-attachment-validation",
+                "code", "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED", "skillId", "skill-b",
+                "actualAttachmentCount", 3, "maxAttachmentCount", 2, "limitSource", "SKILL") : Map.of(
                 "source", "chatservice",
                 "sourceType", "domain-agent-attachment-validation",
                 "code", "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED",
@@ -153,6 +158,8 @@ class DomainAgentReplacementExecutorTest {
 
         assertThat(events).extracting(ChatEvent::type)
                 .containsExactly("runtime.progress", "runtime.card", "message.completed");
+        assertThat(events.getLast().payload()).containsEntry("finishReason",
+                countExceeded ? "ATTACHMENT_COUNT_EXCEEDED" : "ATTACHMENT_TYPE_UNSUPPORTED");
         assertThat(routeRef).hasValue(routeB);
         assertThat(bindingRef).hasValue(bindingB);
         assertThat(bindingRef.get().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);

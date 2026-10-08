@@ -3432,7 +3432,10 @@ DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前�
 校验技能配置中的`attachmentType`。例如`.xlsx.xls;.rar;.zip`表示支持`.xlsx/.xls/.rar/.zip`，比较忽略大小写；
 `attachmentType`缺失、空字符串或纯空白表示该技能不支持上传任何附件，此时所有附件均进入
 `unsupportedAttachments`且`supportedAttachmentTypes=[]`。合法非空配置下无扩展名文件仍直接放行。
-任一附件格式不支持时不会调用DomainAgent，事件顺序为：
+同一配置查询还读取`allowedUploadCount`：非负JSON整数为技能数量上限，0禁止附件；缺失/null不增加技能数量限制。
+负数、小数、错误类型或溢出仅忽略数量配置并告警，不忽略类型/留存配置。无附件时不会因0上限拒绝。
+校验顺序为服务端数量上限（默认10，超限不查询配置）→技能配置/留存→技能数量→类型，技能不能放宽服务端上限。
+数量超限或任一格式不支持均不调用DomainAgent，事件顺序为：
 
 ```text
 runtime.progress
@@ -3469,6 +3472,29 @@ runtime.progress
 只有上述`run.completed`与assistant成功落库后，服务端才在同一终态事务中激活最终选中的DomainAgent Binding，
 所以下一轮未显式改选时会继续直连该技能。终态失败、取消或失权不会激活候选Binding；
 `skillInvocationStarted=false`仅表示本轮因附件校验失败而没有向该技能发起Runtime请求。
+数量超限使用同一progress/card分类及Binding提交规则，公共payload为：
+
+```json
+{
+  "source": "chatservice",
+  "sourceType": "domain-agent-attachment-validation",
+  "code": "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED",
+  "skillId": "skill_tax_opinion",
+  "skillName": "税务意见",
+  "actualAttachmentCount": 3,
+  "maxAttachmentCount": 2,
+  "limitSource": "SKILL",
+  "message": "该技能最多支持上传2个附件，本次上传3个，请减少附件后重试。"
+}
+```
+
+`limitSource=SERVICE/SKILL`区分限制来源，提前触发SERVICE限制时`skillName`回退skillId。
+数量拒绝的`message.completed.finishReason=ATTACHMENT_COUNT_EXCEEDED`、`skillInvocationStarted=false`。
+前端先按`code`区分数量与类型提示，只有类型错误才读取`supportedAttachmentTypes`；不要把数量卡片缺少该字段当成“不支持任何格式”。
+`message`仅用于进度/卡片及历史Part提示，不写入assistant正文；可以基于计数字段生成本地化提示。
+这是对原服务端数量超限`run.failed`行为的调整。请求本身超过API的20个附件上限仍返回400，不保证创建Run。
+旧配置缓存缺失数量字段时按未配置处理，技能数量上限在缓存过期/刷新后生效，默认TTL仍为10分钟。
+
 若该结果来自`ROUTE_SWITCH_CONFIRMATION`，`route-switch-confirmation-response`只表示用户确认已受理；
 `route-switch-applied`会与候选Binding及`run.completed`在同一终态事务提交，并按
 `message.completed -> route-switch-applied -> run.completed`发布。终态被stop抢占或事务失败时不会产生

@@ -153,11 +153,17 @@ MODEL响应体上限64KiB；网络错误、429或5xx最多重试一次，退避�
 `SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、DomainAgent
 和 DomainAgent 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
 
-DomainAgent 调用前的技能配置由单一服务统一查询并缓存，快照包含`skillName/isSaveSession/attachmentType`。
-任何可信附件都会按技能`attachmentType`校验；任一格式不支持时不订阅DomainAgent，改为输出
+DomainAgent 调用前的技能配置由单一服务统一查询并缓存，快照包含`skillName/isSaveSession/attachmentType/allowedUploadCount`。
+附件先检查服务端数量上限（默认10，超限不查配置），再基于同一配置快照处理留存、技能数量上限和类型。
+`allowedUploadCount`非负JSON整数有效，0禁止附件；缺失/null不增加技能级限制，负数、小数、错误类型或溢出告警并仅忽略数量配置。
+技能上限不能放宽服务端上限。数量或类型校验拒绝时不订阅DomainAgent，改为输出
 `runtime.progress -> runtime.card -> message.completed -> run.completed`结构化业务完成事件。`attachmentType`
 缺失或空白表示技能不支持上传任何附件；合法非空配置下无扩展名文件仍放行，非空但不可解析的配置记录告警并放行。
-仅附件校验所需的配置查询失败也按fail-open放行。
+仅附件校验所需的配置查询失败也按fail-open放行，但不会绕过已执行的服务端数量上限。
+数量拒绝使用`code=DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED`及`actualAttachmentCount/maxAttachmentCount/limitSource`，
+`message.completed.finishReason=ATTACHMENT_COUNT_EXCEEDED`，不再以`run.failed`收口。
+最终Binding仍只在`run.completed`事务成功后激活；API最多20个附件的请求校验不变，超出时返回400。
+缓存TTL和key不变；旧缓存缺失数量字段时不增加技能限制，等待过期刷新后生效。
 
 `FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED=true` 时，同一配置快照还用于assistant留存控制。仅明确返回
 `isSaveSession=N` 时，业务 Event 只通过本机流和 Redis Pub/Sub 实时输出，不写入事件表；

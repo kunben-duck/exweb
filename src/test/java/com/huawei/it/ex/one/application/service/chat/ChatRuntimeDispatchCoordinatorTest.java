@@ -38,7 +38,8 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
@@ -47,8 +48,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 class ChatRuntimeDispatchCoordinatorTest {
 
-    @Test
-    void unsupportedAttachmentPersistsSelectedRouteAndRetainsBindingWithoutRuntime() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void unsupportedAttachmentPersistsSelectedRouteAndRetainsBindingWithoutRuntime(boolean countExceeded) {
         RouteSignalApplicationService routeSignals = mock(RouteSignalApplicationService.class);
         ChatEventPersistenceCoordinator eventPersistence = mock(ChatEventPersistenceCoordinator.class);
         InteractionEventFactory interactionEvents = mock(InteractionEventFactory.class);
@@ -84,7 +86,10 @@ class ChatRuntimeDispatchCoordinatorTest {
         when(eventPersistence.requireCurrentOwnerRunning(any(), anyString())).thenReturn(Mono.empty());
         when(bindingCompensator.cleanup(any(), anyString(), anyString(), any(), anyString()))
                 .thenReturn(Mono.empty());
-        Map<String, Object> payload = Map.of(
+        Map<String, Object> payload = countExceeded ? Map.of(
+                "source", "chatservice", "sourceType", "domain-agent-attachment-validation",
+                "code", "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED", "skillId", "skill-1",
+                "actualAttachmentCount", 3, "maxAttachmentCount", 2, "limitSource", "SKILL") : Map.of(
                 "source", "chatservice",
                 "sourceType", "domain-agent-attachment-validation",
                 "code", "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED",
@@ -137,6 +142,8 @@ class ChatRuntimeDispatchCoordinatorTest {
 
         assertThat(events).extracting(ChatEvent::type)
                 .containsExactly("runtime.progress", "runtime.card", "message.completed");
+        assertThat(events.getLast().payload()).containsEntry("finishReason",
+                countExceeded ? "ATTACHMENT_COUNT_EXCEEDED" : "ATTACHMENT_TYPE_UNSUPPORTED");
         assertThat(routeRef).hasValue(route);
         assertThat(bindingRef).hasValue(binding);
         assertThat(lifecycle.activation()).isNull();

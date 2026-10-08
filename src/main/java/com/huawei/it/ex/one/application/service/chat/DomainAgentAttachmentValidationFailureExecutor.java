@@ -15,7 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 将DomainAgent附件类型拒绝转换为稳定的结构化业务完成事件。 */
+/** 将DomainAgent附件数量或类型拒绝转换为稳定的结构化业务完成事件。 */
 final class DomainAgentAttachmentValidationFailureExecutor {
     static final String FINISH_REASON = "ATTACHMENT_TYPE_UNSUPPORTED";
 
@@ -29,7 +29,8 @@ final class DomainAgentAttachmentValidationFailureExecutor {
         card.put("cardSources", List.of("attachmentValidation"));
 
         Map<String, Object> completed = new LinkedHashMap<>();
-        completed.put("finishReason", FINISH_REASON);
+        completed.put("finishReason", "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED".equals(commonPayload.get("code"))
+                ? "ATTACHMENT_COUNT_EXCEEDED" : FINISH_REASON);
         completed.put("skillInvocationStarted", false);
 
         List<ChatEvent> events = new ArrayList<>(3);

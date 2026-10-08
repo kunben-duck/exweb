@@ -329,6 +329,11 @@ abstract class ChatFlowTestSupport {
     }
 
     AgentDataPersistenceGate attachmentValidationGate(Function<String, String> attachmentTypes) {
+        return attachmentValidationGate(attachmentTypes, null);
+    }
+
+    AgentDataPersistenceGate attachmentValidationGate(
+            Function<String, String> attachmentTypes, Integer allowedUploadCount) {
         AgentDataPersistenceProperties persistence = new AgentDataPersistenceProperties();
         persistence.setEnabled(false);
         DomainAgentSkillConfigurationProperties configuration =
@@ -352,7 +357,7 @@ abstract class ChatFlowTestSupport {
                 new DomainAgentSkillConfigurationService(
                         query -> Mono.just(new DomainAgentSkillConfiguration(
                                 query.skillId(), "技能B", Boolean.TRUE,
-                                attachmentTypes.apply(query.skillId()))),
+                                attachmentTypes.apply(query.skillId()), allowedUploadCount)),
                         cache,
                         configuration,
                         reactor.core.scheduler.Schedulers.immediate());

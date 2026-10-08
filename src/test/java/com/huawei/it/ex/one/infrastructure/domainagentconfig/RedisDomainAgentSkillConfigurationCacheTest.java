@@ -15,6 +15,8 @@ import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -24,26 +26,41 @@ class RedisDomainAgentSkillConfigurationCacheTest {
     private static final String KEY =
             "fin_ex:test:domain_agent_skill_config:v1:tenant-1:skill-1";
 
-    @Test
-    void writesAndReadsTheCompleteConfiguration() {
+    @ParameterizedTest
+    @ValueSource(ints = {0, 10})
+    void writesAndReadsTheCompleteConfiguration(int limit) {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> values = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(values);
         DomainAgentSkillConfiguration configuration = new DomainAgentSkillConfiguration(
-                "skill-1", "技能一", Boolean.FALSE, ".xlsx;.pdf");
+                "skill-1", "技能一", Boolean.FALSE, ".xlsx;.pdf", limit);
         RedisDomainAgentSkillConfigurationCache cache = cache(redis);
 
         cache.put("tenant-1", "skill-1", configuration, Duration.ofMinutes(10));
         when(values.get(KEY)).thenReturn(
                 "{\"skillId\":\"skill-1\",\"skillName\":\"技能一\","
-                        + "\"saveSession\":false,\"attachmentType\":\".xlsx;.pdf\"}");
+                        + "\"saveSession\":false,\"attachmentType\":\".xlsx;.pdf\",\"allowedUploadCount\":" + limit + "}");
 
         verify(values).set(KEY,
                 "{\"skillId\":\"skill-1\",\"skillName\":\"技能一\","
-                        + "\"saveSession\":false,\"attachmentType\":\".xlsx;.pdf\"}",
+                        + "\"saveSession\":false,\"attachmentType\":\".xlsx;.pdf\",\"allowedUploadCount\":" + limit + "}",
                 Duration.ofMinutes(10));
         assertThat(cache.get("tenant-1", "skill-1")).contains(configuration);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", ",\"allowedUploadCount\":null"})
+    void oldOrNullCountCacheRetainsExistingConfiguration(String countField) {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get(KEY)).thenReturn("{\"skillId\":\"skill-1\",\"skillName\":\"技能一\","
+                + "\"saveSession\":false,\"attachmentType\":\".pdf\"" + countField + "}");
+
+        assertThat(cache(redis).get("tenant-1", "skill-1"))
+                .contains(new DomainAgentSkillConfiguration("skill-1", "技能一", false, ".pdf"));
     }
 
     @Test

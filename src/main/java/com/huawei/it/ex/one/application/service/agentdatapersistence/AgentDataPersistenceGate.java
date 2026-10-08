@@ -32,6 +32,7 @@ public class AgentDataPersistenceGate {
     private final AgentDataPersistencePolicyService policyService;
     private final DomainAgentSkillConfigurationService configurationService;
     private final DomainAgentProperties domainAgentProperties;
+    private final DomainAgentAttachmentCountValidator countValidator = new DomainAgentAttachmentCountValidator();
     private final DomainAgentAttachmentTypeValidator attachmentValidator =
             new DomainAgentAttachmentTypeValidator();
 
@@ -66,7 +67,7 @@ public class AgentDataPersistenceGate {
         return resolve(user, route, state, RuntimeForwardHeaders.empty());
     }
 
-    /** 在同一次技能配置解析中完成留存策略和附件类型校验。 */
+    /** 在同一次技能配置解析中完成留存策略、附件数量和类型校验。 */
     public Mono<Decision> evaluate(
             UserContext user,
             RouteTarget route,
@@ -80,23 +81,32 @@ public class AgentDataPersistenceGate {
         if (route == null || route.type() != RouteType.DOMAIN_AGENT) {
             return Mono.just(Decision.allowed(targetState));
         }
-        // 数量错误先于缓存/Provider 读取抛出，避免在不可调用的请求上查询配置或继续物化 Binding。
-        validateAttachmentCount(documents);
         String skillId = route.selectedAgentCode();
         if (skillId == null || skillId.isBlank()) {
             return Mono.error(new DomainAgentSkillConfigurationException(
                     DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID,
                     "Resolved DomainAgent route has no skillId"));
         }
+        // 服务端硬上限先于配置读取；数量拒绝与类型拒绝共用终态提交，不提前物化 Binding。
+        int serviceLimit = domainAgentProperties.normalizedMaxAttachments();
+        if (countValidator.exceeds(documents, serviceLimit)) {
+            return Mono.just(Decision.unsupported(targetState,
+                    countValidator.payload(skillId, null, documents.size(), serviceLimit, "SERVICE")));
+        }
         boolean attachmentCheckRequired = attachmentValidator.requiresConfiguration(documents);
         if (!policyService.enabled() && !attachmentCheckRequired) {
             return Mono.just(Decision.allowed(targetState));
         }
-        // 两项检查共享本次不可变配置快照，不分别读取缓存或调用 Provider。
+        // 留存与两项附件检查共享本次不可变配置快照，不分别读取缓存或调用 Provider。
         return configurationService.resolve(user, skillId, forwardHeaders)
                 .map(configuration -> {
                     if (policyService.enabled()) {
                         targetState.tighten(policyService.resolve(skillId, configuration));
+                    }
+                    if (countValidator.exceeds(documents, configuration.allowedUploadCount())) {
+                        return Decision.unsupported(targetState, countValidator.payload(
+                                skillId, configuration.skillName(), documents.size(),
+                                configuration.allowedUploadCount(), "SKILL"));
                     }
                     DomainAgentAttachmentTypeValidator.Validation validation =
                             attachmentValidator.validate(configuration, documents);
@@ -126,13 +136,6 @@ public class AgentDataPersistenceGate {
                             .build(), error);
                     return Mono.just(Decision.allowed(targetState));
                 });
-    }
-
-    private void validateAttachmentCount(List<UploadedDocument> documents) {
-        if (documents != null && documents.size() > domainAgentProperties.normalizedMaxAttachments()) {
-            throw new IllegalArgumentException(
-                    "DomainAgent 附件数量超过上限: " + domainAgentProperties.normalizedMaxAttachments());
-        }
     }
 
     public record Decision(Status status, AgentDataPersistenceState state, Map<String, Object> payload) {

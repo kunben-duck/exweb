@@ -18,12 +18,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
+import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
+import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
 import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.interfaces.ApiExceptionHandler;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionDto;
 
@@ -50,6 +53,7 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -135,6 +139,37 @@ class ChatSessionControllerTest {
                 .flatMap(path -> path.values().stream()).filter(Map.class::isInstance)
                 .map(value -> ((Map<?, ?>) value).get("operationId")).filter(java.util.Objects::nonNull)
                 .toList()).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void cursorListForwardsKeywordAndKeepsTheSameBatchSummaryAssembly() throws Exception {
+        SessionListFilter filter = new SessionListFilter("app", null, "mobile", null, "利润");
+        when(facade.listSessions(USER, filter, null, 20)).thenReturn(new ChatSessionPage(List.of(SESSION), "next"));
+
+        MvcResult started = mvc.perform(request(HttpMethod.GET, "/v1/chat/sessions")
+                .param("appId", "app").param("channel", "mobile").param("keyword", "利润")).andReturn();
+
+        mvc.perform(asyncDispatch(started)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].sessionId").value("session1"))
+                .andExpect(jsonPath("$.nextCursor").value("next"));
+        verify(facade).listSessions(USER, filter, null, 20);
+        verify(facade).findFirstAssistantSummaries(USER, List.of(SESSION));
+        verifyNoMoreInteractions(facade);
+    }
+
+    @Test
+    void cursorKeywordTimeoutReturnsExisting503WithoutLoadingSummaries() throws Exception {
+        SessionListFilter filter = new SessionListFilter(null, null, null, null, "利润");
+        when(facade.listSessions(USER, filter, null, 20))
+                .thenThrow(new SessionSearchTimeoutException("会话关键字搜索超时，请稍后重试", new RuntimeException()));
+
+        MvcResult started = mvc.perform(request(HttpMethod.GET, "/v1/chat/sessions")
+                .param("keyword", "利润")).andReturn();
+
+        mvc.perform(asyncDispatch(started)).andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("SESSION_SEARCH_TIMEOUT"));
+        verify(facade).listSessions(USER, filter, null, 20);
+        verifyNoMoreInteractions(facade);
     }
 
     @ParameterizedTest

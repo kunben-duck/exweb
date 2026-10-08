@@ -121,7 +121,7 @@ class SessionListSubscriptionRecoveryTest {
         ChatSessionController controller = new ChatSessionController(facade,
                 mock(ChatFeedbackApplicationService.class), runService, () -> user,
                 new PermissionChecker(), new ChatMessageVersionViewAssembler());
-        var page = controller.list(null, null, null, null, null, 20).block(Duration.ofSeconds(5));
+        var page = controller.list(null, null, null, null, null, null, 20).block(Duration.ofSeconds(5));
         assertThat(page).isNotNull();
         assertThat(page.items()).extracting(ChatSessionDto::lastRunStatus).containsOnly("RUNNING");
 

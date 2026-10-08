@@ -1177,18 +1177,21 @@ paths:
       summary: 游标分页查询会话
       description: >-
         appScope=MAIN_SITE 仅查询 appId 为 null 的主站会话，不能同时指定 appId；省略 appScope 和 appId 时查询全量。
-        appId 和 channel 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，多个条件同时存在时取交集。
-        主站查询使用绑定全部过滤条件的 v5 游标，既有 v2/v3/v4 游标继续兼容。每个列表项批量装配当前
+        appId 和 channel 使用区分大小写的精确匹配；title 仍仅搜索标题，keyword 统一搜索标题及已持久化user/assistant正文，包含旧分支。
+        title 和 keyword 同时非空返回400；搜索与其他过滤条件取交集，不搜索Parts、附件、metadata或no-store未持久化内容。
+        keyword 搜索使用绑定搜索词和全部过滤条件的v6游标，不增加总数查询；默认2秒数据库只读事务超时返回503/SESSION_SEARCH_TIMEOUT，不代表整个HTTP请求期限。
+        无keyword的主站查询仍使用v5游标，既有v2/v3/v4游标继续兼容。每个列表项批量装配当前
         是否存在 RUNNING/CANCELLING run；完整状态仍通过 stream-status 查询。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
         - $ref: '#/components/parameters/AppScopeQuery'
         - $ref: '#/components/parameters/SessionTitleQuery'
+        - $ref: '#/components/parameters/SessionKeywordQuery'
         - $ref: '#/components/parameters/SessionChannelQuery'
         - name: cursor
           in: query
           required: false
-          description: 上一页游标；必须继续使用生成该游标时相同的 appScope、appId、title 和 channel 条件
+          description: 上一页游标；必须继续使用生成时相同的appScope、appId、title、channel及规范化keyword。改变或移除搜索词、切换title/keyword模式须清空cursor；有效游标条件不匹配返回400。旧v2～v5游标不可用于keyword搜索。
           schema:
             type: string
         - name: limit
@@ -1212,6 +1215,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/SessionSearchTimeout'
     delete:
       tags: [Chat Sessions & Messages]
       operationId: deleteChatSessions
@@ -2070,7 +2075,7 @@ components:
       name: title
       in: query
       required: false
-      description: 会话标题包含搜索；trim 后为空表示不筛选，英文大小写不敏感，%/_/! 按普通字符处理
+      description: 游标列表的标题包含搜索；trim后为空表示不筛选，英文大小写不敏感，%/_/!按普通字符处理；与非空keyword互斥
       schema:
         type: string
         maxLength: 256
@@ -2079,7 +2084,7 @@ components:
       name: keyword
       in: query
       required: false
-      description: 标题、已持久化user问题和assistant回答的统一包含搜索；trim后为空表示不筛选，非空时为1到128个Unicode码点，%/_/!按普通字符处理
+      description: 两种分页均支持的标题、已持久化user问题和assistant回答统一包含搜索，包括旧分支；大小写不敏感，trim后为空表示不筛选，非空时为1到128个Unicode码点，%/_/!按普通字符处理；游标列表不能同时传非空title
       schema:
         type: string
         minLength: 1

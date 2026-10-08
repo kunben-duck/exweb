@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.infrastructure.session;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -267,6 +268,114 @@ class MyBatisSessionRepositoryTest {
     }
 
     @Test
+    void keywordCursorBindsNormalizedFiltersAndUsesLastReturnedRow() {
+        RecordingMapper mapper = new RecordingMapper();
+        Instant timestamp = Instant.parse("2026-10-09T00:00:00Z");
+        mapper.pageRows = List.of(row("session-3", null, timestamp), row("session-2", null, timestamp));
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(
+                mapper, new SessionPageKeywordSearchExecutor(mapper));
+        SessionListFilter filter = new SessionListFilter(null, null, " mobile ", SessionAppScope.MAIN_SITE, " PROFIT%_! ");
+
+        ChatSessionPage first = repository.pageByTenantIdAndUserId("tenant1", "user1", filter, null, 1);
+
+        assertThat(first.items()).extracting(ChatSession::id).containsExactly("session-3");
+        assertThat(decodeCursor(first.nextCursor())).startsWith("v6|");
+        assertThat(mapper.lastCursorKeywordPattern).isEqualTo("%profit!%!_!!%");
+        assertThat(mapper.lastCursorTitlePattern).isNull();
+        assertThat(mapper.lastCursorChannel).isEqualTo("mobile");
+        assertThat(mapper.lastCursorMainSiteOnly).isTrue();
+        assertThat(mapper.lastCursorLimit).isEqualTo(2);
+        mapper.pageRows = List.of(row("session-2", null, timestamp));
+
+        ChatSessionPage second = repository.pageByTenantIdAndUserId("tenant1", "user1",
+                new SessionListFilter(null, null, "mobile", SessionAppScope.MAIN_SITE, "profit%_!"), first.nextCursor(), 1);
+
+        assertThat(mapper.lastCursorUpdatedAt).isEqualTo(timestamp);
+        assertThat(mapper.lastCursorId).isEqualTo("session-3");
+        assertThat(second.items()).extracting(ChatSession::id).containsExactly("session-2");
+        assertThat(second.nextCursor()).isNull();
+        for (SessionListFilter changed : List.of(
+                new SessionListFilter(null, null, "mobile", SessionAppScope.MAIN_SITE, "cost"),
+                new SessionListFilter(null, null, "mobile", SessionAppScope.MAIN_SITE),
+                new SessionListFilter(null, "profit%_!", "mobile", SessionAppScope.MAIN_SITE),
+                new SessionListFilter(null, null, "web", SessionAppScope.MAIN_SITE, "profit%_!"),
+                new SessionListFilter(null, null, "mobile", null, "profit%_!"))) {
+            assertThatThrownBy(() -> repository.pageByTenantIdAndUserId(
+                    "tenant1", "user1", changed, first.nextCursor(), 1))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("过滤条件不一致");
+        }
+    }
+
+    @Test
+    void keywordCursorAlsoBindsAppIdAndRejectsLegacyCursors() {
+        RecordingMapper mapper = new RecordingMapper();
+        mapper.pageRows = List.of(row("s2", "app", Instant.EPOCH), row("s1", "app", Instant.EPOCH));
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper);
+        SessionListFilter keyword = new SessionListFilter("app", null, null, null, "profit");
+        String cursor = repository.pageByTenantIdAndUserId("tenant1", "user1", keyword, null, 1).nextCursor();
+
+        assertThatThrownBy(() -> repository.pageByTenantIdAndUserId("tenant1", "user1",
+                new SessionListFilter("other", null, null, null, "profit"), cursor, 1))
+                .hasMessageContaining("appId 过滤条件不一致");
+        for (SessionListFilter legacy : List.of(
+                new SessionListFilter("app", null), new SessionListFilter("app", "profit"),
+                new SessionListFilter("app", null, "mobile"),
+                new SessionListFilter(null, null, null, SessionAppScope.MAIN_SITE))) {
+            String oldCursor = repository.pageByTenantIdAndUserId("tenant1", "user1", legacy, null, 1).nextCursor();
+            assertThatThrownBy(() -> repository.pageByTenantIdAndUserId("tenant1", "user1",
+                    new SessionListFilter(legacy.appId(), null, legacy.channel(), legacy.appScope(), "profit"),
+                    oldCursor, 1)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("过滤条件不一致");
+        }
+    }
+
+    @Test
+    void malformedCursorNeverDropsTheKeywordFilter() {
+        RecordingMapper mapper = new RecordingMapper();
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(
+                mapper, new SessionPageKeywordSearchExecutor(mapper));
+        Map<String, String> patterns = Map.of(
+                "中", "%中%", "A", "%a%", "😀", "%😀%", "%", "%!%%", "_", "%!_%", "!", "%!!%");
+        patterns.forEach((keyword, pattern) -> {
+            repository.pageByTenantIdAndUserId("tenant1", "user1",
+                    new SessionListFilter(null, null, null, null, " " + keyword + " "), "not-a-cursor!", 20);
+            assertThat(mapper.lastCursorKeywordPattern).isEqualTo(pattern);
+            assertThat(mapper.lastCursorUpdatedAt).isNull();
+            assertThat(mapper.lastCursorId).isNull();
+        });
+    }
+
+    @Test
+    void cursorSearchTranslatesOnlyTimeoutFailures() {
+        RecordingMapper mapper = new RecordingMapper();
+        SessionPageKeywordSearchExecutor executor = mock(SessionPageKeywordSearchExecutor.class);
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper, executor);
+        var query = new SessionPageKeywordSearchExecutor.CursorQuery(
+                "tenant1", "user1", null, null, "%profit%", null, false, null, null, 21);
+        var filter = new SessionListFilter(null, null, null, null, "profit");
+        when(executor.searchCursor(query)).thenThrow(new QueryTimeoutException("timeout"));
+        assertThatThrownBy(() -> repository.pageByTenantIdAndUserId("tenant1", "user1", filter, null, 20))
+                .isInstanceOf(SessionSearchTimeoutException.class);
+        RuntimeException unavailable = new IllegalStateException("database unavailable");
+        doThrow(unavailable).when(executor).searchCursor(query);
+        assertThatThrownBy(() -> repository.pageByTenantIdAndUserId("tenant1", "user1", filter, null, 20))
+                .isSameAs(unavailable);
+    }
+
+    @Test
+    void cursorWithoutKeywordKeepsTheOriginalQueryPathAndVersions() {
+        RecordingMapper mapper = new RecordingMapper();
+        SessionPageKeywordSearchExecutor executor = mock(SessionPageKeywordSearchExecutor.class);
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper, executor);
+        for (String keyword : new String[] {null, "", " \t\n "}) {
+            repository.pageByTenantIdAndUserId("tenant1", "user1",
+                    new SessionListFilter(null, "Profit", null, null, keyword), null, 20);
+            assertThat(mapper.lastCursorTitlePattern).isEqualTo("%profit%");
+            assertThat(mapper.lastCursorKeywordPattern).isNull();
+        }
+        verifyNoInteractions(executor);
+    }
+
+    @Test
     void appCategoriesPassNormalizedChannelToMapper() {
         RecordingMapper mapper = new RecordingMapper();
         MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper);
@@ -347,6 +456,9 @@ class MyBatisSessionRepositoryTest {
         private String lastAppUserId;
         private String lastAppChannel;
         private String lastCursorTitlePattern;
+        private String lastCursorKeywordPattern;
+        private Instant lastCursorUpdatedAt;
+        private String lastCursorId;
         private String lastCursorChannel;
         private String lastCountTitlePattern;
         private String lastCountChannel;
@@ -388,10 +500,13 @@ class MyBatisSessionRepositoryTest {
 
         @Override
         public List<ChatSessionRow> findPageByOwner(String tenantId, String userId, String appId, String titlePattern,
-                                                    String channel, boolean mainSiteOnly,
+                                                    String keywordPattern, String channel, boolean mainSiteOnly,
                                                     Instant cursorUpdatedAt, String cursorId, int limit) {
             lastAppId = appId;
             lastCursorTitlePattern = titlePattern;
+            lastCursorKeywordPattern = keywordPattern;
+            lastCursorUpdatedAt = cursorUpdatedAt;
+            lastCursorId = cursorId;
             lastCursorChannel = channel;
             lastCursorMainSiteOnly = mainSiteOnly;
             lastCursorLimit = limit;

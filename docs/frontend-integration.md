@@ -1025,9 +1025,23 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&limit=20"
 按普通标题字符匹配。`appScope=MAIN_SITE`严格匹配数据库`app_id IS NULL`，不能与具体`appId`同时使用；
 省略`appScope/appId`时查询主站和作业系统全量会话。范围、标题与渠道条件取交集，channel精确匹配并区分大小写。
 后续游标页必须继续提交相同的`appScope/appId/title/channel`；切换条件时应丢弃旧`cursor`并从第一页重新查询。
-主站查询使用v5游标；既有v2/v3/v4游标继续兼容。`lastRunStatus`按Run创建时间返回最后一轮业务状态；
+无keyword的主站查询继续使用v5游标；既有v2/v3/v4游标继续兼容。`lastRunStatus`按Run创建时间返回最后一轮业务状态；
 没有任何Run时为`null`。游标列表不读取最后Run metadata，因此`lastRunSkillId=null`。前端可将
 `RUNNING/CANCELLING`视为运行中；`WAITING_USER`表示需要恢复交互，不能当作成功回答。状态为null表示无Run或摘要不可用，不代表任务已完成。
+
+游标列表也支持与页码接口相同范围的统一关键字搜索：
+
+```bash
+curl "http://localhost:8080/v1/chat/sessions?keyword=%E5%88%A9%E6%B6%A6&limit=20"
+curl "http://localhost:8080/v1/chat/sessions?keyword=%E5%88%A9%E6%B6%A6&limit=20&cursor=<上一页nextCursor>"
+```
+
+`keyword`搜索标题和会话内已持久化user/assistant正文，包括旧分支，不读取Parts、附件或metadata作为匹配内容。
+它与原`title`参数互斥：两者同时非空返回400；仅title仍只搜索标题。keyword的长度、转义及超时语义与下面页码搜索一致。
+keyword请求返回绑定搜索词及`appScope/appId/title/channel`的v6游标；搜索词先trim并规范化大小写。
+换词、移除keyword、更换过滤条件或切换title/keyword搜索模式时，清空cursor重新查询，否则有效游标校验返回400；旧v2～v5游标不能直接用于keyword搜索。
+游标由服务端生成，前端不自行解析或构造。响应仍为`items/nextCursor`，无总数、命中片段或高亮，列表摘要和活动topic保持不变。
+先完成全部后端实例部署，再启用前端keyword请求，避免旧实例忽略新参数或不识别v6游标。
 
 **刷新后恢复列表任务监听（两个列表均适用）**：
 
@@ -1049,10 +1063,11 @@ curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&keyword=%E5%88%
 
 `keyword` trim后为空表示不搜索，非空时为1到128个Unicode码点，支持单个汉字、英文字母或Emoji；它对会话标题、已持久化user问题和
 assistant回答执行大小写不敏感的连续子串匹配，并与`appId/appScope/channel`取交集。`%`、`_`和`!`
-按普通字符处理。该搜索不覆盖Parts、附件、metadata及no-store未持久化内容；旧`title`参数仅属于游标接口，
+按普通字符处理。两种分页均搜索全部已保存分支的正文，不覆盖Parts、附件、metadata及no-store未持久化内容；旧`title`参数仅属于游标接口，
 在页码接口提交非空`title`会返回400。建议输入防抖约300毫秒；数据库搜索超过配置预算时返回
 `503/SESSION_SEARCH_TIMEOUT`，前端应保留当前列表并提示稍后重试。
 单字符可能匹配更多历史内容并增加搜索耗时，仍受上述超时保护。
+两种分页的keyword数据库搜索均默认使用2秒只读事务；该期限不是整个HTTP请求期限，不覆盖此前排队及后续摘要查询。
 
 页码分页响应会返回总行数：
 

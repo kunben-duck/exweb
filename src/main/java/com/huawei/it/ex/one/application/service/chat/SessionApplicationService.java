@@ -272,14 +272,19 @@ public class SessionApplicationService implements ChatSessionFacade {
             UserContext user, SessionListFilter filter, String cursor, int limit) {
         checkChatUser(user);
         SessionListFilter effectiveFilter = filter == null ? SessionListFilter.empty() : filter;
+        String title = normalizeTag(effectiveFilter.title());
+        String keyword = normalizeSearchKeyword(effectiveFilter.keyword());
+        if (title != null && keyword != null) {
+            throw new IllegalArgumentException("title 与 keyword 不能同时指定");
+        }
         return sessionRepository.pageByTenantIdAndUserId(
                 user.tenantId(), user.ownerUserId(),
                 new SessionListFilter(
                         normalizeTag(effectiveFilter.appId()),
-                        normalizeTag(effectiveFilter.title()),
+                        title,
                         normalizeTag(effectiveFilter.channel()),
                         effectiveFilter.appScope(),
-                        null),
+                        keyword),
                 cursor,
                 limit);
     }

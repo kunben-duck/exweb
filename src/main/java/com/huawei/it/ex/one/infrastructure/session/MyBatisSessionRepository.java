@@ -46,10 +46,12 @@ public class MyBatisSessionRepository implements SessionRepository {
     private static final String CURSOR_VERSION_V3 = "v3";
     private static final String CURSOR_VERSION_V4 = "v4";
     private static final String CURSOR_VERSION_V5 = "v5";
+    private static final String CURSOR_VERSION_V6 = "v6";
     private static final String APP_ID_FILTER_MISMATCH = "cursor 与当前 appId 过滤条件不一致";
     private static final String TITLE_FILTER_MISMATCH = "cursor 与当前 title 过滤条件不一致";
     private static final String CHANNEL_FILTER_MISMATCH = "cursor 与当前 channel 过滤条件不一致";
     private static final String APP_SCOPE_FILTER_MISMATCH = "cursor 与当前 appScope 过滤条件不一致";
+    private static final String KEYWORD_FILTER_MISMATCH = "cursor 与当前 keyword 过滤条件不一致";
 
     private final ChatSessionMapper mapper;
     private final SessionPageKeywordSearchExecutor keywordSearchExecutor;
@@ -123,33 +125,38 @@ public class MyBatisSessionRepository implements SessionRepository {
         String normalizedAppId = normalize(appId);
         String normalizedTitle = normalizeTitle(title);
         String normalizedChannel = normalize(channel);
-        String normalizedAppScope = filter == null || filter.appScope() == null
-                ? null
-                : filter.appScope().name();
+        String normalizedKeyword = normalizeTitle(filter == null ? null : filter.keyword());
+        SessionListFilter normalizedFilter = new SessionListFilter(
+                normalizedAppId, normalizedTitle, normalizedChannel,
+                filter == null ? null : filter.appScope(), normalizedKeyword);
         boolean mainSiteOnly = filter != null && filter.mainSiteOnly();
-        Cursor decoded = decodeCursor(
-                cursor, normalizedAppId, normalizedTitle, normalizedChannel, normalizedAppScope);
+        Cursor decoded = decodeCursor(cursor, normalizedFilter);
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
-        List<ChatSession> rows = mapper.findPageByOwner(
-                        tenantId,
-                        userId,
-                        normalizedAppId,
-                        titlePattern(normalizedTitle),
-                        normalizedChannel,
-                        mainSiteOnly,
-                        decoded.updatedAt(),
-                        decoded.id(),
-                        pageSize + 1
-                ).stream()
+        SessionPageKeywordSearchExecutor.CursorQuery query = new SessionPageKeywordSearchExecutor.CursorQuery(
+                tenantId, userId, normalizedAppId, titlePattern(normalizedTitle), titlePattern(normalizedKeyword),
+                normalizedChannel, mainSiteOnly, decoded.updatedAt(), decoded.id(), pageSize + 1);
+        List<ChatSession> rows = queryCursorPage(query).stream()
                 .map(this::toDomain)
                 .toList();
         boolean hasMore = rows.size() > pageSize;
         List<ChatSession> items = hasMore ? rows.subList(0, pageSize) : rows;
         String nextCursor = hasMore
-                ? encodeCursor(items.get(items.size() - 1), normalizedAppId, normalizedTitle, normalizedChannel,
-                        normalizedAppScope)
+                ? encodeCursor(items.get(items.size() - 1), normalizedFilter)
                 : null;
         return new ChatSessionPage(items, nextCursor);
+    }
+
+    private List<ChatSessionRow> queryCursorPage(SessionPageKeywordSearchExecutor.CursorQuery query) {
+        if (query.keywordPattern() == null || keywordSearchExecutor == null) {
+            return mapper.findPageByOwner(
+                    query.tenantId(), query.userId(), query.appId(), query.titlePattern(), query.keywordPattern(),
+                    query.channel(), query.mainSiteOnly(), query.cursorUpdatedAt(), query.cursorId(), query.limit());
+        }
+        try {
+            return keywordSearchExecutor.searchCursor(query);
+        } catch (RuntimeException ex) {
+            throw searchFailure(ex, "chat-session.cursor.keyword-search");
+        }
     }
 
     @Override
@@ -214,16 +221,20 @@ public class MyBatisSessionRepository implements SessionRepository {
         try {
             return keywordSearchExecutor.search(query);
         } catch (RuntimeException ex) {
-            if (!isQueryTimeout(ex)) {
-                throw ex;
-            }
-            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_QUERY_TIMEOUT,
-                            "Session keyword search database query timed out")
-                    .operation("chat-session.page.keyword-search")
-                    .attribute("failureType", ex.getClass().getName())
-                    .build());
-            throw new SessionSearchTimeoutException("会话关键字搜索超时，请稍后重试", ex);
+            throw searchFailure(ex, "chat-session.page.keyword-search");
         }
+    }
+
+    private RuntimeException searchFailure(RuntimeException failure, String operation) {
+        if (!isQueryTimeout(failure)) {
+            return failure;
+        }
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_QUERY_TIMEOUT,
+                        "Session keyword search database query timed out")
+                .operation(operation)
+                .attribute("failureType", failure.getClass().getName())
+                .build());
+        return new SessionSearchTimeoutException("会话关键字搜索超时，请稍后重试", failure);
     }
 
     private boolean isQueryTimeout(Throwable failure) {
@@ -368,6 +379,19 @@ public class MyBatisSessionRepository implements SessionRepository {
                 session.latestMessageSeq(), session.lastReadSeq(), metadataJson, session.createdAt(), updatedAt);
     }
 
+    private String encodeCursor(ChatSession session, SessionListFilter filter) {
+        String appScope = filter.appScope() == null ? null : filter.appScope().name();
+        if (filter.keyword() == null) {
+            return encodeCursor(session, filter.appId(), filter.title(), filter.channel(), appScope);
+        }
+        // 搜索词和原过滤条件一起绑定，禁止换词后从旧位置继续翻页。
+        String raw = CURSOR_VERSION_V6 + CURSOR_SEPARATOR + encodeFilter(appScope) + CURSOR_SEPARATOR
+                + encodeFilter(filter.appId()) + CURSOR_SEPARATOR + encodeFilter(filter.title()) + CURSOR_SEPARATOR
+                + encodeFilter(filter.channel()) + CURSOR_SEPARATOR + encodeFilter(filter.keyword()) + CURSOR_SEPARATOR
+                + session.updatedAt() + CURSOR_SEPARATOR + session.id();
+        return Base64.getUrlEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
     private String encodeCursor(
             ChatSession session, String appId, String title, String channel, String appScope) {
         String raw;
@@ -390,25 +414,43 @@ public class MyBatisSessionRepository implements SessionRepository {
         return Base64.getUrlEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
 
-    private Cursor decodeCursor(
-            String cursor, String expectedAppId, String expectedTitle, String expectedChannel,
-            String expectedAppScope) {
+    private Cursor decodeCursor(String cursor, SessionListFilter filter) {
         if (cursor == null || cursor.isBlank()) {
             return Cursor.empty();
         }
         try {
             String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
-            return decodeCursorValue(raw, expectedAppId, expectedTitle, expectedChannel, expectedAppScope);
+            String[] parts = raw.split("\\|", -1);
+            if (parts.length == 8 && CURSOR_VERSION_V6.equals(parts[0])) {
+                return decodeKeywordCursor(parts, filter);
+            }
+            Cursor decoded = decodeCursorValue(raw, filter.appId(), filter.title(), filter.channel(),
+                    filter.appScope() == null ? null : filter.appScope().name());
+            if (decoded.updatedAt() != null) {
+                validateFilter(filter.keyword(), null, KEYWORD_FILTER_MISMATCH);
+            }
+            return decoded;
         } catch (IllegalArgumentException ex) {
             if (APP_ID_FILTER_MISMATCH.equals(ex.getMessage()) || TITLE_FILTER_MISMATCH.equals(ex.getMessage())
                     || CHANNEL_FILTER_MISMATCH.equals(ex.getMessage())
-                    || APP_SCOPE_FILTER_MISMATCH.equals(ex.getMessage())) {
+                    || APP_SCOPE_FILTER_MISMATCH.equals(ex.getMessage())
+                    || KEYWORD_FILTER_MISMATCH.equals(ex.getMessage())) {
                 throw ex;
             }
             return Cursor.empty();
         } catch (RuntimeException ex) {
             return Cursor.empty();
         }
+    }
+
+    private Cursor decodeKeywordCursor(String[] parts, SessionListFilter filter) {
+        validateFilter(filter.appScope() == null ? null : filter.appScope().name(),
+                decodeFilter(parts[1]), APP_SCOPE_FILTER_MISMATCH);
+        validateFilter(filter.appId(), decodeFilter(parts[2]), APP_ID_FILTER_MISMATCH);
+        validateFilter(filter.title(), decodeFilter(parts[3]), TITLE_FILTER_MISMATCH);
+        validateFilter(filter.channel(), decodeFilter(parts[4]), CHANNEL_FILTER_MISMATCH);
+        validateFilter(filter.keyword(), decodeFilter(parts[5]), KEYWORD_FILTER_MISMATCH);
+        return new Cursor(Instant.parse(parts[6]), parts[7]);
     }
 
     private Cursor decodeCursorValue(

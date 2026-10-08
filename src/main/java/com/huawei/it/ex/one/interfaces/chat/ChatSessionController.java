@@ -159,6 +159,7 @@ public class ChatSessionController {
      * @param appId 可选应用标识精确过滤条件。
      * @param appScope 可选 App 范围；MAIN_SITE 表示仅查询未绑定 appId 的主站会话。
      * @param title 可选会话标题包含过滤条件。
+     * @param keyword 可选标题、user问题及assistant回答统一包含过滤条件；与title互斥。
      * @param channel 可选会话来源渠道精确过滤条件。
      * @param cursor 上一页返回的游标；为空时查询第一页。
      * @param limit 最大返回条数，应用层会做上限保护。
@@ -171,6 +172,7 @@ public class ChatSessionController {
             @RequestParam(value = "appScope", required = false) SessionAppScope appScope,
             @Size(max = 256, message = "title 长度不能超过 256")
             @RequestParam(value = "title", required = false) String title,
+            @RequestParam(value = "keyword", required = false) String keyword,
             @Size(max = 64, message = "channel 长度不能超过 64")
             @RequestParam(value = "channel", required = false) String channel,
             @RequestParam(value = "cursor", required = false) String cursor,
@@ -178,7 +180,7 @@ public class ChatSessionController {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
                     ChatSessionPage page = facade.listSessions(
-                            user, new SessionListFilter(appId, title, channel, appScope), cursor, limit);
+                            user, new SessionListFilter(appId, title, channel, appScope, keyword), cursor, limit);
                     Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
                             facade.findFirstAssistantSummaries(user, page.items());
                     Map<String, ChatSessionLastRunSummary> lastRunBriefs = lastRunBriefs(user, page.items());

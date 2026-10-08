@@ -11,7 +11,7 @@ package com.huawei.it.ex.one.application.integration.conversation;
  * @param title 会话标题包含过滤条件；为空表示不过滤。
  * @param channel 会话来源渠道精确过滤条件；为空表示不过滤。
  * @param appScope 会话 App 范围；为空表示保持现有全量语义。
- * @param keyword 页码接口统一关键字过滤条件；为空表示不过滤。
+ * @param keyword 标题、user问题及assistant回答统一关键字过滤条件；为空表示不过滤。
  */
 public record SessionListFilter(
         String appId,

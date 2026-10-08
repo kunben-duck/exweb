@@ -777,7 +777,7 @@ class ChatProtocolConvergenceTest {
                 new PermissionChecker(),
                 new ChatMessageVersionViewAssembler());
 
-        var cursorPage = controller.list(null, null, null, null, null, 20).block();
+        var cursorPage = controller.list(null, null, null, null, null, null, 20).block();
         var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
         ChatSessionDto detail = controller.get(session.id()).block();
 
@@ -867,7 +867,7 @@ class ChatProtocolConvergenceTest {
                 new PermissionChecker(),
                 new ChatMessageVersionViewAssembler());
 
-        var cursorPage = controller.list(null, null, null, null, null, 20).block();
+        var cursorPage = controller.list(null, null, null, null, null, null, 20).block();
         var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
         List<String> expected = Arrays.stream(ChatRunStatus.values()).map(Enum::name).toList();
 
@@ -923,7 +923,7 @@ class ChatProtocolConvergenceTest {
                 new PermissionChecker(),
                 new ChatMessageVersionViewAssembler());
 
-        var page = controller.list(null, null, null, null, null, 20).block();
+        var page = controller.list(null, null, null, null, null, null, 20).block();
 
         assertThat(page).isNotNull();
         assertThat(page.items().getFirst().lastRunStatus()).isNull();
@@ -962,7 +962,7 @@ class ChatProtocolConvergenceTest {
                 new PermissionChecker(),
                 new ChatMessageVersionViewAssembler());
 
-        var page = controller.list(null, null, null, null, null, 20).block();
+        var page = controller.list(null, null, null, null, null, null, 20).block();
         var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
 
         assertThat(page).isNotNull();
@@ -1002,7 +1002,7 @@ class ChatProtocolConvergenceTest {
                 new PermissionChecker(),
                 new ChatMessageVersionViewAssembler());
 
-        var page = controller.list(null, null, null, null, null, 20).block();
+        var page = controller.list(null, null, null, null, null, null, 20).block();
         var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
 
         assertThat(page).isNotNull();

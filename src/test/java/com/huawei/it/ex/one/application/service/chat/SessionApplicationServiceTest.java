@@ -7,6 +7,10 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
@@ -369,6 +373,53 @@ class SessionApplicationServiceTest {
 
             assertThat(page.items()).extracting(ChatSession::id).containsExactly(matched.id());
             assertThat(page.totalRows()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void cursorSearchNormalizesKeywordWithoutChangingOtherFiltersOrAddingReads() {
+        for (String keyword : List.of("中", "A", "😀", "%", "_", "!", "😀".repeat(128))) {
+            SessionRepository sessions = mock(SessionRepository.class);
+            ChatMessageRepository messages = mock(ChatMessageRepository.class);
+            SessionApplicationService service = new SessionApplicationService(
+                    sessions, messages, new IncrementingIdGenerator(), new PermissionChecker());
+
+            service.listSessions(user(), new SessionListFilter(
+                    " app ", "  ", " mobile ", null, " " + keyword + " "), "cursor", 20);
+
+            verify(sessions).pageByTenantIdAndUserId("tenant1", "user1",
+                    new SessionListFilter("app", null, "mobile", null, keyword), "cursor", 20);
+            verifyNoMoreInteractions(sessions);
+            verifyNoInteractions(messages);
+        }
+    }
+
+    @Test
+    void cursorSearchRejectsConflictingOrOversizedKeywordBeforeQuerying() {
+        SessionRepository sessions = mock(SessionRepository.class);
+        SessionApplicationService service = new SessionApplicationService(
+                sessions, new InMemoryMessageRepository(), new IncrementingIdGenerator(), new PermissionChecker());
+
+        assertThatThrownBy(() -> service.listSessions(user(),
+                new SessionListFilter(null, " 标题 ", null, null, " 查询 "), null, 20))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("title 与 keyword 不能同时指定");
+        assertThatThrownBy(() -> service.listSessions(user(),
+                new SessionListFilter(null, null, null, null, "😀".repeat(129)), null, 20))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("不能超过 128 个字符");
+        verifyNoInteractions(sessions);
+    }
+
+    @Test
+    void cursorSearchEmptyKeywordPreservesTitleOnlyAndUnfilteredRequests() {
+        for (String keyword : new String[] {null, "", " \t\n "}) {
+            SessionRepository sessions = mock(SessionRepository.class);
+            SessionApplicationService service = new SessionApplicationService(
+                    sessions, new InMemoryMessageRepository(), new IncrementingIdGenerator(), new PermissionChecker());
+            service.listSessions(user(), new SessionListFilter(null, " Title ", null, null, keyword), null, 20);
+            service.listSessions(user(), new SessionListFilter(null, null, null, null, keyword), null, 20);
+            verify(sessions).pageByTenantIdAndUserId("tenant1", "user1", new SessionListFilter(null, "Title"), null, 20);
+            verify(sessions).pageByTenantIdAndUserId("tenant1", "user1", SessionListFilter.empty(), null, 20);
+            verifyNoMoreInteractions(sessions);
         }
     }
 

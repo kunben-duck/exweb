@@ -10,9 +10,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 
-/** 在单个只读超时事务内完成页码搜索的总数和数据查询。 */
+/** 在有界只读事务内执行会话关键字搜索；游标搜索不查询总数。 */
 @Component
 @EnableConfigurationProperties(SessionSearchProperties.class)
 public class SessionPageKeywordSearchExecutor {
@@ -37,6 +38,29 @@ public class SessionPageKeywordSearchExecutor {
                         query.channel(), query.mainSiteOnly(), query.limit(), query.offset());
         return new Result(totalRows, rows);
     }
+
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.session-search.database-query-timeout-seconds:2}"
+    )
+    public List<ChatSessionRow> searchCursor(CursorQuery query) {
+        return mapper.findPageByOwner(
+                query.tenantId(), query.userId(), query.appId(), query.titlePattern(), query.keywordPattern(),
+                query.channel(), query.mainSiteOnly(), query.cursorUpdatedAt(), query.cursorId(), query.limit());
+    }
+
+    public record CursorQuery(
+            String tenantId,
+            String userId,
+            String appId,
+            String titlePattern,
+            String keywordPattern,
+            String channel,
+            boolean mainSiteOnly,
+            Instant cursorUpdatedAt,
+            String cursorId,
+            int limit
+    ) {}
 
     public record Query(
             String tenantId,

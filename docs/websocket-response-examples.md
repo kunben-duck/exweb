@@ -100,7 +100,7 @@
 | message.snapshot | `content:string` 覆盖当前 Run 的正文草稿，不当成追加 delta；Relay generate-response 可能产生此事件 |
 | runtime.thinking | DomainAgent 常见 status=STARTED/STREAMING/COMPLETED、text；Relay 保留 content 等原始字段，按 sourceType 解释 |
 | runtime.agent/tool | Relay Agent 调用/工具过程，原始嵌套业务字段不统一改名；不自动计入正文 |
-| runtime.card | cardType/cardSources/cardUrl/diyCardScene/recommendedQuestions 或问卷字段；不是所有 card 都需要等待 |
+| runtime.card | cardType/cardSources/cardUrl/mobileCardUrl/diyCardScene/recommendedQuestions 或问卷字段；mobileCardUrl 是可选移动端地址，不替换 cardUrl；不是所有 card 都需要等待 |
 | runtime.reference | DomainAgent 常用 referenceType/references；Relay 保留 sources 等原字段 |
 | runtime.event | 未归类的合法事件；不要推断为 ask-user、完成或正文，历史可能为隐藏调试 Part |
 | message.completed | `status=MESSAGE_COMPLETED`，可能有 finishReason/skillInvocationStarted；**不等于 Run 终态，也不保证该帧已经提供历史 assistant ID** |
@@ -821,7 +821,49 @@ REST：`POST /v1/chat/runs`，普通 NEXT；示例未命中 Binding/用例库，
 ]
 ```
 
-前端：仅将 delta 拼入正文；thinking、card、reference 分区处理，以 run.completed 确认收口。FULL 下历史正文为 `第一段。<!--DOMAIN_AGENT_CONTENT_SEGMENT-->第二段。`，实时 delta 没有这个新增标识事件。历史 CARD/REFERENCE/THINKING Parts 可恢复；no-store 见 S12。独立 `state=THINKING` 的另一种输出如下，不要求与 content.think 同时出现：
+前端：仅将 delta 拼入正文；thinking、card、reference 分区处理，以 run.completed 确认收口。FULL 下历史正文为 `第一段。<!--DOMAIN_AGENT_CONTENT_SEGMENT-->第二段。`，实时 delta 没有这个新增标识事件。历史 CARD/REFERENCE/THINKING Parts 可恢复；no-store 见 S12。
+
+DomainAgent URL 卡片也可在业务流中出现，下面是独立示例，并非上述固定序列的额外必发事件：
+
+```json
+{
+  "type": "message",
+  "topicId": "chat-run-run_mobile_card",
+  "offset": "1201",
+  "payload": {
+    "type": "conversation-turn-stream",
+    "payload": {
+      "type": "stream-item",
+      "conversationId": "session_demo",
+      "turnId": "run_mobile_card",
+      "streamItemId": "evt_1201",
+      "serverTimestampMs": 1789516801201,
+      "encodedItem": {
+        "encoding": "chat-event-json-v1",
+        "event": "runtime.card",
+        "data": {
+          "runId": "run_mobile_card",
+          "sessionId": "session_demo",
+          "sequence": 1201,
+          "type": "runtime.card",
+          "payload": {
+            "source": "domain-agent",
+            "sourceType": "cardUrl",
+            "cardType": "url",
+            "cardSources": ["cardUrl"],
+            "cardUrl": "https://example.com/web/card.js",
+            "mobileCardUrl": "https://example.com/mobile/card.js"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+移动端优先使用有效的 `mobileCardUrl`，缺失或空白时沿用原卡片处理策略；PC 继续使用 `cardUrl`。服务端不按 channel 替换地址，也不请求脚本。缺失/null 字段省略，空字符串原样保留；新字段不加入 `cardSources`，不额外产生事件。FULL 历史、Resume 及新建分享快照保留两个地址，异步回调同样适用；no-store 不保存普通业务卡片，旧记录不回填。仅含 `mobileCardUrl` 的输入不新增卡片识别。
+
+独立 `state=THINKING` 的另一种输出如下，不要求与 content.think 同时出现：
 
 ```json
 {

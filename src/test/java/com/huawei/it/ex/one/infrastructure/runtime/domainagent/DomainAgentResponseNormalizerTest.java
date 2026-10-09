@@ -24,6 +24,61 @@ class DomainAgentResponseNormalizerTest {
     private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(objectMapper);
 
     @Test
+    void preservesMobileCardUrlWithoutChangingCardClassification() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"cardUrl":"https://cards.test/web.js","mobileCardUrl":"https://cards.test/mobile.js?lang=zh_CN&v=1","intent":"tax","skillId":"skill-tax"}
+
+                """);
+
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo("runtime.card");
+            assertThat(event.payload()).isEqualTo(Map.of(
+                    "source", "domain-agent", "sourceType", "cardUrl", "cardType", "url",
+                    "cardSources", List.of("cardUrl"), "cardUrl", "https://cards.test/web.js",
+                    "mobileCardUrl", "https://cards.test/mobile.js?lang=zh_CN&v=1",
+                    "intent", "tax", "domainAgentId", "skill-tax"));
+        });
+    }
+
+    @Test
+    void omitsMissingOrNullMobileCardUrlAndPreservesEmptyOrWhitespaceStrings() {
+        Map<String, Object> original = normalizer.normalize("run1", "session1",
+                "{\"cardUrl\":\"https://cards.test/web.js\"}").getFirst().payload();
+        assertThat(original).doesNotContainKey("mobileCardUrl");
+        assertThat(normalizer.normalize("run1", "session1",
+                "{\"cardUrl\":\"https://cards.test/web.js\",\"mobileCardUrl\":null}").getFirst().payload())
+                .isEqualTo(original);
+        for (String value : List.of("", "  ", " https://cards.test/mobile.js ")) {
+            ObjectNode frame = objectMapper.createObjectNode().put("cardUrl", "https://cards.test/web.js")
+                    .put("mobileCardUrl", value);
+            assertThat(normalizer.normalize("run1", "session1", frame.toString()).getFirst().payload())
+                    .containsAllEntriesOf(original).containsEntry("mobileCardUrl", value);
+        }
+    }
+
+    @Test
+    void preservesMobileCardUrlAcrossChunkBoundaries() {
+        String frame = "data: {\"cardUrl\":\"https://cards.test/web.js\","
+                + "\"mobileCardUrl\":\"https://cards.test/mobile.js\"}\n\n";
+        for (int split = 6; split < frame.indexOf('}'); split++) {
+            var state = normalizer.newStreamState();
+            assertThat(normalizer.normalize("run1", "session1", frame.substring(0, split), state)).isEmpty();
+            assertThat(normalizer.normalize("run1", "session1", frame.substring(split), state))
+                    .singleElement().satisfies(event -> {
+                        assertThat(event.type()).isEqualTo("runtime.card");
+                        assertThat(event.payload()).containsEntry("mobileCardUrl", "https://cards.test/mobile.js")
+                                .containsEntry("cardSources", List.of("cardUrl"));
+                    });
+        }
+    }
+
+    @Test
+    void mobileCardUrlAloneDoesNotIntroduceNewCardRecognition() {
+        assertThat(normalizer.normalize("run1", "session1", "{\"mobileCardUrl\":\"https://cards.test/mobile.js\"}"))
+                .singleElement().satisfies(event -> assertThat(event.type()).isEqualTo("runtime.event"));
+    }
+
+    @Test
     void questionnaireMetadataFollowsPendingContentAndPrecedesCard() {
         var state = normalizer.newStreamState();
         assertThat(normalizer.normalize("run1", "session1", "data: {\"content\":\"before<thi\"}\n\n", state))
@@ -875,7 +930,7 @@ class DomainAgentResponseNormalizerTest {
     @Test
     void keepsDefensiveMixedCardMappingWhenOpenCardCombinesWithOtherCardFields() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", """
-                message: {"cardUrl":"https://card","openCard":"N","specificSceneInfo":[]}
+                message: {"cardUrl":"https://card","mobileCardUrl":"https://mobile-card","openCard":"N","specificSceneInfo":[]}
                 """);
 
         assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
@@ -883,6 +938,7 @@ class DomainAgentResponseNormalizerTest {
                 .containsEntry("cardType", "mixed")
                 .containsEntry("cardSources", List.of("cardUrl", "openCard", "specificSceneInfo"))
                 .containsEntry("cardUrl", "https://card")
+                .containsEntry("mobileCardUrl", "https://mobile-card")
                 .containsEntry("openCard", "N")
                 .containsEntry("specificSceneInfo", List.of());
     }

@@ -28,6 +28,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
@@ -232,8 +234,9 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
         }
     }
 
-    @Test
-    void preservesBusinessContentCarriedByExplicitCompletionFrame() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"APPEND", "REPLACE"})
+    void preservesBusinessContentAndMobileCardCarriedByExplicitCompletionFrame(String resultMode) throws Exception {
         DomainAgentProperties properties = enabledProperties();
         DomainAgentAsyncTaskCallbackCommitService commitService =
                 mock(DomainAgentAsyncTaskCallbackCommitService.class);
@@ -250,16 +253,23 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
         try {
             ObjectMapper mapper = new ObjectMapper();
             service.callback(new DomainAgentAsyncTaskCallbackCommand(
-                    running.id(), "COMPLETED", "APPEND", List.of(
-                    mapper.readTree("{\"type\":\"message.completed\",\"content\":\"result\"}")), null)).block();
+                    running.id(), "COMPLETED", resultMode, List.of(
+                    mapper.readTree("""
+                            {"type":"message.completed","content":"result",
+                             "cardUrl":"https://cards.test/web.js","mobileCardUrl":"https://cards.test/mobile.js"}
+                            """)), null)).block();
 
             ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
                     ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
             verify(commitService).commit(captor.capture());
+            assertThat(captor.getValue().resultMode()).isEqualTo(resultMode);
             assertThat(captor.getValue().businessEvents()).extracting(event -> event.type())
-                    .containsExactly("message.delta");
-            assertThat(captor.getValue().businessEvents().getFirst().payload())
+                    .containsExactly("runtime.card", "message.delta");
+            assertThat(captor.getValue().businessEvents().getLast().payload())
                     .containsEntry("delta", "result");
+            assertThat(captor.getValue().businessEvents().getFirst().payload())
+                    .containsEntry("cardUrl", "https://cards.test/web.js")
+                    .containsEntry("mobileCardUrl", "https://cards.test/mobile.js");
         } finally {
             service.closeScheduler();
         }

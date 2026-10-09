@@ -578,6 +578,7 @@ public class DomainAgentResponseNormalizer {
         payload.put("cardType", cardType(sources));
         payload.put("cardSources", sources);
         putIfPresent(payload, "cardUrl", text(root, "cardUrl"));
+        putIfPresent(payload, "mobileCardUrl", text(root, "mobileCardUrl"));
         putIfPresent(payload, "openCard", text(root, "openCard"));
         putIfPresent(payload, "intent", text(root, "intent"));
         putIfPresent(payload, "domainAgentId", text(root, "skillId"));

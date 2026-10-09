@@ -320,6 +320,36 @@ data: {"id": 3, "query": "生成资金流向报告", "type": "copy", "language_c
 
 data: [DONE]
 
+#### URL 卡片的移动端地址
+
+DomainAgent 的 `cardUrl` 卡片帧可以同时携带可选的 `mobileCardUrl`：
+
+```text
+data: {"cardUrl":"https://example.com/web/card.js","mobileCardUrl":"https://example.com/mobile/card.js"}
+```
+
+该帧只产生一条标准事件：
+
+```json
+{
+  "type": "runtime.card",
+  "payload": {
+    "source": "domain-agent",
+    "sourceType": "cardUrl",
+    "cardType": "url",
+    "cardSources": ["cardUrl"],
+    "cardUrl": "https://example.com/web/card.js",
+    "mobileCardUrl": "https://example.com/mobile/card.js"
+  }
+}
+```
+
+- 两个地址同时保留；不根据请求 `channel` 替换 `cardUrl`，服务端不加载卡片地址。
+- `mobileCardUrl` 缺失或 null 时省略；字符串原样保留，包括空字符串。移动端优先使用有效的移动端地址，缺失或无效时沿用原卡片处理策略。
+- 新字段是附加信息，不加入 `cardSources`，不改变原有分类；混合卡片仍沿用原规则。仅有 `mobileCardUrl` 不会新增 URL 卡片识别。
+- FULL 模式下通过现有事件及 Part 保存机制进入历史、Event Resume 和新建分享快照；no-store 仍只实时推送普通业务卡片。异步回调复用同一标准化规则。
+- 不回填旧历史或已有分享快照；移动端脚本的可访问性及实际渲染需前端联调。
+
 ### 6.4、Ask User 问卷与答案续跑
 
 DomainAgent 通过当前 HTTP 流返回独立问卷帧，使用与 Relay 相同的问卷结构：

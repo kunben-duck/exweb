@@ -98,8 +98,8 @@
 | 专家来源 | 父专家选择为 `selectedExpert`，子技能/意图结果为 `sourceExpert`，对象字段 expertId/expertName/intentAccessName；入口是逻辑值，不是加部署前缀后的值 |
 | message.delta | `delta:string` 追加正文；其他字段可选，不假定总有 source |
 | message.snapshot | `content:string` 覆盖当前 Run 的正文草稿，不当成追加 delta；Relay generate-response 可能产生此事件 |
-| runtime.thinking | DomainAgent 常见 status=STARTED/STREAMING/COMPLETED、text；Relay 保留 content 等原始字段，按 sourceType 解释 |
-| runtime.agent/tool | Relay Agent 调用/工具过程，原始嵌套业务字段不统一改名；不自动计入正文 |
+| runtime.thinking | DomainAgent `sourceType=think` 使用 thinkState/thinkTitle/thinkContent/thinkTime，不新增 status/title/text；旧 state/content.think 仍使用 status/text。Relay 保留 content 等原字段，按 sourceType 解释 |
+| runtime.agent/tool | Relay Agent 调用/工具过程保留原字段；DomainAgent `sourceType=tool` 使用 toolTitle/toolMatchRes，不增加 toolName，不推断完成状态；不计入正文 |
 | runtime.card | cardType/cardSources/cardUrl/mobileCardUrl/diyCardScene/recommendedQuestions 或问卷字段；mobileCardUrl 是可选移动端地址，不替换 cardUrl；不是所有 card 都需要等待 |
 | runtime.reference | DomainAgent 常用 referenceType/references；Relay 保留 sources 等原字段 |
 | runtime.event | 未归类的合法事件；不要推断为 ask-user、完成或正文，历史可能为隐藏调试 Part |
@@ -900,6 +900,86 @@ DomainAgent URL 卡片也可在业务流中出现，下面是独立示例，并�
   }
 }
 ```
+
+<a id="domain-think-tool"></a>
+#### DomainAgent 独立 Think/Tool 的精简字段
+
+以下为虚构协议示例，两条 WebSocket 消息依次到达，不代表整轮仅有这两条事件。下游分别返回 `type=think,thinkState=start` 和 `type=tool`；已有外层 envelope 不变：
+
+```json
+[
+  {
+    "type": "message", "topicId": "chat-run-run_process", "offset": "1151",
+    "payload": {
+      "type": "conversation-turn-stream",
+      "payload": {
+        "type": "stream-item", "conversationId": "session_demo", "turnId": "run_process",
+        "streamItemId": "evt_1151", "serverTimestampMs": 1791594000000,
+        "encodedItem": {
+          "encoding": "chat-event-json-v1", "event": "runtime.thinking",
+          "data": {
+            "runId": "run_process", "sessionId": "session_demo", "sequence": 1151, "type": "runtime.thinking",
+            "payload": {"source":"domain-agent","sourceType":"think","type":"think","thinkState":"start","thinkTitle":"正在分析","thinkContent":"我理解"}
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "message", "topicId": "chat-run-run_process", "offset": "1152",
+    "payload": {
+      "type": "conversation-turn-stream",
+      "payload": {
+        "type": "stream-item", "conversationId": "session_demo", "turnId": "run_process",
+        "streamItemId": "evt_1152", "serverTimestampMs": 1791594001000,
+        "encodedItem": {
+          "encoding": "chat-event-json-v1", "event": "runtime.tool",
+          "data": {
+            "runId": "run_process", "sessionId": "session_demo", "sequence": 1152, "type": "runtime.tool",
+            "payload": {"source":"domain-agent","sourceType":"tool","type":"tool","toolTitle":"glob","toolMatchRes":"[]"}
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+后续 think 增量只保留下游实际返回的字段，例如 `thinkContent`；结束帧保留 `thinkState=stop` 及可选 `thinkTime/thinkTitle/thinkContent`。`thinkTime` 是业务字段，不替代 envelope 或历史 Part 的服务端时间。完整识别边界见 [DomainAgent 协议](domain.md#独立-thinktool-帧)。
+
+FULL 模式下，`fin_ex_chat_event_t.event_type` 分别为 `runtime.thinking/runtime.tool`，`payload_json` 即上面 `encodedItem.data.payload`，不保存 WebSocket 外层。`fin_ex_chat_message_part_t` 在 assistant 保存时写入 THINKING/TOOL，已有 `content_text/title/status/channel/display_hint/visible` 单独派生；`payload_json` 只追加原有 `serverTimestampMs`，不写重复别名。
+
+`GET /v1/chat/sessions/session_demo/messages` 对应片段如下，仅展开这两条 Part，其他消息属性及正文/路由 Part 省略：
+
+```json
+{
+  "items": [{
+    "messageId":"msg_assistant","sessionId":"session_demo","parentMessageId":"msg_user",
+    "role":"assistant","content":"已完成数据检查。","runId":"run_process","assistantSource":"domain-agent",
+    "parts":[
+      {
+        "partId":"part_think","messageId":"msg_assistant","runId":"run_process",
+        "partType":"THINKING","sourceType":"think","contentText":"我理解","title":"正在分析",
+        "status":"STARTED","channel":"thinking","displayHint":"collapsible","visible":true,
+        "payload":{"source":"domain-agent","sourceType":"think","type":"think","thinkState":"start","thinkTitle":"正在分析","thinkContent":"我理解","serverTimestampMs":1791594000000},
+        "partOrder":2,"createdAt":"2026-10-10T01:00:05Z"
+      },
+      {
+        "partId":"part_tool","messageId":"msg_assistant","runId":"run_process",
+        "partType":"TOOL","sourceType":"tool","contentText":"glob","title":"工具调用",
+        "status":"STREAMING","channel":"tool","displayHint":"collapsible","visible":true,
+        "payload":{"source":"domain-agent","sourceType":"tool","type":"tool","toolTitle":"glob","toolMatchRes":"[]","serverTimestampMs":1791594001000},
+        "partOrder":3,"createdAt":"2026-10-10T01:00:05Z"
+      }
+    ]
+  }],
+  "nextCursor":null
+}
+```
+
+Part 的 `title/status/contentText` 是已有列，不是新增 payload 别名。THINKING 缺少标题时显示“思考过程”，增量状态为 STREAMING，stop 为 COMPLETED；TOOL 的 STREAMING 是展示默认值，不证明工具仍在执行。新 Part 可进入新建分享，工具普通文本中的路径不会因字段名脱敏被自动移除。no-store 仍仅实时推送这些业务事件，不能依赖历史或 Resume 补发；不回填旧历史和分享。
+
+上述 DomainAgent `type=think` 示例的 Part 展示 `title` 最多256个Unicode码点：超长截取前256码点，不追加省略号、不拆开Emoji代理对；短标题原样保留，缺失或空白仍显示“思考过程”。`payload.thinkTitle` 及 `contentText` 保持完整，因此实时推送、Event Resume与历史payload中的原始标题不受展示列上限影响。
 
 <a id="s03"></a>
 ### S03 Relay Delegate 与专家

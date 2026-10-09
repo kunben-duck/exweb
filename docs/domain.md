@@ -320,6 +320,40 @@ data: {"id": 3, "query": "生成资金流向报告", "type": "copy", "language_c
 
 data: [DONE]
 
+#### 独立 Think/Tool 帧
+
+以下 camelCase 格式是独立思考和工具事件的标准化入口，`type` 大小写敏感：
+
+```text
+data: {"type":"think","thinkState":"start","thinkTitle":"正在分析","thinkContent":"我理解"}
+
+data: {"type":"think","thinkContent":"您希望分析销售数据"}
+
+data: {"type":"think","thinkState":"stop","thinkTime":"2026-10-08T02:41:49Z","thinkTitle":"分析完成","thinkContent":"已获取数据，开始生成回答..."}
+
+data: {"type":"tool","toolTitle":"glob","toolMatchRes":"[]"}
+```
+
+- `type=think` 映射为 `runtime.thinking`，保留 `type/thinkState/thinkTitle/thinkContent/thinkTime`，并增加 `source=domain-agent/sourceType=think`。识别精确的 `start/stop`，以及状态缺失、null 或空白但有非空字符串内容/标题的增量帧；不合格式时沿用原兜底。
+- `type=tool` 且 `toolTitle` 为非空字符串时映射为 `runtime.tool`，保留 `type/toolTitle/toolMatchRes`，增加 `source=domain-agent/sourceType=tool`。`toolMatchRes` 保持原 JSON 类型；示例的 `"[]"` 是字符串，不是数组。
+- 可选字段缺失/null 时省略，其余值原样保留并按现有业务字段规则递归脱敏；不应用未知事件的诊断截断，不透传未知顶层字段。帧大小及异步回调容量限制不变。
+- payload 不新增 `status/title/text/toolName/inputPreview` 别名；不合并输入帧、不补造开始/结束事件，不根据 `thinkTime` 改写服务端事件时间。
+- 同帧携带其他字段时按“元数据 → 新思考/工具事件（替代该帧旧 state 展示事件）→ 既有结构化事件 → 正文 → 完成信号”处理；问卷、拒答及异步控制仍优先。思考或工具本身不生成正文、等待或终态。
+- 上方旧示例中的无 `type`、snake_case 帧不属于本次新增映射，继续按原规则处理；`state=THINKING` 和正文 `<think>` 协议保持不变。
+
+历史 Part 的已有展示列由组装器派生，不重复写回 payload：
+
+| Part | contentText | title | status |
+|---|---|---|---|
+| THINKING | 优先非空 thinkContent，其次 thinkTitle | 非空 thinkTitle，最多256个Unicode码点；否则“思考过程” | start→STARTED、stop→COMPLETED、增量→STREAMING |
+| TOOL | toolTitle | 工具调用 | STREAMING（展示默认值，不证明工具仍在运行） |
+
+仅新 THINKING Part 的展示 `title` 超长时截取前256个Unicode码点，不追加省略号、不拆开Emoji代理对；短标题原样保留，缺失或空白仍使用默认标题。`payload.thinkTitle` 和 `contentText` 不受该限制，Event、WebSocket及Resume中的原始标题保持完整。
+
+FULL 下 Event 的 `payload_json` 保存精简字段；assistant 保存时 THINKING/TOOL Part 的 `payload_json` 保留同一 payload，并增加已有 `serverTimestampMs`。每帧独立成 Part，默认可见、可折叠，历史、Event Resume 和新建分享保留原字段；不拼入 assistant 正文。思考仍参与既有历史正文分段，snapshot 和拒答清空优先级不变。no-store 下仅实时推送，不扩大业务留存或补发保证。异步回调复用相同映射，不回填旧 Event、Part 或分享快照。
+
+工具结果中普通文本的路径、文件名等不属于敏感字段名脱敏，可能进入历史及分享；下游应控制其内容。完整推送和历史例子见 [WebSocket 手册](websocket-response-examples.md#domain-think-tool)。
+
 #### URL 卡片的移动端地址
 
 DomainAgent 的 `cardUrl` 卡片帧可以同时携带可选的 `mobileCardUrl`：

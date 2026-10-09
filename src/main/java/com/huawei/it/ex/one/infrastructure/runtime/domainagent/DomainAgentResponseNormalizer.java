@@ -431,7 +431,9 @@ public class DomainAgentResponseNormalizer {
         }
         // 同帧可同时有状态、卡片与正文；按固定顺序拆出标准事件，事件身份始终使用可信入参。
         addMetadataEvents(runId, sessionId, root, events);
-        addStateEvent(runId, sessionId, root, events);
+        if (!addTypedProcessEvent(runId, sessionId, root, events)) {
+            addStateEvent(runId, sessionId, root, events);
+        }
         addStructuredEvents(runId, sessionId, root, events);
         String content = text(root, "content");
         if (content != null) {
@@ -473,6 +475,53 @@ public class DomainAgentResponseNormalizer {
             putIfPresent(values, "domainAgentId", text(root, "skillId"));
             events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("domain_agent", values)));
         }
+    }
+
+    private boolean addTypedProcessEvent(String runId, String sessionId, JsonNode root, List<ChatEvent> events) {
+        if (typedThinkingFrame(root)) {
+            events.add(RuntimeEvent.thinking(runId, sessionId, typedProcessPayload(root, "think",
+                    "thinkState", "thinkTitle", "thinkContent", "thinkTime")));
+            return true;
+        }
+        if ("tool".equals(text(root, "type")) && hasNonBlankText(root, "toolTitle")) {
+            events.add(RuntimeEvent.tool(runId, sessionId, typedProcessPayload(root, "tool",
+                    "toolTitle", "toolMatchRes")));
+            return true;
+        }
+        return false;
+    }
+
+    private boolean typedThinkingFrame(JsonNode root) {
+        if (!"think".equals(text(root, "type"))) {
+            return false;
+        }
+        JsonNode state = root.get("thinkState");
+        if (state != null && !state.isNull()) {
+            if (!state.isTextual()) {
+                return false;
+            }
+            if (!state.asText().isBlank()) {
+                return "start".equals(state.asText()) || "stop".equals(state.asText());
+            }
+        }
+        return hasNonBlankText(root, "thinkContent") || hasNonBlankText(root, "thinkTitle");
+    }
+
+    private boolean hasNonBlankText(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        return value != null && value.isTextual() && !value.asText().isBlank();
+    }
+
+    private Map<String, Object> typedProcessPayload(JsonNode root, String sourceType, String... fields) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "domain-agent");
+        payload.put("sourceType", sourceType);
+        payload.put("type", sourceType);
+        // 保留业务原字段；历史展示摘要由组装器提取，不在 Event 和 Part 的 JSON 中重复写别名。
+        for (String field : fields) {
+            putBusinessFieldIfPresent(payload, root, field);
+        }
+        return payload;
     }
 
     private void addStateEvent(String runId, String sessionId, JsonNode root, List<ChatEvent> events) {

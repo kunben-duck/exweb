@@ -24,6 +24,27 @@ import java.util.Map;
 class AssistantAssemblyTest {
 
     @ParameterizedTest
+    @CsvSource({"relay,think,think", "domain-agent,content.think,think", "domain-agent,state,think",
+            "domain-agent,think,other", "other,think,think"})
+    void rawProcessFieldAdaptationDoesNotChangeOtherThinkingOrToolSummaries(
+            String source, String sourceType, String type) {
+        AssistantAssembly assembly = new AssistantAssembly();
+        Map<String, Object> payload = Map.of("source", source, "sourceType", sourceType, "type", type,
+                "thinkContent", "raw thinking", "thinkTitle", "raw title", "thinkState", "stop",
+                "text", "existing text", "toolTitle", "raw tool", "toolName", "existing tool");
+        assembly.observe(RuntimeEvent.thinking("r", "s", payload));
+        assembly.observe(RuntimeEvent.tool("r", "s", payload));
+
+        assertThat(assembly.parts()).extracting(part -> part.contentText())
+                .containsExactly("existing text", "existing tool");
+        assertThat(assembly.parts()).allSatisfy(part -> {
+            assertThat(part.title()).isNull();
+            assertThat(part.status()).isNull();
+            assertThat(part.payload()).containsAllEntriesOf(payload);
+        });
+    }
+
+    @ParameterizedTest
     @CsvSource({
             "approval-request,AGENT_CLARIFICATION_REQUEST,approval-request",
             "clarification-response,AGENT_CLARIFICATION_RESPONSE,clarification-response",

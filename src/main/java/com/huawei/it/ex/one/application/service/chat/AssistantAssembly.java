@@ -23,6 +23,7 @@ import java.util.Map;
  */
 final class AssistantAssembly {
     static final String DOMAIN_AGENT_CONTENT_SEGMENT_MARKER = "<!--DOMAIN_AGENT_CONTENT_SEGMENT-->";
+    private static final int DOMAIN_AGENT_THINK_TITLE_MAX_CODE_POINTS = 256;
 
     private final StringBuilder deltaDraft = new StringBuilder();
     private final List<ChatMessagePartDraft> parts = new ArrayList<>();
@@ -367,8 +368,42 @@ final class AssistantAssembly {
 
     private static ChatMessagePartDraft runtimePart(ChatEvent event) {
         Map<String, Object> payload = eventPartPayload(event);
+        ChatMessagePartDraft typedProcessPart = domainAgentTypedProcessPart(event.type(), payload);
+        if (typedProcessPart != null) {
+            return typedProcessPart;
+        }
         String sourceType = stringValue(payload.get("sourceType"));
         return new ChatMessagePartDraft(partType(event.type(), payload), sourceType, contentText(event.type(), payload), payload);
+    }
+
+    private static ChatMessagePartDraft domainAgentTypedProcessPart(String eventType, Map<String, Object> payload) {
+        String sourceType = stringValue(payload.get("sourceType"));
+        if (!"domain-agent".equals(payload.get("source")) || sourceType == null
+                || !sourceType.equals(payload.get("type"))) {
+            return null;
+        }
+        // 仅新协议使用原字段派生已有展示列，不改旧思考事件或 Relay 的摘要规则。
+        if ("runtime.thinking".equals(eventType) && "think".equals(sourceType)) {
+            String title = firstText(payload, "thinkTitle");
+            String status = "start".equals(payload.get("thinkState")) ? "STARTED"
+                    : "stop".equals(payload.get("thinkState")) ? "COMPLETED" : "STREAMING";
+            return new ChatMessagePartDraft("THINKING", sourceType, firstText(payload, "thinkContent", "thinkTitle"),
+                    domainAgentThinkingTitle(title), status, "thinking", "collapsible", true, payload);
+        }
+        if ("runtime.tool".equals(eventType) && "tool".equals(sourceType)) {
+            return new ChatMessagePartDraft("TOOL", sourceType, firstText(payload, "toolTitle"), payload);
+        }
+        return null;
+    }
+
+    private static String domainAgentThinkingTitle(String title) {
+        if (title == null) {
+            return "思考过程";
+        }
+        // 仅限制 VARCHAR(256) 展示列；原始 thinkTitle 和 contentText 保留完整内容。
+        return title.codePointCount(0, title.length()) <= DOMAIN_AGENT_THINK_TITLE_MAX_CODE_POINTS
+                ? title
+                : title.substring(0, title.offsetByCodePoints(0, DOMAIN_AGENT_THINK_TITLE_MAX_CODE_POINTS));
     }
 
     private static ChatMessagePartDraft snapshotPart(ChatEvent event) {

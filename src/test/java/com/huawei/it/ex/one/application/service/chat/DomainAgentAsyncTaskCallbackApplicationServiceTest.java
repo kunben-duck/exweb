@@ -276,6 +276,39 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
     }
 
     @Test
+    void normalizesRawThinkingAndToolCallbackFramesWithoutPayloadAliases() throws Exception {
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                enabledProperties(), commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            service.callback(new DomainAgentAsyncTaskCallbackCommand(running.id(), "COMPLETED", "APPEND", List.of(
+                    mapper.readTree("{\"type\":\"think\",\"thinkContent\":\"分析\"}"),
+                    mapper.readTree("{\"type\":\"tool\",\"toolTitle\":\"glob\",\"toolMatchRes\":\"[]\"}")), null)).block();
+            ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
+                    ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
+            verify(commitService).commit(captor.capture());
+            var events = captor.getValue().businessEvents();
+            assertThat(events).extracting(event -> event.type()).containsExactly("runtime.thinking", "runtime.tool");
+            assertThat(events).allSatisfy(event -> assertThat(event.payload())
+                    .doesNotContainKeys("status", "title", "text", "toolName"));
+            assertThat(events.getFirst().payload()).containsEntry("thinkContent", "分析");
+            assertThat(events.getLast().payload()).containsEntry("toolMatchRes", "[]");
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
     void treatsPureTerminalFramesAsNotificationOnlyForReplace() throws Exception {
         DomainAgentProperties properties = enabledProperties();
         DomainAgentAsyncTaskCallbackCommitService commitService =

@@ -332,6 +332,92 @@ class ConfiguredDomainAgentClientTest {
     }
 
     @Test
+    void heartbeatsKeepRawStreamAliveWithoutEmittingBusinessEvents() {
+        DefaultDataBufferFactory buffers = new DefaultDataBufferFactory();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body(Flux.concat(
+                                Flux.interval(Duration.ZERO, Duration.ofSeconds(1)).take(4)
+                                        .map(index -> buffers.wrap("data: {\"type\":\"heartbeat\"}\n\n"
+                                                .getBytes(StandardCharsets.UTF_8))),
+                                Mono.delay(Duration.ofSeconds(1)).map(ignored -> buffers.wrap(
+                                        "data: {\"content\":\"answer\",\"endFlag\":true}\n\n"
+                                                .getBytes(StandardCharsets.UTF_8)))))
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setStreamIdleTimeout(Duration.ofSeconds(2));
+        properties.setStreamTotalTimeout(Duration.ofSeconds(10));
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(builder, properties,
+                new DomainAgentChatRequestMapper(properties), new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(3999))
+                .thenAwait(Duration.ofMillis(1))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "answer"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void idleTimeoutStillAppliesAfterHeartbeatsStop() {
+        DefaultDataBufferFactory buffers = new DefaultDataBufferFactory();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body(Flux.interval(Duration.ZERO, Duration.ofSeconds(1)).take(3)
+                                .<DataBuffer>map(index -> buffers.wrap("data: {\"type\":\"heartbeat\"}\n\n"
+                                        .getBytes(StandardCharsets.UTF_8)))
+                                .concatWith(Flux.never())
+                                .doOnCancel(() -> cancelled.set(true)))
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setStreamIdleTimeout(Duration.ofSeconds(2));
+        properties.setStreamTotalTimeout(Duration.ofSeconds(10));
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(builder, properties,
+                new DomainAgentChatRequestMapper(properties), new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(3999))
+                .thenAwait(Duration.ofMillis(1))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(TimeoutException.class)
+                        .hasMessageContaining("stream IDLE timeout"))
+                .verify();
+        assertThat(cancelled).isTrue();
+    }
+
+    @Test
+    void heartbeatsDoNotExtendAbsoluteTotalDeadline() {
+        DefaultDataBufferFactory buffers = new DefaultDataBufferFactory();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body(Flux.interval(Duration.ZERO, Duration.ofSeconds(1))
+                                .<DataBuffer>map(index -> buffers.wrap("data: {\"type\":\"heartbeat\"}\n\n"
+                                        .getBytes(StandardCharsets.UTF_8)))
+                                .doOnCancel(() -> cancelled.set(true)))
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setStreamIdleTimeout(Duration.ofSeconds(2));
+        properties.setStreamTotalTimeout(Duration.ofMillis(3500));
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(builder, properties,
+                new DomainAgentChatRequestMapper(properties), new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(3499))
+                .thenAwait(Duration.ofMillis(1))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(TimeoutException.class)
+                        .hasMessageContaining("stream TOTAL timeout"))
+                .verify();
+        assertThat(cancelled).isTrue();
+    }
+
+    @Test
     void queryAppliesIdleTimeoutBeforeFirstRawChunk() {
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)

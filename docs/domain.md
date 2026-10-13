@@ -320,6 +320,23 @@ data: {"id": 3, "query": "生成资金流向报告", "type": "copy", "language_c
 
 data: [DONE]
 
+#### Heartbeat 保活帧
+
+下游可在等待业务结果期间发送合法 JSON 心跳，`type` 必须精确为小写 `heartbeat`：
+
+```text
+data: {"type":"heartbeat"}
+
+```
+
+- 现有 `message:` 和裸 JSON 格式同样支持；跨 chunk、连续或与业务帧交错的心跳均被过滤。
+- 整帧仅做传输保活，不生成 ChatEvent、不分配 sequence、不作为业务事件推送，也不写入 Event 或历史 Parts。FULL/no-store 行为一致。
+- 不刷新或清空待处理正文、思考分段缓存，不结束 SSE，不触发问卷、异步等待或 Run 终态。下游不得把正文、卡片、会话元数据或结束标记混入心跳帧；混入字段也会被忽略。
+- 空闲超时仍在原始 chunk 层计时，心跳到达可重置空闲计时；停止心跳后仍受空闲超时保护，绝对总期限不因心跳延长。
+- JSON 解析及原有帧容量保护仍先执行，畸形或超大输入不能利用 `heartbeat` 绕过限制。不扩展 `HEARTBEAT`、`ping/pong`、非 JSON 文本或独立 SSE 注释 `: heartbeat` 的处理。
+- 异步回调复用相同过滤，并保留回调本身的容量校验。纯心跳不算业务结果，即使指定 `REPLACE` 也不清空已有正文或 Parts；回调请求的任务终态仍按原协议处理，不能用终态回调代替连接保活。
+- 此规则仅针对 DomainAgent 下游帧，不改变前端 WebSocket 心跳、Relay、Execution 续租或 Stop。
+
 #### 独立 Think/Tool 帧
 
 以下 camelCase 格式是独立思考和工具事件的标准化入口，`type` 大小写敏感：

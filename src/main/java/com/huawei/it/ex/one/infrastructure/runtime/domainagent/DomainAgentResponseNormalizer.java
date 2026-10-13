@@ -401,6 +401,10 @@ public class DomainAgentResponseNormalizer {
                     "domain-agent", "unknown", "event", "runtime", "debug", null,
                     Map.of("value", truncate(root.asText(""))))));
         }
+        // 心跳整帧仅用于传输保活，不刷新正文/思考缓存，也不进入业务事件及持久化链路。
+        if ("heartbeat".equals(text(root, "type"))) {
+            return List.of();
+        }
         List<ChatEvent> events = new ArrayList<>();
         if (questionnaireFrame(root)) {
             return questionnaireEvents(runId, sessionId, root, state);

@@ -254,10 +254,12 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
             ObjectMapper mapper = new ObjectMapper();
             service.callback(new DomainAgentAsyncTaskCallbackCommand(
                     running.id(), "COMPLETED", resultMode, List.of(
+                    mapper.readTree("{\"type\":\"heartbeat\"}"),
                     mapper.readTree("""
                             {"type":"message.completed","content":"result",
                              "cardUrl":"https://cards.test/web.js","mobileCardUrl":"https://cards.test/mobile.js"}
-                            """)), null)).block();
+                            """),
+                    mapper.readTree("{\"type\":\"heartbeat\"}")), null)).block();
 
             ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
                     ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
@@ -303,6 +305,38 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
                     .doesNotContainKeys("status", "title", "text", "toolName"));
             assertThat(events.getFirst().payload()).containsEntry("thinkContent", "分析");
             assertThat(events.getLast().payload()).containsEntry("toolMatchRes", "[]");
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void treatsHeartbeatOnlyReplaceCallbackAsNotificationWithoutBusinessResult() throws Exception {
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                enabledProperties(), commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", "REPLACE", List.of(
+                    mapper.readTree("{\"type\":\"heartbeat\"}"),
+                    mapper.readTree("{\"type\":\"heartbeat\",\"content\":\"ignored\",\"endFlag\":true}")), null)).block();
+
+            ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
+                    ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
+            verify(commitService).commit(captor.capture());
+            assertThat(captor.getValue().resultMode()).isEqualTo("REPLACE");
+            assertThat(captor.getValue().resultProvided()).isFalse();
+            assertThat(captor.getValue().businessEvents()).isEmpty();
         } finally {
             service.closeScheduler();
         }

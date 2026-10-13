@@ -12,6 +12,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
@@ -27,6 +28,9 @@ import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.SequencedChatEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentResponseNormalizer;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -48,6 +52,30 @@ class ChatEventPipelineRetentionTest {
     private static final String SESSION_ID = "session1";
     private static final RunExecutionClaim CLAIM =
             new RunExecutionClaim(RUN_ID, "instance1", 3L);
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void heartbeatDoesNotPersistSequencePublishOrCreateParts(boolean placeholder) {
+        Fixture fixture = new Fixture();
+        RunEventPipelineContext context = fixture.context(placeholder);
+        DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(new ObjectMapper());
+        var state = normalizer.newStreamState();
+        Flux<ChatEvent> input = Flux.just("data: {\"type\":\"heartbeat\"}\n\n").repeat(2)
+                .concatMapIterable(chunk -> normalizer.normalize(RUN_ID, SESSION_ID, chunk, state))
+                .concatWith(Flux.defer(() -> Flux.fromIterable(normalizer.finish(RUN_ID, SESSION_ID, state))));
+        AtomicLong writes = new AtomicLong();
+
+        List<ChatEvent> output = fixture.pipeline.persistAndPublish(input, context, event -> {
+            writes.incrementAndGet();
+            return Mono.just(stored(event, 101L));
+        }).collectList().block();
+
+        assertThat(output).isEmpty();
+        assertThat(writes).hasValue(0);
+        assertThat(context.assistant().parts()).isEmpty();
+        assertThat(context.assistant().shouldPersistMessage()).isFalse();
+        verifyNoInteractions(fixture.streamService, fixture.bindingService);
+    }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})

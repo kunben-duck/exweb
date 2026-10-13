@@ -15,13 +15,112 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 class DomainAgentResponseNormalizerTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(objectMapper);
+
+    @ParameterizedTest
+    @ValueSource(strings = {"data: ", "message: ", ""})
+    void ignoresHeartbeatAcrossChunkBoundariesAndConsecutiveFrames(String prefix) {
+        String frame = prefix + "{\"type\":\"heartbeat\"}\n\n";
+        for (int split = 1; split < frame.length(); split++) {
+            var state = normalizer.newStreamState();
+            assertThat(normalizer.normalize("run1", "session1", frame.substring(0, split), state)).isEmpty();
+            assertThat(normalizer.normalize("run1", "session1", frame.substring(split) + frame + frame, state))
+                    .isEmpty();
+            assertThat(normalizer.finish("run1", "session1", state)).isEmpty();
+        }
+    }
+
+    @Test
+    void ignoresWholeHeartbeatWithoutFlushingContentOrChangingThinkingState() {
+        var state = normalizer.newStreamState();
+        List<ChatEvent> events = new ArrayList<>();
+        events.addAll(normalizer.normalize("run1", "session1", "{\"content\":\"before<thi\"}", state));
+        String heartbeat = """
+                {"type":"heartbeat","sessionId":"ignored-session","traceId":"ignored-trace",
+                 "messageId":"ignored-message","content":"ignored-content","endFlag":true,
+                 "cardUrl":"https://cards.test/ignored.js","state":"completed",
+                 "operation_type":"questionnaire","approval_id":"ignored-approval"}
+                """;
+        assertThat(normalizer.normalize("run1", "session1", heartbeat, state)).isEmpty();
+        events.addAll(normalizer.normalize("run1", "session1", "{\"content\":\"nk>reason</thi\"}", state));
+        assertThat(normalizer.normalize("run1", "session1", heartbeat, state)).isEmpty();
+        events.addAll(normalizer.normalize("run1", "session1", "{\"content\":\"nk>after\",\"endFlag\":true}", state));
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly(
+                "message.delta", "runtime.thinking", "runtime.thinking", "runtime.thinking",
+                "message.delta", "message.completed");
+        assertThat(events.getFirst().payload()).containsEntry("delta", "before");
+        assertThat(events.get(2).payload()).containsEntry("text", "reason");
+        assertThat(events.get(4).payload()).containsEntry("delta", "after");
+        assertThat(events.toString()).doesNotContain("ignored-");
+        assertThat(normalizer.finish("run1", "session1", state)).isEmpty();
+    }
+
+    @Test
+    void heartbeatInterleavingPreservesBusinessEventsAndTheirOrder() {
+        List<String> frames = List.of(
+                "{\"content\":\"answer\"}",
+                "{\"type\":\"think\",\"thinkState\":\"start\",\"thinkContent\":\"thinking\"}",
+                "{\"type\":\"tool\",\"toolTitle\":\"ls\",\"toolMatchRes\":\"[]\"}",
+                "{\"cardUrl\":\"https://cards.test/web.js\"}",
+                "{\"type\":\"think\",\"thinkState\":\"stop\"}",
+                "{\"content\":\"done\",\"endFlag\":true}");
+        String heartbeat = "data: {\"type\":\"heartbeat\"}\n\n";
+        String baseline = "data: " + String.join("\n\ndata: ", frames) + "\n\n";
+        String interleaved = heartbeat + "data: " + String.join("\n\n" + heartbeat + "data: ", frames)
+                + "\n\n" + heartbeat;
+        var state = normalizer.newStreamState();
+        List<ChatEvent> expected = normalizer.normalize("run1", "session1", baseline);
+        List<ChatEvent> actual = normalizer.normalize("run1", "session1", interleaved, state);
+
+        assertThat(actual).extracting(ChatEvent::type).containsExactly(
+                "message.delta", "runtime.thinking", "runtime.tool", "runtime.card",
+                "runtime.thinking", "message.delta", "message.completed");
+        assertThat(actual).extracting(ChatEvent::payload).containsExactlyElementsOf(
+                expected.stream().map(ChatEvent::payload).toList());
+        assertThat(normalizer.finish("run1", "session1", state)).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"HEARTBEAT", " heartbeat ", "ping", "pong"})
+    void doesNotBroadenHeartbeatTypeMatching(String type) {
+        assertThat(normalizer.normalize("run1", "session1", "{\"type\":\"" + type + "\"}"))
+                .singleElement().satisfies(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.event");
+                    assertThat(event.payload()).containsEntry("sourceType", "unknown");
+                });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"data: {type:\"heartbeat\"}\n\n", "data: heartbeat\n\n", ": heartbeat\n\n"})
+    void keepsExistingDiagnosticBehaviorOutsideJsonHeartbeatProtocol(String frame) {
+        assertThat(normalizer.normalize("run1", "session1", frame)).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo("runtime.event");
+            assertThat(event.payload()).containsEntry("sourceType", "invalid-json");
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void heartbeatCannotBypassCompleteOrPendingFrameSizeLimit(boolean complete) {
+        DomainAgentProperties properties = new DomainAgentProperties();
+        properties.setMaxPendingFrameBytes(128);
+        DomainAgentResponseNormalizer limited = new DomainAgentResponseNormalizer(objectMapper, properties);
+        String frame = "data: {\"type\":\"heartbeat\",\"padding\":\"" + "x".repeat(200)
+                + (complete ? "\"}\n\n" : "");
+        assertThatThrownBy(() -> limited.normalize("run1", "session1", frame))
+                .isInstanceOf(DomainAgentProtocolException.class)
+                .hasMessageContaining("DOMAIN_AGENT_FRAME_TOO_LARGE");
+    }
 
     @Test
     void preservesMobileCardUrlWithoutChangingCardClassification() {

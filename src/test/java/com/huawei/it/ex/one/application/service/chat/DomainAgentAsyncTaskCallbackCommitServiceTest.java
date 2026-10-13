@@ -31,10 +31,13 @@ import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.domain.notification.UserNotification;
 import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
+import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentResponseNormalizer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
@@ -164,14 +167,21 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
         assertThat(commandCaptor.getValue().replaceCurrentRunParts()).isTrue();
     }
 
-    @Test
-    void replaceWithoutBusinessResultUpdatesOnlyAsyncMetadata() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void replaceWithoutBusinessResultUpdatesOnlyAsyncMetadata(boolean heartbeat) throws Exception {
         Fixture fixture = new Fixture();
         fixture.prepare(ChatRunStatus.COMPLETED, 12L, 10L);
+        ObjectMapper mapper = new ObjectMapper();
+        DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(mapper);
+        List<ChatEvent> events = heartbeat
+                ? normalizer.normalizeCallbackFrame(fixture.running.id(), fixture.running.sessionId(),
+                        mapper.readTree("{\"type\":\"heartbeat\"}"), normalizer.newStreamState())
+                : List.of();
 
         DomainAgentAsyncTaskCallbackCommitService.CommitResult result = fixture.service.commit(
                 new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
-                        fixture.running.id(), true, "REPLACE", false, List.of(), null));
+                        fixture.running.id(), true, "REPLACE", !events.isEmpty(), events, null));
 
         assertThat(result.events()).extracting(item -> item.event().type()).containsExactly(
                 "run.async_finished", "message.completed", "run.completed");

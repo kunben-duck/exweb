@@ -21,7 +21,9 @@ import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -36,6 +38,8 @@ import java.util.concurrent.Semaphore;
  */
 @Service
 public class ChatShareDeliveryApplicationService {
+    private static final int MAX_LINK_URL_CODE_POINTS = 1024;
+
     private final ChatShareRepository shareRepository;
     private final ChatShareDeliveryRepository deliveryRepository;
     private final ChatShareDeliveryProviderRegistry providerRegistry;
@@ -70,7 +74,7 @@ public class ChatShareDeliveryApplicationService {
         DeliveryTargets targets = normalizeTargets(safeCommand.targetAccounts(), safeCommand.groupIds());
         String providerCode = normalizeProvider(safeCommand.provider());
         ChatShareDeliveryProvider provider = providerRegistry.requiredProvider(providerCode);
-        String linkUrl = buildShareUrl(share.id());
+        String linkUrl = buildShareUrl(share.id(), providerCode);
         String title = chooseTitle(safeCommand.title(), share.title());
         String content = chooseContent(safeCommand.content());
         ChatShareProviderDeliveryRequest providerRequest = new ChatShareProviderDeliveryRequest(
@@ -180,12 +184,25 @@ public class ChatShareDeliveryApplicationService {
         return code.toLowerCase(Locale.ROOT);
     }
 
-    private String buildShareUrl(String shareId) {
+    private String buildShareUrl(String shareId, String providerCode) {
         String prefix = properties.normalizedShareUrlPrefix();
         if (prefix.isBlank()) {
             throw new IllegalStateException("未配置 financeex.share.share-url-prefix");
         }
-        return prefix + shareId;
+        String webUrl = prefix + shareId;
+        String mobilePrefix = properties.normalizedMobileShareUrlPrefix();
+        if (!"welink".equals(providerCode) || mobilePrefix.isBlank()) {
+            return webUrl;
+        }
+        // 按约定保留标准 Base64 原文和分享页 hash 路由位置，不额外 URL 编码。
+        String mobileUrl = mobilePrefix + shareId;
+        String linkUrl = webUrl + "&welink_open_uri="
+                + Base64.getEncoder().encodeToString(mobileUrl.getBytes(StandardCharsets.UTF_8));
+        // 在外部发送前检查落库列上限，避免链接已送达但发送记录无法保存。
+        if (linkUrl.codePointCount(0, linkUrl.length()) > MAX_LINK_URL_CODE_POINTS) {
+            throw new IllegalStateException("移动端分享链接拼接后超过1024字符，请检查分享链接前缀配置");
+        }
+        return linkUrl;
     }
 
     private String chooseTitle(String requestTitle, String shareTitle) {

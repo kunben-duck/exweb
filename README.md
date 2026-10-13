@@ -404,6 +404,18 @@ WeLink 出站请求会设置
 `financeex.share.delivery.max-concurrency` 本机并发保护，避免外部发送 provider 抖动时占满异步工作线程。
 WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.delivery.providers.welink.max-retries` 调整；为避免误配拖住 Servlet 工作线程，运行时最多按 10 次重试生效。
 
+WeLink 可选支持移动端跳转：配置 `financeex.share.mobile-share-url-prefix`
+（环境变量 `FINANCEEX_SHARE_MOBILE_URL_PREFIX`，默认空），例如
+`h5://S013536/html/index.html#/share?shareId=`。后端将该前缀 trim 后拼接同一个 `shareId`，
+对完整移动地址进行 UTF-8 标准 Base64 编码，在原 `linkUrl` 末尾追加
+`&welink_open_uri=<Base64>`，保留原 hash 路由位置及 Base64 的 `+ / =`，不额外 URL 编码。
+Web 前缀应配置为对应分享页完整前缀，例如 `https://example.com/#/snapshot?shareId=`；
+不自动补查询分隔符或替换占位符。移动前缀缺失或空白、或者 provider 不是 `welink` 时保持旧链接。
+两个发送入口共用此规则，出站、发送记录及响应的 `linkUrl` 一致，前端无需增加请求字段。
+启用移动拼接后，最终链接超过1024个Unicode码点会在外部发送和记录写入前报配置状态异常，
+不截断链接；已创建分享快照仍保留。仅创建分享不返回完整链接，旧快照和发送记录不回填。
+Base64不是加密；WeLink对hash参数、`+`字符及移动唤起的实际支持需部署联调验证。
+
 ## 存储命名
 
 所有数据库表统一使用 `fin_ex_*_t`：

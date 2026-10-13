@@ -4623,6 +4623,12 @@ components:
         linkUrl:
           type: string
           nullable: true
+          description: >-
+            发送给Provider并保存到发送记录的完整分享页链接。默认由share-url-prefix拼接shareId。
+            仅welink且服务端mobile-share-url-prefix非空时，追加&welink_open_uri=，其值为
+            trim(mobile-share-url-prefix)+shareId的UTF-8标准Base64，保留+/=，不额外URL编码，
+            参数保留在原hash路由之后。启用移动拼接时最终链接最多1024个Unicode码点，超限在发送前报状态异常。
+            已有分享发送和一键创建发送共用该规则，前端不增加请求字段；配置为空时保持原链接。
         errorCode:
           type: string
           nullable: true

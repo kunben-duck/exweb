@@ -25,13 +25,18 @@ import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 import com.huawei.it.ex.one.domain.chat.ChatShareSelectedMessageSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatShareSummary;
+import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +47,148 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 class ChatShareDeliveryApplicationServiceTest {
+    private static final String WEB_PREFIX = "https://ai.finance.huawei.com/eureka/aiassistant/#/snapshot?shareId=";
+    private static final String MOBILE_PREFIX = "h5://S013536/html/index.html#/share?shareId=";
+
+    @Test
+    void mobileShareLinkMatchesTheWireExampleExactly() {
+        Fixture fixture = fixture(providerResult(true));
+        String shareId = "share_6b2760e8d7164543876d7dcd37da2d2d";
+        fixture.shares.save(selectedShare(shareId, List.of(selectedMessage("msg1", "user", "问题"))));
+        fixture.properties.setShareUrlPrefix(" " + WEB_PREFIX + " \t");
+        fixture.properties.setMobileShareUrlPrefix("\t " + MOBILE_PREFIX + " ");
+
+        ChatShareDelivery delivery = deliver(fixture, shareId, " WELINK ");
+
+        String encoded = "aDU6Ly9TMDEzNTM2L2h0bWwvaW5kZXguaHRtbCMvc2hhcmU/c2hhcmVJZD1z"
+                + "aGFyZV82YjI3NjBlOGQ3MTY0NTQzODc2ZDdkY2QzN2RhMmQyZA==";
+        assertThat(delivery.linkUrl()).isEqualTo(WEB_PREFIX + shareId + "&welink_open_uri=" + encoded);
+        assertThat(new String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8))
+                .isEqualTo(MOBILE_PREFIX + shareId);
+        assertThat(((CapturingProvider) fixture.provider).lastRequest.linkUrl()).isEqualTo(delivery.linkUrl());
+        assertThat(fixture.deliveries.saved).containsExactly(delivery);
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {" \t\n "})
+    void absentMobilePrefixKeepsTheOriginalLink(String prefix) {
+        Fixture fixture = fixture(providerResult(true));
+        fixture.properties.setMobileShareUrlPrefix(prefix);
+
+        assertThat(deliver(fixture, "share1", "welink").linkUrl())
+                .isEqualTo("https://finex.example.com/share/share1");
+    }
+
+    @Test
+    void usesUtf8AndStandardBase64WithoutUrlEncodingOrLineBreaks() {
+        Fixture fixture = fixture(providerResult(true));
+        String prefix = "h5://S013536/中文/😀/index1.html#/share?shareId=";
+        fixture.properties.setMobileShareUrlPrefix(prefix);
+
+        String link = deliver(fixture, "share1", "welink").linkUrl();
+        String encoded = link.substring(link.indexOf("&welink_open_uri=") + "&welink_open_uri=".length());
+
+        assertThat(encoded).isEqualTo(Base64.getEncoder().encodeToString((prefix + "share1")
+                .getBytes(StandardCharsets.UTF_8)));
+        assertThat(encoded).contains("+", "/", "=").doesNotContain("%", "\r", "\n");
+        assertThat(new String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8))
+                .isEqualTo(prefix + "share1");
+    }
+
+    @Test
+    void otherProvidersDoNotAppendMobileLinkOrApplyTheNewLengthCheck() {
+        CapturingProvider provider = new CapturingProvider(providerResult(true)) {
+            @Override
+            public String providerCode() {
+                return "custom";
+            }
+        };
+        Fixture fixture = fixture(provider);
+        fixture.properties.setMobileShareUrlPrefix(MOBILE_PREFIX);
+        fixture.properties.setShareUrlPrefix("https://example.com/" + "a".repeat(1024));
+
+        ChatShareDelivery delivery = deliver(fixture, "share1", "custom");
+
+        assertThat(delivery.linkUrl()).isEqualTo(fixture.properties.getShareUrlPrefix() + "share1");
+        assertThat(provider.lastRequest.linkUrl()).isEqualTo(delivery.linkUrl());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1023, 1024, 1025})
+    void checksFinalLinkCodePointsBeforeDelivery(int length) {
+        Fixture fixture = fixture(providerResult(true));
+        fixture.properties.setMobileShareUrlPrefix(MOBILE_PREFIX);
+        String encoded = Base64.getEncoder().encodeToString((MOBILE_PREFIX + "share1")
+                .getBytes(StandardCharsets.UTF_8));
+        String fixed = "https://example.com/#/snapshot?shareId=share1&welink_open_uri=" + encoded;
+        fixture.properties.setShareUrlPrefix("https://example.com/#/"
+                + "😀".repeat(length - fixed.length()) + "snapshot?shareId=");
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        if (length > 1024) {
+            assertThatThrownBy(() -> deliver(fixture, "share1", "welink"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("1024");
+            assertThat(provider.lastRequest).isNull();
+            assertThat(fixture.deliveries.saved).isEmpty();
+        } else {
+            String link = deliver(fixture, "share1", "welink").linkUrl();
+            assertThat(link.codePointCount(0, link.length())).isEqualTo(length);
+            assertThat(link.length()).isGreaterThan(1024);
+            assertThat(provider.lastRequest.linkUrl()).isEqualTo(link);
+        }
+    }
+
+    @Test
+    void blankWebPrefixStillFailsBeforeSendingEvenWithMobileConfigured() {
+        Fixture fixture = fixture(providerResult(true));
+        fixture.properties.setShareUrlPrefix(" ");
+        fixture.properties.setMobileShareUrlPrefix(MOBILE_PREFIX);
+
+        assertThatThrownBy(() -> deliver(fixture, "share1", "welink"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("未配置 financeex.share.share-url-prefix");
+        assertThat(((CapturingProvider) fixture.provider).lastRequest).isNull();
+        assertThat(fixture.deliveries.saved).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void mobileLinkDoesNotBypassRevocationOrExpiration(boolean revoked) {
+        Fixture fixture = fixture(providerResult(true));
+        fixture.properties.setMobileShareUrlPrefix(MOBILE_PREFIX);
+        ChatShare original = share();
+        ChatShare unavailable = revoked ? original.revoke(Instant.now()) : new ChatShare(
+                original.id(), original.tenantId(), original.ownerUserId(), original.sourceSessionId(),
+                original.sourceUserMessageId(), original.sourceAssistantMessageId(), original.sourceRunId(),
+                original.title(), original.scope(), original.visibility(), original.status(), Instant.EPOCH,
+                null, original.snapshot(), original.createdAt(), original.updatedAt());
+        fixture.shares.save(unavailable);
+
+        assertThatThrownBy(() -> deliver(fixture, "share1", "welink"))
+                .isInstanceOf(ChatShareUnavailableException.class)
+                .hasMessage(revoked ? "分享已撤销" : "分享已过期");
+        assertThat(((CapturingProvider) fixture.provider).lastRequest).isNull();
+        assertThat(fixture.deliveries.saved).isEmpty();
+    }
+
+    @Test
+    void providerFailureStillSavesTheMobileLinkAndKeepsTheSnapshot() {
+        Fixture fixture = fixture(providerResult(false));
+        fixture.properties.setMobileShareUrlPrefix(MOBILE_PREFIX);
+        ChatShare original = fixture.shares.findById("share1").orElseThrow();
+
+        ChatShareDelivery delivery = deliver(fixture, "share1", "welink");
+
+        assertThat(delivery.status()).isEqualTo("FAILED");
+        assertThat(delivery.errorCode()).isEqualTo("PROVIDER_ERROR");
+        assertThat(delivery.linkUrl()).contains("&welink_open_uri=");
+        assertThat(((CapturingProvider) fixture.provider).lastRequest.linkUrl()).isEqualTo(delivery.linkUrl());
+        assertThat(fixture.deliveries.saved).containsExactly(delivery);
+        assertThat(fixture.shares.findById("share1")).contains(original);
+    }
+
     @Test
     void deliverMapsTargetsAndLinkToProviderRequest() {
         Fixture fixture = fixture(providerResult(true));
@@ -280,6 +427,11 @@ class ChatShareDeliveryApplicationServiceTest {
 
         assertThat(assistantDelivery.content()).isEmpty();
         assertThat(userDelivery.content()).isEmpty();
+    }
+
+    private ChatShareDelivery deliver(Fixture fixture, String shareId, String provider) {
+        return fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                shareId, provider, List.of("a"), List.of(), null, null, null, RuntimeForwardHeaders.empty()));
     }
 
     private Fixture fixture(ChatShareProviderDeliveryResult providerResult) {

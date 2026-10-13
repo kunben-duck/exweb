@@ -17,6 +17,8 @@ import java.time.Duration;
 public class ChatShareDeliveryProperties {
     /** 分享页 URL 前缀，发送 provider 会在后面拼接 shareId。 */
     private String shareUrlPrefix = "";
+    /** 可选移动端分享页前缀；仅 WeLink 发送时拼接 shareId 并进行标准 Base64 编码。 */
+    private String mobileShareUrlPrefix = "";
     /** 发送行为配置。 */
     private Delivery delivery = new Delivery();
 
@@ -26,6 +28,14 @@ public class ChatShareDeliveryProperties {
 
     public void setShareUrlPrefix(String shareUrlPrefix) {
         this.shareUrlPrefix = shareUrlPrefix;
+    }
+
+    public String getMobileShareUrlPrefix() {
+        return mobileShareUrlPrefix;
+    }
+
+    public void setMobileShareUrlPrefix(String mobileShareUrlPrefix) {
+        this.mobileShareUrlPrefix = mobileShareUrlPrefix;
     }
 
     public Delivery getDelivery() {
@@ -38,6 +48,10 @@ public class ChatShareDeliveryProperties {
 
     public String normalizedShareUrlPrefix() {
         return shareUrlPrefix == null ? "" : shareUrlPrefix.trim();
+    }
+
+    public String normalizedMobileShareUrlPrefix() {
+        return mobileShareUrlPrefix == null ? "" : mobileShareUrlPrefix.trim();
     }
 
     public int normalizedContentMaxLength() {

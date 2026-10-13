@@ -2603,6 +2603,32 @@ WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.deli
 }
 ```
 
+**可选移动端分享地址（服务端配置，前端请求不变）**
+
+```text
+FINANCEEX_SHARE_URL_PREFIX=https://ai.finance.huawei.com/eureka/aiassistant/#/snapshot?shareId=
+FINANCEEX_SHARE_MOBILE_URL_PREFIX=h5://S013536/html/index.html#/share?shareId=
+```
+
+移动配置对应 `financeex.share.mobile-share-url-prefix`，默认空。仅 `provider=welink` 且该配置非空时，
+后端将两个前缀分别 trim 后拼接可信分享记录的同一个 `shareId`，完整移动地址按 UTF-8 进行标准Base64编码，
+再在Web链接末尾追加 `&welink_open_uri=<Base64>`。不移动 `#`、不补分隔符、不替换占位符，
+不使用URL-safe Base64、不换行、不再百分号编码；配置应包含原始地址及必要的 `?shareId=`。
+
+例如 `shareId=share_6b2760e8d7164543876d7dcd37da2d2d` 时，发送响应中的链接字段为：
+
+```json
+{
+  "linkUrl": "https://ai.finance.huawei.com/eureka/aiassistant/#/snapshot?shareId=share_6b2760e8d7164543876d7dcd37da2d2d&welink_open_uri=aDU6Ly9TMDEzNTM2L2h0bWwvaW5kZXguaHRtbCMvc2hhcmU/c2hhcmVJZD1zaGFyZV82YjI3NjBlOGQ3MTY0NTQzODc2ZDdkY2QzN2RhMmQyZA=="
+}
+```
+
+已有分享发送及一键创建发送共用该规则，WeLink请求、发送记录和接口响应保留相同的最终 `linkUrl`。
+单轮和多消息分享均适用；只创建分享仍不返回链接。移动前缀缺失、null、空白或其他Provider保留原行为。
+启用拼接后的链接最多1024个Unicode码点；超限返回现有 `409/CONFLICT` 状态异常响应，不调用Provider、不写发送记录、
+不截断链接，已经创建的分享快照不撤销。旧分享快照和发送记录不回填。
+Base64不提供加密，WeLink实际识别hash内参数、保留 `+` 字符和唤起H5页面的行为仍需联调确认。
+
 发送失败时，响应仍返回发送记录，`status=FAILED`，并带 `errorCode/errorMessage`。已创建的分享快照不会被删除、撤销或回滚，前端可以再次调用发送接口重试。
 
 一键创建并发送：

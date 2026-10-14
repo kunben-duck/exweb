@@ -98,8 +98,11 @@ final class ChatRuntimeDispatchCoordinator {
     private Flux<ChatEvent> executeRouteFrames(RoutePipelineRequest request) {
         IntentResultPersistenceBarrier persistenceBarrier = new IntentResultPersistenceBarrier();
         // 直连或 Binding 已给出路由时不调用 Intent；其余请求才携带本 Run 的可信 userMessageId 识别。
-        Flux<RouteSignalFrame> frames = Flux.defer(() -> request.routeRef().get() == null
-                        ? routeSignalService.routeInitialWithProgress(new RouteSignalRequest(
+        Flux<RouteSignalFrame> frames = Flux.defer(() -> {
+            if (request.routeRef().get() != null) {
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(request.routeRef().get())));
+            }
+            RouteSignalRequest signalRequest = new RouteSignalRequest(
                                 request.runId(),
                                 request.user(),
                                 request.session(),
@@ -107,9 +110,11 @@ final class ChatRuntimeDispatchCoordinator {
                                 request.attachments(),
                                 request.memory(),
                                 request.intentQuery(),
-                                request.run() == null ? null : request.run().userMessageId()))
-                        : Flux.just(RouteSignalFrame.result(
-                                RouteSignalResult.of(request.routeRef().get()))));
+                                request.run() == null ? null : request.run().userMessageId());
+            return RouteSwitchRerouteContext.authorized(request.runCommand())
+                    ? routeSignalService.routeIntentWithProgress(signalRequest)
+                    : routeSignalService.routeInitialWithProgress(signalRequest);
+        });
         return frames.concatMap(frame -> executeFrame(request, frame, persistenceBarrier));
     }
 
@@ -409,7 +414,7 @@ final class ChatRuntimeDispatchCoordinator {
                 request.messageSkill(),
                 request.pendingInteractionPayloadRef(),
                 request.deferredDomainAgentBindingRef(),
-                request.pendingRouteMemoryDecisionRef());
+                request.pendingRouteMemoryDecisionRef(), request.pendingRouteSwitchAppliedEventRef());
         return domainAgentRefusalCoordinator.continueAfterClarification(
                 new DomainAgentRefusalCoordinator.ClarifiedContinuation(
                         context,

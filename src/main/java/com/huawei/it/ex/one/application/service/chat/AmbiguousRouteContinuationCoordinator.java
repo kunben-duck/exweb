@@ -129,7 +129,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 routeRef,
                 bindingRef,
                 runtimeSessionModeRef,
-                new AssistantAssembly(),
+                new AssistantAssembly(RouteSwitchRerouteContext.continuationPersistenceState(started.command())),
+                new AtomicReference<>(),
                 new AtomicReference<>(),
                 new AtomicReference<>(),
                 new AtomicReference<>());
@@ -147,7 +148,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 request.startAttempt(),
                 request.input().cumulativeDocumentIds(),
                 runtimeReferences.deferredDomainAgentBindingRef(),
-                runtimeReferences.pendingRouteMemoryDecisionRef());
+                runtimeReferences.pendingRouteMemoryDecisionRef(),
+                runtimeReferences.pendingRouteSwitchAppliedEventRef());
         // 候选来自已认领 Interaction 的选择计划，不再调用 Intent；子技能仍进入统一 Gate 和 Runtime。
         RouteSignalResult routeSignal = selectionResolver.routeSignal(
                 started.plan().candidate(),
@@ -162,9 +164,8 @@ final class AmbiguousRouteContinuationCoordinator {
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(
                     context,
-                    () -> Flux.concat(
-                            Flux.just(responseEvent),
-                            runtimeDispatchCoordinator.executeResolved(
+                    () -> RouteSwitchRerouteContext.afterResponse(started.command(), responseEvent,
+                            () -> runtimeDispatchCoordinator.executeResolved(
                                     routeRequest(
                                             request,
                                             started,
@@ -209,7 +210,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 runtimeReferences.assistant().messageSkill(),
                 runtimeReferences.pendingInteractionPayloadRef(),
                 runtimeReferences.deferredDomainAgentBindingRef(),
-                runtimeReferences.pendingRouteMemoryDecisionRef());
+                runtimeReferences.pendingRouteMemoryDecisionRef(),
+                runtimeReferences.pendingRouteSwitchAppliedEventRef());
     }
 
     record Request(
@@ -244,7 +246,8 @@ final class AmbiguousRouteContinuationCoordinator {
             AssistantAssembly assistant,
             AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
             AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
-            AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef
+            AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef,
+            AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
     ) {
     }
 }

@@ -46,7 +46,8 @@ record DomainAgentRunContext(
         MessageSkillTracker messageSkill,
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
-        AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef
+        AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef,
+        AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
 ) {
     DomainAgentRunContext {
         userMessageId = userMessageId == null || userMessageId.isBlank() ? null : userMessageId.trim();
@@ -63,6 +64,24 @@ record DomainAgentRunContext(
         pendingRouteMemoryDecisionRef = pendingRouteMemoryDecisionRef == null
                 ? new AtomicReference<>()
                 : pendingRouteMemoryDecisionRef;
+        pendingRouteSwitchAppliedEventRef = pendingRouteSwitchAppliedEventRef == null
+                ? new AtomicReference<>() : pendingRouteSwitchAppliedEventRef;
+    }
+
+    DomainAgentRunContext(ChatCommand command, String runId, String userMessageId, ChatSession session,
+                          MemoryContext memory, RouteTarget route, UserContext user,
+                          AtomicReference<RouteTarget> routeRef, AtomicReference<RuntimeBinding> bindingRef,
+                          RunExecutionClaim executionClaim, RuntimeForwardHeaders forwardHeaders,
+                          TraceContext traceContext, IntentDecision intentDecision, List<UploadedDocument> documents,
+                          Set<String> rejectedDomainAgentIds, int rerouteCount, String routeMemoryQuery,
+                          AgentDataPersistenceState persistenceState, MessageSkillTracker messageSkill,
+                          AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
+                          AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+                          AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef) {
+        this(command, runId, userMessageId, session, memory, route, user, routeRef, bindingRef, executionClaim,
+                forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds, rerouteCount,
+                routeMemoryQuery, persistenceState, messageSkill, pendingInteractionPayloadRef,
+                deferredDomainAgentBindingRef, pendingRouteMemoryDecisionRef, new AtomicReference<>());
     }
 
     DomainAgentRunContext(

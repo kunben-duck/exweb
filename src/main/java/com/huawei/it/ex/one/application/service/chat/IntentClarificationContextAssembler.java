@@ -98,6 +98,9 @@ final class IntentClarificationContextAssembler {
             ChatInteractionRequest interaction,
             ContinuationInput input,
             String foldedQuery) {
+        Map<String, Object> state = mapOrEmpty(interaction.requestPayload().get(DOMAIN_AGENT_REROUTE_CONTEXT));
+        Map<String, Object> metadata = state.get("confirmationInteractionId") == null
+                ? Map.of() : Map.of(DOMAIN_AGENT_REROUTE_CONTEXT, state);
         return new ChatCommand(
                 null,
                 user.tenantId(),
@@ -107,7 +110,7 @@ final class IntentClarificationContextAssembler {
                 null,
                 foldedQuery == null ? "" : foldedQuery,
                 input.cumulativeAttachments(),
-                Map.of(),
+                metadata,
                 null,
                 null,
                 ChatRunMode.NEXT,

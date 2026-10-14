@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
@@ -84,6 +85,11 @@ final class InteractionRunLifecycle {
 
     ChatRun create(CreateChatRunContext context, ChatInteractionRequest interaction) {
         return chatRunService.createInteractionRunning(context, interaction.id());
+    }
+
+    ChatRun createConfirmedReroute(CreateChatRunContext context, ChatInteractionRequest interaction,
+                                   IntentExpertScope scope) {
+        return chatRunService.createConfirmedRerouteRunning(context, interaction.id(), scope);
     }
 
     void trackRun(RunStartAttempt startAttempt, ChatRun run, String stage) {

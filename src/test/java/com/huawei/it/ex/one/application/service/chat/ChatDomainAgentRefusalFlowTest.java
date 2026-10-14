@@ -626,7 +626,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
-    void frontSelectedRefusalUsesSameIntentCandidateWithoutSwitchConfirmation() {
+    void frontSelectedRefusalWaitsBeforeIntentEvenWhenItWouldSelectTheSameAgent() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -672,15 +672,13 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
                 .verifyComplete();
 
-        awaitEvent(events, "run.completed");
-        assertThat(routeCalls).hasValue(1);
-        assertThat(domainAgentCalls).hasValue(2);
-        assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user", "run.failed");
-        assertThat(interactions.requests).isEmpty();
-        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
-                .singleElement()
-                .extracting(ChatMessage::content)
-                .isEqualTo("same agent answer");
+        awaitEvent(events, "run.waiting_user");
+        assertThat(routeCalls).hasValue(0);
+        assertThat(domainAgentCalls).hasValue(1);
+        assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.completed", "run.failed");
+        ChatInteractionRequest waiting = awaitWaitingInteraction(interactions);
+        assertThat(waiting.requestPayload()).containsEntry("confirmationStage", "BEFORE_INTENT")
+                .doesNotContainKeys("candidateProvider", "candidateTargetId");
     }
 
     @Test
@@ -1750,6 +1748,11 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                         RouteTarget.agentRuntime("intent-agent", 0.0, "no match routes to relay"),
                         noMatch, 1L, 0.85)));
             }
+
+            @Override
+            public Flux<RouteSignalFrame> routeIntentWithProgress(RouteSignalRequest request) {
+                return routeInitialWithProgress(request);
+            }
         };
         AtomicInteger agentACalls = new AtomicInteger();
         AtomicInteger agentBCalls = new AtomicInteger();
@@ -1834,8 +1837,8 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         assertThat(waiting.interactionType()).isEqualTo(ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
         assertThat(waiting.requestPayload())
                 .containsEntry("currentTargetId", "agent-a")
-                .containsEntry("candidateProvider", "domain-agent")
-                .containsEntry("candidateTargetId", "agent-b")
+                .containsEntry("confirmationStage", "BEFORE_INTENT")
+                .doesNotContainKeys("candidateProvider", "candidateTargetId")
                 .containsEntry("refusalCode", "FN-EX-CAHT-BIZ-DAG-001")
                 .containsEntry("autoActionTimeoutMs", 30_000L)
                 .containsEntry("autoActionType", "APPROVE_ROUTE_SWITCH")
@@ -1860,15 +1863,8 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                         .containsEntry("code", "FN-EX-CAHT-BIZ-DAG-001"));
         assertThat(agentACalls).hasValue(1);
         assertThat(agentBCalls).hasValue(0);
-        assertThat(rerouteMetadata.get())
-                .containsEntry("scene", "manual")
-                .containsEntry("routeTrigger", "domain_reject")
-                .containsKey("lastIntentRejectReason");
-        assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
-                "lastIntent", "领域 A",
-                "domainRejectMessage", "cannot answer this domain"));
-        assertThat(SelectedIntentContext.intentId(rerouteMetadata.get())).isNull();
-        assertThat(SelectedIntentContext.intentName(rerouteMetadata.get())).isNull();
+        assertThat(rerouteMetadata.get()).isNull();
+        assertThat(rerouteDecisions).hasValue(0);
 
         Map<String, Object> agentConfirmationMetadata = Map.of(
                 "platform", "PC",
@@ -1894,6 +1890,12 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
 
         awaitEvent(events, "run.completed");
         assertThat(agentBCalls).hasValue(1);
+        assertThat(rerouteDecisions).hasValue(1);
+        assertThat(rerouteMetadata.get()).containsEntry("routeTrigger", "domain_reject")
+                .doesNotContainKey("scene");
+        assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
+                "lastIntent", "领域 A", "domainRejectMessage", "cannot answer this domain"));
+        assertThat(SelectedIntentContext.intentId(rerouteMetadata.get())).isNull();
         assertThat(agentBMetadata.get())
                 .containsEntry("platform", "PC")
                 .doesNotContainKey("scene");
@@ -1936,8 +1938,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         assertThat(relayWaiting.interactionType()).isEqualTo(ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
         assertThat(relayWaiting.requestPayload())
                 .containsEntry("currentRouteSource", "user-confirmed")
-                .containsEntry("candidateProvider", "relay")
-                .containsEntry("candidateTargetId", "relay");
+                .containsEntry("confirmationStage", "BEFORE_INTENT")
+                .doesNotContainKeys("candidateProvider", "candidateTargetId");
+        assertThat(rerouteDecisions).hasValue(1);
         assertThat(relayCalls).hasValue(0);
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
@@ -1981,7 +1984,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 interactions, waiting.id(), relayWaiting.id());
         assertThat(nextRelayWaiting.requestPayload())
                 .containsEntry("currentRouteSource", "user-confirmed")
-                .containsEntry("candidateProvider", "relay");
+                .containsEntry("confirmationStage", "BEFORE_INTENT");
 
         Map<String, Object> relayConfirmationMetadata = Map.of(
                 "platform", "PC",
@@ -2236,12 +2239,17 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 int call = routeCalls.incrementAndGet();
-                if (call == 2) {
+                if (call == 1) {
                     secondRerouteAccessName.set(request.command().intentAccessName());
                 }
                 String target = call == 1 ? "agent-b" : "agent-c";
                 return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
                         target, "intent-agent", 1.0, "rerouted after refusal"))));
+            }
+
+            @Override
+            public Flux<RouteSignalFrame> routeIntentWithProgress(RouteSignalRequest request) {
+                return routeInitialWithProgress(request);
             }
         };
         DomainAgentClient domainClient = new DomainAgentClient() {
@@ -2291,7 +2299,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
                 .verifyComplete();
 
-        awaitAtomicValue(routeCalls, 2, "route switch reroute decisions");
+        ChatInteractionRequest secondWaiting = awaitWaitingInteraction(interactions, waiting.id());
+        assertThat(secondWaiting.requestPayload()).containsEntry("confirmationStage", "BEFORE_INTENT");
+        assertThat(routeCalls).hasValue(1);
         return secondRerouteAccessName.get();
     }
 }

@@ -3602,7 +3602,67 @@ FULL追加原正文及Parts；no-store只保存占位正文和必要问卷/答�
 
 可能改走 Relay（action=ROUTE_TO_RELAY/RELAY_FALLBACK）、再次澄清或结束，不保证总有 AUTO_SWITCH。前端按拒答/切换语义刷新当前草稿，不能把旧技能已失效正文当成新技能回答继续拼接。逻辑 Intent 入口与专家范围沿本 Run 上下文处理，不由 WS payload 反推配置。
 
-需要用户确认切换时，在拒答及重意图结果之后收到下列等待段，而不是立刻出现 selectedDomainAgent(B)：
+新版本对 `front-selected/user-confirmed` 且关闭自动切换的绑定，先确认再识别：
+
+1. Run-A：拒答事实提交并ACK后，发出下列确认卡片，随后 `run.waiting_user` 携带同一
+   `confirmationStage=BEFORE_INTENT`、`interactionId` 和自动动作字段。本轮此时没有新的Intent结果或候选。
+2. 前端仍用 `CONTINUE_INTERACTION + interactionId + approved` 回答，倒计时到期仍提交 `approved=true`。
+3. Run-B：`run.started` → 确认响应卡片（带阶段标记，无candidate字段）提交并ACK → Intent过程及结果
+   提交并ACK → `route-switch-applied` → Runtime。Intent结果示例见S01；附件拒绝时切换标识仍延迟到完成事务。
+4. 拒绝不调用Intent或新技能；同意后仍可能命中原技能。Intent澄清/模糊候选保留授权，选出目标后消费；
+   新技能再次拒答重新确认。未订阅或增量Resume是否见到完整前缀取决于游标，ACK不代表客户端收到。
+
+以下为新确认卡片的完整WS封装示例；自动动作期限为示例值：
+
+```json
+{
+  "type": "message",
+  "topicId": "chat-run-run_confirm_a",
+  "offset": "1811",
+  "payload": {
+    "type": "conversation-turn-stream",
+    "payload": {
+      "type": "stream-item",
+      "conversationId": "session_demo",
+      "turnId": "run_confirm_a",
+      "streamItemId": "evt_1811",
+      "serverTimestampMs": 1789516801811,
+      "encodedItem": {
+        "encoding": "chat-event-json-v1",
+        "event": "runtime.card",
+        "data": {
+          "runId": "run_confirm_a",
+          "sessionId": "session_demo",
+          "sequence": 1811,
+          "type": "runtime.card",
+          "payload": {
+            "source": "chatservice",
+            "sourceType": "route-switch-confirmation-request",
+            "interactionType": "ROUTE_SWITCH_CONFIRMATION",
+            "confirmationStage": "BEFORE_INTENT",
+            "currentProvider": "domain-agent",
+            "currentTargetId": "skill_a",
+            "currentRouteSource": "front-selected",
+            "message": "当前技能无法处理该问题，是否重新识别并选择合适技能继续回答？",
+            "refusalCode": "FN-EX-CAHT-BIZ-DAG-001",
+            "refusalReason": "当前技能不覆盖该问题",
+            "originalQuery": "分析资料",
+            "autoActionAt": "2026-09-16T00:00:31.811Z",
+            "autoActionTimeoutMs": 30000,
+            "autoActionType": "APPROVE_ROUTE_SWITCH"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+私有授权、拒答累计和专家范围只存Interaction，不进入卡片/Parts/Resume。新流程的确认响应中
+`confirmationStage`含义与请求相同，其他字段沿用下方响应示例，但不包含`candidate*`。
+
+**以下等待、同意及拒绝示例仅用于存量兼容**：没有阶段标记且已经保存候选时，仍在拒答及重意图结果之后
+收到等待段，同意直接执行已保存目标，不重复调用Intent。未知阶段不得按此旧流程处理。
 
 ```json
 [

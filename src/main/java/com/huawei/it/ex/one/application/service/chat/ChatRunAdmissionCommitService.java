@@ -258,6 +258,7 @@ public class ChatRunAdmissionCommitService {
                 user.tenantId(), user.ownerUserId(), session);
         IntentExpertScope intentExpertScope = IntentExpertContext.fromSessionMetadata(
                 currentSession.metadataJson()).orElse(null);
+        RouteSwitchRerouteContext.validateContinuationScope(interaction, intentExpertScope);
         ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
                 user, currentSession, runId, interaction.assistantMessageId(),
                 command.answerText(), command.attachments(), command.messageMetadata());
@@ -295,6 +296,7 @@ public class ChatRunAdmissionCommitService {
                 user.tenantId(), user.ownerUserId(), session);
         IntentExpertScope intentExpertScope = IntentExpertContext.fromSessionMetadata(
                 currentSession.metadataJson()).orElse(null);
+        RouteSwitchRerouteContext.validateContinuationScope(interaction, intentExpertScope);
         ChatRunMessagePlan messagePlan = sessionService.prepareReusableIntentClarification(
                 user,
                 currentSession,

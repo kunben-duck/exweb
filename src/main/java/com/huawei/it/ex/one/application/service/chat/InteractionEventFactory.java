@@ -99,6 +99,8 @@ final class InteractionEventFactory {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("source", "chatservice");
         payload.put("sourceType", "route-switch-confirmation-response");
+        putIfNotNull(payload, RouteSwitchRerouteContext.STAGE_KEY,
+                interaction.requestPayload().get(RouteSwitchRerouteContext.STAGE_KEY));
         payload.put("interactionId", interaction.id());
         payload.put("interactionType", interaction.interactionType().name());
         putIfNotNull(payload, "approved", responsePayload.get("approved"));

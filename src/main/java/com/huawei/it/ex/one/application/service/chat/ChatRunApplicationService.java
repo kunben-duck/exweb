@@ -143,6 +143,22 @@ public class ChatRunApplicationService {
         return saved;
     }
 
+    /** 新确认续跑必须在 Session 锁内复核发问时的专家范围，不能用准入前快照跨范围识别。 */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public ChatRun createConfirmedRerouteRunning(CreateChatRunContext context, String interactionId,
+                                                IntentExpertScope expectedScope) {
+        UserContext user = context.user();
+        ChatSession session = lockOwnedActiveSession(user, context.sessionId());
+        IntentExpertScope latest = IntentExpertContext.fromSessionMetadata(session.metadataJson()).orElse(null);
+        if (expectedScope == null ? latest != null : latest == null || !expectedScope.sameIdentity(latest)) {
+            throw ChatInteractionUnavailableException.alreadyHandled(interactionId);
+        }
+        rejectIfActiveRunExists(user, context.sessionId());
+        ChatRun saved = insertInteractionRunningAfterSessionValidation(context, interactionId);
+        cache.putActive(saved);
+        return saved;
+    }
+
     /**
      * 只在数据库中创建 Interaction continuation run；事务提交后由编排层同步 active cache。
      */
@@ -867,7 +883,7 @@ public class ChatRunApplicationService {
         ensureActiveSession(session, sessionId);
     }
 
-    private void lockOwnedActiveSession(UserContext user, String sessionId) {
+    private ChatSession lockOwnedActiveSession(UserContext user, String sessionId) {
         ensureOwnedActiveSession(user, sessionId);
         ChatSession current = sessionRepository.lockAndFindForMessageMutation(
                 user.tenantId(), user.ownerUserId(), sessionId);
@@ -875,6 +891,7 @@ public class ChatRunApplicationService {
             throw new IllegalArgumentException("会话不存在: " + sessionId);
         }
         ensureActiveSession(current, sessionId);
+        return current;
     }
 
     private void ensureActiveSession(ChatSession session, String sessionId) {

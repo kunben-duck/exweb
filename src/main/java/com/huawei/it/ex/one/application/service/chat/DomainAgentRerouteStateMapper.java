@@ -20,7 +20,10 @@ final class DomainAgentRerouteStateMapper {
         if (!(value instanceof Map<?, ?> raw)) {
             return null;
         }
-        Map<String, Object> state = mapOrEmpty(raw);
+        return fromState(mapOrEmpty(raw));
+    }
+
+    DomainAgentRerouteState fromState(Map<String, Object> state) {
         String currentTargetId = firstText(state.get("currentTargetId"));
         if (currentTargetId == null) {
             return null;
@@ -40,7 +43,8 @@ final class DomainAgentRerouteStateMapper {
                 refusal,
                 DomainAgentRejectReason.fromRerouteState(state),
                 Set.copyOf(rejected),
-                intValue(state.get("rerouteCount"), 0));
+                intValue(state.get("rerouteCount"), 0),
+                firstText(state.get("confirmationInteractionId")));
     }
 
     private Set<String> rejectedDomainAgentIds(Object value) {

@@ -159,6 +159,10 @@ final class InteractionContinuationCoordinator {
         UserContext user = context.user();
         ChatInteractionResponseCommand command = context.command();
         validateSessionContext(user, command, interaction);
+        if (interaction.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
+                && RouteSwitchRerouteContext.beforeIntent(interaction)) {
+            RouteSwitchRerouteContext.require(interaction);
+        }
         if (interaction.interactionType() != ChatInteractionType.INTENT_CLARIFICATION) {
             rejectAmbiguousRouteFields(command);
             if (!command.attachments().isEmpty()) {

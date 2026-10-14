@@ -57,7 +57,7 @@ x-wait-time-semantics:
     ROUTE_SWITCH_CONFIRMATION 与 AMBIGUOUS_ROUTE 共用 financeex.intent.ambiguous-route-wait-timeout。
     后端只返回时间事实，不注册定时任务。
   routeSwitchConfirmation: >-
-    ROUTE_SWITCH_CONFIRMATION 到期后前端提交 approved=true，自动同意切换到候选 Runtime。
+    ROUTE_SWITCH_CONFIRMATION 到期后前端提交 approved=true；BEFORE_INTENT 阶段先重新识别再调用目标，存量无阶段标记时执行已保存候选。
 x-websocket:
   url: /v1/chat/ws
   tag: Realtime WebSocket
@@ -2485,12 +2485,11 @@ components:
                 source: chatservice
                 sourceType: route-switch-confirmation-request
                 interactionType: ROUTE_SWITCH_CONFIRMATION
+                confirmationStage: BEFORE_INTENT
                 currentProvider: domain-agent
                 currentTargetId: document_agent
                 currentRouteSource: front-selected
-                candidateProvider: domain-agent
-                candidateTargetId: finance_knowledge
-                candidateIntentName: 财经知识助手
+                message: 当前技能无法处理该问题，是否重新识别并选择合适技能继续回答？
                 refusalCode: FN-EX-CHAT-BIZ-DAG-001
                 refusalReason: 当前请求不属于该技能处理范围
                 originalQuery: 帮我解释这个财经指标
@@ -3578,9 +3577,12 @@ components:
         - interactionType
         - currentProvider
         - currentTargetId
-        - candidateProvider
-        - candidateTargetId
       properties:
+        confirmationStage:
+          type: string
+          nullable: true
+          enum: [BEFORE_INTENT]
+          description: 新交互在调用Intent前确认，无candidate字段；存量缺失阶段标记时直接执行已保存候选。未知阶段拒绝，不按旧逻辑执行。
         interactionType:
           type: string
           enum: [ROUTE_SWITCH_CONFIRMATION]
@@ -3601,8 +3603,10 @@ components:
           nullable: true
         candidateProvider:
           type: string
+          description: 仅存量无阶段标记的候选确认提供
         candidateTargetId:
           type: string
+          description: 仅存量无阶段标记的候选确认提供
         candidateIntentName:
           type: string
           nullable: true
@@ -3632,9 +3636,11 @@ components:
           type: string
           enum: [APPROVE_ROUTE_SWITCH]
       description: |
-        手动来源的 DomainAgent 拒答后，候选目标发生变化且自动切换配置关闭时生成。同一技能、
-        自动来源或开启 refusal-auto-switch-enabled 时不生成。截止时间与 AMBIGUOUS_ROUTE 共用配置，
-        到期后由前端提交现有 approved=true 请求。
+        front-selected/user-confirmed 来源的 DomainAgent 拒答且自动切换关闭时，在调用Intent前生成。
+        未确认或拒绝时不调用Intent、用例库或新技能。一次同意授权识别及一次目标执行，结果仍可命中原技能；
+        需要澄清时保留授权，新技能再次拒答须重新确认，max-reroutes跨确认Run累计。
+        自动来源或开启 refusal-auto-switch-enabled 时沿用原自动流程。截止时间与 AMBIGUOUS_ROUTE 共用配置，
+        到期后由前端提交现有 approved=true 请求，不新增服务端定时任务。
 
     RelayQuestionnaireCardPayload:
       type: object

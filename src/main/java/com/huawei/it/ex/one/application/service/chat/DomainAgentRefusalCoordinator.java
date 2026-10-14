@@ -24,6 +24,7 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import reactor.core.publisher.Flux;
@@ -32,6 +33,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -219,8 +221,23 @@ final class DomainAgentRefusalCoordinator {
                 state.currentTargetId(),
                 state.rejectedDomainAgentIds(),
                 blankToDefault(request.intentRouteMemoryQuery(), request.context().routeMemoryQuery()),
-                request.agentMode());
+                request.agentMode(),
+                state.confirmationInteractionId());
         return continueAfterReroute(reroute, request.routeSignal());
+    }
+
+    /** 已持久化的确认只授权一次 Intent 决策；等待澄清时携带授权，Runtime 再次拒答时不继承。 */
+    Flux<ChatEvent> rerouteConfirmed(DomainAgentRunContext context, DomainAgentRerouteState state,
+                                    String interactionId, AgentModeProfile agentMode) {
+        DomainAgentRerouteContext reroute = new DomainAgentRerouteContext(context, state.refusal(),
+                state.lastIntentRejectReason(), state.currentTargetId(), state.rejectedDomainAgentIds(),
+                IntentClarificationContextAssembler.answerWithAttachments(
+                        context.command().message(), context.command().attachments()), agentMode, interactionId);
+        if (context.rerouteCount() >= domainAgentProperties.normalizedMaxReroutes()) {
+            return Flux.just(eventFactory.rerouteMetadata(context, state.refusal(), null, "MAX_REROUTES_REACHED"));
+        }
+        return rerouteFrames(reroute, eventFactory.commandWithDomainRejectContext(
+                context.command(), state.lastIntentRejectReason()), true);
     }
 
     RuntimeBinding markRejectedAutomaticBindingNotRoutable(RuntimeBinding binding,
@@ -306,17 +323,26 @@ final class DomainAgentRefusalCoordinator {
                 rejected,
                 rerouteIntentQuery,
                 null);
+        if (bindingPolicy.requiresRouteSwitchConfirmation(bindingPolicy.routeSource(context.bindingRef().get()))) {
+            return requireCurrentOwnerRunning(context.executionClaim(), "before-reroute-confirmation")
+                    .thenMany(Flux.defer(() -> Flux.just(eventFactory.beforeIntentConfirmation(
+                            reroute, bindingPolicy.routeSource(context.bindingRef().get())))));
+        }
+        return rerouteFrames(reroute, rerouteCommand, false);
+    }
+
+    private Flux<ChatEvent> rerouteFrames(DomainAgentRerouteContext reroute, ChatCommand command,
+                                         boolean intentOnly) {
+        DomainAgentRunContext context = reroute.context();
         IntentResultPersistenceBarrier persistenceBarrier = new IntentResultPersistenceBarrier();
         return requireCurrentOwnerRunning(context.executionClaim(), "before-domain-agent-reroute")
-                .thenMany(Flux.defer(() -> routeSignalService.routeInitialWithProgress(new RouteSignalRequest(
-                        context.runId(),
-                        context.user(),
-                        context.session(),
-                        rerouteCommand,
-                        rerouteCommand.attachments(),
-                        context.memory(),
-                        rerouteIntentQuery,
-                        context.userMessageId()))))
+                .thenMany(Flux.defer(() -> {
+                    RouteSignalRequest request = new RouteSignalRequest(context.runId(), context.user(),
+                            context.session(), command, command.attachments(), context.memory(),
+                            reroute.intentQuery(), context.userMessageId());
+                    return intentOnly ? routeSignalService.routeIntentWithProgress(request)
+                            : routeSignalService.routeInitialWithProgress(request);
+                }))
                 .concatMap(frame -> processRerouteFrame(reroute, frame, persistenceBarrier));
     }
 
@@ -346,6 +372,11 @@ final class DomainAgentRefusalCoordinator {
             return clarificationRequired(reroute, nextSignal);
         }
         RouteTarget nextRoute = nextSignal.route();
+        if (reroute.confirmed() && nextRoute != null) {
+            nextRoute = new RouteTarget(nextRoute.type(), nextRoute.selectedAgentCode(), "user-confirmed",
+                    nextRoute.score(), nextRoute.reason(), nextRoute.runtimeProfile(), nextRoute.runtimeRoleName(),
+                    nextRoute.relayOutputMode(), nextRoute.invocationSkillId());
+        }
         if (nextSignal.failRunOnIntentFailure()) {
             context.bindingRef().set(bindingPolicy.markRejected(context.bindingRef().get(), reroute.refusal()));
             appliedRouteRecorder.recordIntent(
@@ -391,8 +422,18 @@ final class DomainAgentRefusalCoordinator {
                 eventFactory.intentClarificationRequest(
                         context.runId(),
                         context.session().id(),
-                        ShortTermMemoryContextAssembler.publicInteractionPayload(internalPayload)),
+                        publicClarificationPayload(internalPayload, reroute.confirmed())),
                 MessageCompletedEvent.of(context.runId(), context.session().id()));
+    }
+
+    private Map<String, Object> publicClarificationPayload(Map<String, Object> payload, boolean confirmed) {
+        Map<String, Object> result = ShortTermMemoryContextAssembler.publicInteractionPayload(payload);
+        if (!confirmed) {
+            return result;
+        }
+        Map<String, Object> copy = new LinkedHashMap<>(result);
+        copy.remove(RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA);
+        return Map.copyOf(copy);
     }
 
     private DomainAgentRunContext continuationRunContext(ClarifiedContinuation request,
@@ -421,7 +462,8 @@ final class DomainAgentRefusalCoordinator {
                 source.persistenceState(),
                 source.messageSkill(),
                 source.pendingInteractionPayloadRef(),
-                source.deferredDomainAgentBindingRef());
+                source.deferredDomainAgentBindingRef(), source.pendingRouteMemoryDecisionRef(),
+                source.pendingRouteSwitchAppliedEventRef());
     }
 
     private boolean invalidDomainAgentRoute(RouteTarget route) {

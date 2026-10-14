@@ -14,6 +14,7 @@ record DomainAgentRerouteState(
         DomainAgentRefusal refusal,
         DomainAgentRejectReason lastIntentRejectReason,
         Set<String> rejectedDomainAgentIds,
-        int rerouteCount
+        int rerouteCount,
+        String confirmationInteractionId
 ) {
 }

@@ -65,6 +65,25 @@ class RouteSignalApplicationServiceTest {
             null, "web", "帮我报销一张发票", List.of(), Map.of());
     private final MemoryContext memory = MemoryContext.empty();
 
+    @Test
+    void confirmedIntentEntryBypassesUseCaseEvenWhenEnabled() {
+        AtomicInteger useCases = new AtomicInteger();
+        AtomicInteger intents = new AtomicInteger();
+        RouteSignalApplicationService service = service(true, true, request -> {
+            useCases.incrementAndGet();
+            throw new AssertionError("use case must not be called");
+        }, (input, context, owner) -> {
+            intents.incrementAndGet();
+            return simpleDomainAgentIntent();
+        });
+        RouteSignalResult result = service.routeIntentWithProgress(new RouteSignalRequest(
+                        "run-confirmed", user, session, command, List.of(), memory))
+                .filter(RouteSignalFrame::resultFrame).map(RouteSignalFrame::result).blockLast();
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(useCases).hasValue(0);
+        assertThat(intents).hasValue(1);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void domainRejectDoesNotReintroduceInlineRoutesWhenDatabaseHistoryIsUnavailable(boolean expert) {

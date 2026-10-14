@@ -89,7 +89,7 @@ final class DomainAgentReplacementExecutor {
         DomainAgentRunContext context = reroute.context();
         recordIntent(context, signal.intentDecision(), nextRoute);
         String currentRouteSource = bindingPolicy.routeSource(context.bindingRef().get());
-        if (bindingPolicy.requiresRouteSwitchConfirmation(currentRouteSource)) {
+        if (!reroute.confirmed() && bindingPolicy.requiresRouteSwitchConfirmation(currentRouteSource)) {
             return Flux.just(eventFactory.routeSwitchConfirmationRequest(
                     reroute,
                     signal,
@@ -134,11 +134,12 @@ final class DomainAgentReplacementExecutor {
                 context.persistenceState());
         context.messageSkill().replace(nextRoute.invocationSkillId());
         MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, resolution.binding());
-        ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
+        ChatCommand runtimeCommand = reroute.confirmed() ? context.command()
+                : runtimeCommand(context, nextRoute, signal.intentDecision());
         String action = signal.intentFailure() ? "RELAY_FALLBACK" : "ROUTE_TO_RELAY";
         Sinks.One<Void> reroutePersisted = Sinks.one();
         ChatEvent rerouteEvent = new PersistenceAcknowledgedEvent(
-                eventFactory.rerouteMetadata(context, reroute.refusal(), nextRoute, action),
+                eventFactory.replacementEvent(reroute, nextRoute, action),
                 reroutePersisted);
         RelayReplacementExecution execution = new RelayReplacementExecution(
                 signal,
@@ -216,7 +217,7 @@ final class DomainAgentReplacementExecutor {
         DomainAgentRunContext context = reroute.context();
         recordIntent(context, signal.intentDecision(), nextRoute);
         String currentRouteSource = bindingPolicy.routeSource(context.bindingRef().get());
-        if (bindingPolicy.requiresRouteSwitchConfirmation(currentRouteSource)
+        if (!reroute.confirmed() && bindingPolicy.requiresRouteSwitchConfirmation(currentRouteSource)
                 && !reroute.currentDomainAgentId().equals(nextRoute.selectedAgentCode())) {
             return Flux.just(eventFactory.routeSwitchConfirmationRequest(
                     reroute,
@@ -260,6 +261,15 @@ final class DomainAgentReplacementExecutor {
             RouteSignalResult signal,
             RouteTarget nextRoute) {
         DomainAgentRunContext context = reroute.context();
+        if (reroute.confirmed()) {
+            // 确认只授权选路，不能绕过执行权；复用 Gate 通过后的锁内激活，避免先取消旧绑定再失权。
+            DeferredDomainAgentBinding deferred = runtimeBindingService.prepareDomainAgentForRun(
+                    domainAgentBindingCommand(reroute, signal, nextRoute));
+            var activation = runtimeBindingService.activateDeferredDomainAgentForRuntime(
+                    deferred, context.executionClaim());
+            runtimeBindingService.synchronizeDeferredDomainAgentActivation(activation.binding());
+            return new ReplacementBindingLifecycle(activation.binding());
+        }
         context.bindingRef().set(bindingPolicy.markRejected(
                 context.bindingRef().get(), reroute.refusal()));
         return new ReplacementBindingLifecycle(bindDomainAgent(reroute, signal, nextRoute));
@@ -282,13 +292,17 @@ final class DomainAgentReplacementExecutor {
                 context.runId(), nextRoute, nextBinding, context.executionClaim(),
                 context.persistenceState());
         context.messageSkill().replace(nextRoute.invocationSkillId());
+        if (reroute.confirmed()) {
+            context.pendingRouteSwitchAppliedEventRef().set(new PendingRouteSwitchAppliedEvent(
+                    eventFactory.replacementEvent(reroute, nextRoute, "AUTO_SWITCH"), nextBinding.id()));
+        }
         appliedRouteRecorder.deferRouteMemoryDecision(
                 context.pendingRouteMemoryDecisionRef(),
                 new PendingRouteMemoryDecision(
                         context.user(),
                         context.session().id(),
                         context.runId(),
-                        reroute.intentQuery(),
+                        reroute.confirmed() ? context.routeMemoryQuery() : reroute.intentQuery(),
                         signal.intentDecision(),
                         nextRoute));
         return attachmentFailureExecutor.execute(
@@ -313,18 +327,15 @@ final class DomainAgentReplacementExecutor {
                             context.persistenceState());
                     context.messageSkill().replace(nextRoute.invocationSkillId());
                     MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, nextBinding);
-                    ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
+                    ChatCommand runtimeCommand = reroute.confirmed() ? context.command()
+                            : runtimeCommand(context, nextRoute, signal.intentDecision());
                     DomainAgentRunContext nextContext = nextRunContext(
                             context,
                             reroute,
                             new ReplacementExecution(signal, nextRoute, runtimeMemory, runtimeCommand));
                     Sinks.One<Void> reroutePersisted = Sinks.one();
                     ChatEvent rerouteEvent = new PersistenceAcknowledgedEvent(
-                            eventFactory.rerouteMetadata(
-                                    context,
-                                    reroute.refusal(),
-                                    nextRoute,
-                                    "AUTO_SWITCH"),
+                            eventFactory.replacementEvent(reroute, nextRoute, "AUTO_SWITCH"),
                             reroutePersisted);
                     // 新 Runtime 只能在重路由事件确认落库后订阅，写入拒绝会触发未启动 Binding 补偿。
                     return Flux.concat(
@@ -435,7 +446,7 @@ final class DomainAgentReplacementExecutor {
                         context.user(),
                         context.session().id(),
                         context.runId(),
-                        reroute.intentQuery(),
+                        reroute.confirmed() ? context.routeMemoryQuery() : reroute.intentQuery(),
                         signal.intentDecision(),
                         route,
                         binding,
@@ -493,7 +504,8 @@ final class DomainAgentReplacementExecutor {
                 context.messageSkill(),
                 context.pendingInteractionPayloadRef(),
                 context.deferredDomainAgentBindingRef(),
-                context.pendingRouteMemoryDecisionRef());
+                context.pendingRouteMemoryDecisionRef(),
+                context.pendingRouteSwitchAppliedEventRef());
     }
 
     private Mono<Void> requireCurrentOwnerRunning(RunExecutionClaim claim, String stage) {

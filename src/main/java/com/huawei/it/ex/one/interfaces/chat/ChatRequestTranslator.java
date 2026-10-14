@@ -123,6 +123,11 @@ public class ChatRequestTranslator {
         sanitized = com.huawei.it.ex.one.application.integration.agent.IntentExpertContext.removeReserved(sanitized);
         sanitized = RuntimeProfileMetadata.removePrivateRunMetadata(sanitized);
         sanitized = RelayOutputModeMetadata.removePrivateRunMetadata(sanitized);
+        if (sanitized.containsKey("domainAgentRerouteContext") || sanitized.containsKey("_routeSwitchRerouteContext")) {
+            sanitized = new LinkedHashMap<>(sanitized);
+            sanitized.remove("domainAgentRerouteContext");
+            sanitized.remove("_routeSwitchRerouteContext");
+        }
         return removeDomainAgentAsyncTaskMetadata(sanitized);
     }
 

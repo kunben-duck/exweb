@@ -14,6 +14,7 @@ import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
@@ -514,6 +515,27 @@ public class RuntimeBindingApplicationService {
                 ? next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode))
                 : next;
         return touchAndMoveToLeaf(updated, runId, request.assistantMessageId());
+    }
+
+    /** 确认重意图时只接管原 Binding 的执行归属，不向已拒答技能发送普通请求。 */
+    public RuntimeBinding resumeForConfirmedReroute(ChatInteractionRequest request, RunExecutionClaim claim,
+                                                    String expectedSkillId) {
+        RuntimeBinding binding = loadInteractionBinding(request);
+        if (claim == null || !Objects.equals(claim.runId(), request.continueRunId())
+                || request.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
+                || !DOMAIN_AGENT_PROVIDER.equals(request.runtimeProvider())
+                || !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                || binding.status() != RuntimeBindingStatus.ACTIVE
+                || !Objects.equals(binding.lastRunId(), request.sourceRunId())
+                || !Objects.equals(expectedSkillId, metadataText(binding, "domainAgentId"))) {
+            throw new IllegalStateException("确认重意图的原 Binding 已失效");
+        }
+        RuntimeBinding next = binding.withRun(claim.runId(), binding.expiresAt())
+                .withLeafMessageId(request.assistantMessageId());
+        RuntimeBinding resumed = repository.resumeInteractionWithExecutionGuard(next, request.sourceRunId(), claim)
+                .orElseThrow(() -> new ChatEventAppendRejectedException("确认重意图被 execution 栅栏拒绝"));
+        synchronizeCache(resumed);
+        return resumed;
     }
 
     /**

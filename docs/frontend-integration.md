@@ -179,7 +179,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 重新生成 assistant | 用户点击重新生成 -> `POST /v1/chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
 | 普通意图澄清等待 | 收到 `run.waiting_user(interactionType=INTENT_CLARIFICATION)` 且 `clarificationType` 不是 `AMBIGUOUS_ROUTE` -> 展示澄清 assistant -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` 提交答案、附件和本轮 metadata -> 订阅新 topic | `interactionId`、`assistantMessageId`、新 `runId/streamTopicId`、`expiresAt` | 使用 `NEW_TURN`：每次提交生成新的 user 回答节点，下一轮澄清或最终 Agent 回答生成新的 assistant 节点；后端以 `routeTrigger=clarify_answer` 继续意图服务 |
 | 歧义路由候选等待 | 收到 `run.waiting_user(clarificationType=AMBIGUOUS_ROUTE)` -> 展示 `candidateIntents/actions` -> 按 `autoSelectAt` 建立前端定时器 -> 指定候选、到期代选或提交“其他” -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoSelectAt`、run-B `runId/streamTopicId` | 使用 `REUSE_ASSISTANT`：run-A 和 run-B 是不同 run，但复用同一 user/assistant；指定候选或代选跳过 Intent，其他文本/附件重新调用 Intent；页面恢复时通过 stream-status 重建定时器 |
-| 拒答路由切换确认 | 收到 `run.waiting_user(interactionType=ROUTE_SWITCH_CONFIRMATION)` -> 展示候选目标 -> 按 `autoActionAt` 建立前端定时器 -> 人工同意/拒绝，或到期提交 `approved=true` -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoActionAt`、`autoActionType=APPROVE_ROUTE_SWITCH`、run-B `runId/streamTopicId` | 与 AMBIGUOUS_ROUTE 共用等待时长；后端不设定时任务，页面恢复时通过 stream-status 重建定时器；超时与人工同意共用现有切换流程 |
+| 拒答路由切换确认 | 收到 `run.waiting_user(interactionType=ROUTE_SWITCH_CONFIRMATION)` -> 按 confirmationStage 展示重新识别提示或存量候选 -> 按 `autoActionAt` 建立前端定时器 -> 人工同意/拒绝，或到期提交 `approved=true` -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoActionAt`、`autoActionType=APPROVE_ROUTE_SWITCH`、run-B `runId/streamTopicId` | 与 AMBIGUOUS_ROUTE 共用等待时长；后端不设定时任务，页面恢复时通过 stream-status 重建定时器；超时与人工同意共用现有切换流程 |
 | Relay 问卷等待 | 收到 `run.waiting_user(interactionType=AGENT_CLARIFICATION)` -> 从历史 `AGENT_CLARIFICATION_REQUEST` part 渲染问卷 -> 手动提交答案，或在 `autoActionAt` 到达后提交忽略 -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoActionAt`、run-B `runId/streamTopicId` | run-A 关闭下游连接但保留 ACTIVE Relay Binding；run-B 跳过 Intent，以同一 Relay session 执行 `RESUME + approval-response`，并把结果追加到原 assistant |
 | 等待态主动直连 DomainAgent | `POST /v1/chat/runs(runMode=NEXT,targetType=DOMAIN_AGENT,targetId,message,metadata,attachments)` -> 订阅返回的 `streamTopicId` | 当前 `sessionId`、新 `runId`、所选 `targetId` | 优先于意图、Relay 和开放 Interaction；服务端原子取消该会话的 `WAITING/RESPONDING` Interaction，并把新 user 节点挂到等待 assistant 后。仅使用本轮请求参数，不合并旧澄清上下文；真正存在 `RUNNING/CANCELLING` run 时仍返回 active-run 冲突 |
 | 选择或切换聚合意图专家 | `POST /v1/chat/runs(targetType=INTENT_EXPERT,targetId,selectedExpert,intentAccessName)` -> 订阅返回的 `streamTopicId` | 父专家ID、名称及专属Intent入口 | active run时返回409且不切换；WAIT时按直连准入取消等待。后续普通轮次省略专家参数，服务端恢复范围并续接ACTIVE子技能或通过同一入口重新意图 |
@@ -871,14 +871,23 @@ sequenceDiagram
 - 敏感信息和 Domain Expert 的公开 `intent-result` 都保留原始 `routeAction=ROUTE_SINGLE`、`intentId/intentName/skillId`，但返回 `routeType=AGENT_RUNTIME,targetProvider=relay`，不返回 DomainAgent `targetId`。敏感信息使用普通 Delegate `user-message`并共享 Delegate Binding；专家使用动态 `roleName` 和独立 Profile。前端不需要提交 Runtime Profile、`appMode` 或 `roleName`。敏感信息 run 仍逐帧接收 `message.delta/message.snapshot`及必要的会话状态和问卷卡片，但不会收到 Relay thinking、progress、agent、tool、reference、普通 card 或未知过程事件；这些过程事件也不支持 Resume。下一轮普通 Delegate 不继承该过滤模式。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
 - 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；最新 Relay/no_match route 的来源 run 正常完成时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交意图澄清后传 `clarify_answer`；前端 `forceReroute=true` 由后端转换为用户纠正触发原因。目标 binding 成功后、调用 Runtime 前即异步记录 `ROUTE`，所以后续任务失败、取消或拒答仍会保留本次路由；但 `routeSource=front-selected` 只作为路由事实保存，不进入发送给 IntentAgent 的 history，也不占用 TopK，前端无需为直选结果提供意图名称。`user-confirmed` 和 `intent-agent` 路由仍进入 history；已有 binding 的普通追问和 Agent Interaction 续接不新增 route。只有 `ROUTE_MULTI/NO_MATCH/RELAY_FALLBACK` 的 Delegate route 保存为 `intent=no_match,intentCode=relay` 并在正常完成后影响下一轮 trigger；敏感信息 Delegate保留原始 `ROUTE_SINGLE` 意图，不视为 no-match fallback。手动 Agent 拒答后的候选在默认确认模式下要等用户确认并成功绑定后才记录；开启拒答自动切换后则在新 Binding 生效、调用候选 Runtime 前记录。RouteMemory 始终 best-effort，不阻断 `/v1/chat/runs`。
-- DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 后，后端立即终止旧 Agent 流并以 `routeTrigger=domain_reject` 重新调用 intent-agent。若意图返回澄清，后续每轮请求使用 `routeTrigger=clarify_answer` 并继续携带本次拒答摘要；普通澄清不携带该字段。旧拒答编码和单独的 `reasonCode` 不再触发重路由。
-- 如果当前绑定来自意图或用例库，后端自动切换到新 DomainAgent；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时执行 Relay。后端直接采用本次 Intent 结果，返回当前或曾拒答技能时仍会重新调用，并由 `max-reroutes` 防止无界循环。若当前绑定来源为 `front-selected/user-confirmed`，默认会先返回 `run.waiting_user`，消息 parts 包含 `DOMAIN_AGENT_REFUSAL` 和 `ROUTE_SWITCH_CONFIRMATION_REQUEST`；同意后使用原问题调用候选 Runtime，拒绝后保留原绑定。确认调用需要附件时，前端必须在本次 `approved=true` 请求中重新提交完整 `attachments`；后端不继承 run-A 附件，也不改写原 user 消息附件。等待事件返回 `autoActionAt/autoActionTimeoutMs/autoActionType=APPROVE_ROUTE_SWITCH`，并与 AMBIGUOUS_ROUTE 共用默认30秒配置；到期后前端提交现有 `approved=true` 请求。重意图返回当前技能时目标未变化，不生成切换确认。部署配置 `financeex.domain-agent.refusal-auto-switch-enabled=true` 后，手动来源拒答时也会原子取消旧 Binding，并直接调用重意图得到的 DomainAgent 或 Relay，不生成路由切换 Interaction。意图本身要求澄清时仍进入 `INTENT_CLARIFICATION`。等待确认阶段不生成 `ANSWER`，最终回答、拒答与确认过程复用同一个 assistantMessageId。
+- DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 后，后端立即终止旧 Agent 流。自动路由来源按原流程以 `routeTrigger=domain_reject` 重新调用 intent-agent；受保护来源先等待用户同意，确认后才重新识别。若意图返回澄清，后续每轮请求使用 `routeTrigger=clarify_answer` 并继续携带本次拒答摘要；普通澄清不携带该字段。旧拒答编码和单独的 `reasonCode` 不再触发重路由。
+- 如果当前绑定来自意图或用例库，后端自动切换到新 DomainAgent；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时执行 Relay。后端直接采用本次 Intent 结果，返回当前或曾拒答技能时仍会重新调用，并由 `max-reroutes` 防止无界循环。若当前绑定来源为 `front-selected/user-confirmed`，默认会先返回 `run.waiting_user`，消息 parts 包含 `DOMAIN_AGENT_REFUSAL` 和 `ROUTE_SWITCH_CONFIRMATION_REQUEST`；新卡片标记 `confirmationStage=BEFORE_INTENT`，不含尚未产生的 `candidate*` 字段。同意后使用原问题直接调用 Intent，不经过 ACTIVE Binding 或用例库；确认响应及 Intent 结果分别提交并 ACK 后才进入下一阶段。拒绝后保留原绑定，不调用 Intent、用例库或新技能。确认调用需要附件时，前端必须在本次 `approved=true` 请求中重新提交完整 `attachments`；后端不继承 run-A 附件，也不改写原 user 消息附件。等待事件返回 `autoActionAt/autoActionTimeoutMs/autoActionType=APPROVE_ROUTE_SWITCH`，并与 AMBIGUOUS_ROUTE 共用默认30秒配置；到期后前端提交现有 `approved=true` 请求。一次同意只授权一次识别及后续可执行目标，即使仍命中原技能也可执行；新技能再次拒答需重新确认，重路由次数不因新建 Run 重置。Intent 澄清/模糊候选延续未消费授权，选出目标后不再重复确认。部署配置 `financeex.domain-agent.refusal-auto-switch-enabled=true` 后，手动来源拒答时也会原子取消旧 Binding，并直接调用重意图得到的 DomainAgent 或 Relay，不生成路由切换 Interaction。意图本身要求澄清时仍进入 `INTENT_CLARIFICATION`。等待确认阶段不生成 `ANSWER`，最终回答、拒答与确认过程复用同一个 assistantMessageId。
 
 同一 Run 内发生拒答重意图时，发送给 Intent 的 `history` 排除本 Run 的全部中间路由，数据库过滤发生在
 TopK 前，内存中的本轮路由也不会补回。之前 Run（包括 Ask User 或澄清续跑的来源 Run）的记录仍保留，
 不按相同问题文本或技能名称去重。`routeTrigger=domain_reject`、本次拒答原因和澄清链继续传递。
 这只是下游 Intent 上下文过滤：前端仍收到原有的技能命中、拒答、重路由事件，历史 Parts 和路由事实不删除，
 无需改变请求参数、WebSocket 或 Resume 处理；下一次独立问答仍可能使用前一 Run 的路由历史。
+
+新确认流程仍提交 `CONTINUE_INTERACTION + interactionId + approved`。普通模式使用本次请求的
+`intentAccessName`（缺失回退默认），聚合专家使用发问时保存且准入锁内校验一致的入口；
+专家范围已变化时不能继续旧确认。metadata和附件仅来自本次显式提交，私有拒答状态不公开。
+新Interaction没有候选名称，前端使用通用“重新识别”提示，不访问不存在的候选字段。
+存量无 `confirmationStage` 的候选卡片继续原处理；未知阶段不能当作旧卡片提交。
+发布需避免新Interaction被不支持该阶段的旧实例处理。Run-B中的Intent仍可读取Run-A的路由历史。
+新确认链在接管或替换Binding后失败时取消本次确认，不恢复引用旧Binding归属的WAITING；
+尚未接管时仍沿用可重试等待。收到失败后读取stream-status校准，不自动重发旧确认。
 
 路由切换等待事件的关键字段示例：
 
@@ -892,9 +901,8 @@ TopK 前，内存中的本轮路由也不会补回。之前 Run（包括 Ask Use
     "currentProvider": "domain-agent",
     "currentTargetId": "tax-agent",
     "currentRouteSource": "front-selected",
-    "candidateProvider": "domain-agent",
-    "candidateTargetId": "accounting-agent",
-    "candidateIntentName": "账务问答",
+    "confirmationStage": "BEFORE_INTENT",
+    "message": "当前技能无法处理该问题，是否重新识别并选择合适技能继续回答？",
     "refusalCode": "FN-EX-CAHT-BIZ-DAG-001",
     "refusalReasonCode": "OUT_OF_DOMAIN",
     "refusalRecoverable": false,
@@ -2912,7 +2920,7 @@ Relay WebSocket 始终使用短连接：每个 run 新建下游 WS，先发送 `
 
 上一段的 `session-ready/user-message` 描述适用于 Delegate。Domain Expert 还接受明确包含 `Ready to chat` 的 system config 帧，并发送带动态 `roleName` 的 `chat_expert`；专家 Profile 和角色不出现在公开请求字段中。Delegate完成后保留RESUMABLE，专家完成后保持ACTIVE并优先续接；存量专家RESUMABLE不会自动激活，只有再次命中匹配档案后恢复。问卷续接只发送 `approval-response`。Delegate 与专家均只在终态 `session-state=completed/waiting_user_input/paused` 后闭合；`idle`、`agent-call(false)`、`generate-response(is_final=true)`、`stream-complete/[DONE]` 均不得让前端提前结束本轮。
 
-等待用户输入后的续接统一从 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 进入。普通 `INTENT_CLARIFICATION` 属于路由阶段，会把回答保存为独立 user 消息并继续调用 intent-agent，下一轮问题或最终回答也保存为新的 assistant；`AMBIGUOUS_ROUTE` 是例外，指定候选或代选时跳过 intent-agent，输入“其他”时才重新调用，并始终复用原 assistant。`AGENT_CLARIFICATION` 属于 Runtime 执行阶段，由 `AgentRuntimeInteraction` 承载并继续复用原 assistant，当前 Relay WebSocket adapter 会发送 Relay `approval-response`；`ROUTE_SWITCH_CONFIRMATION` 属于 ChatService 路由确认，用户同意后才切换到候选 DomainAgent 或 Relay。
+等待用户输入后的续接统一从 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 进入。普通 `INTENT_CLARIFICATION` 属于路由阶段，会把回答保存为独立 user 消息并继续调用 intent-agent，下一轮问题或最终回答也保存为新的 assistant；`AMBIGUOUS_ROUTE` 是例外，指定候选或代选时跳过 intent-agent，输入“其他”时才重新调用，并始终复用原 assistant。`AGENT_CLARIFICATION` 属于 Runtime 执行阶段，由 `AgentRuntimeInteraction` 承载并继续复用原 assistant，当前 Relay WebSocket adapter 会发送 Relay `approval-response`；`ROUTE_SWITCH_CONFIRMATION` 属于 ChatService 路由确认，新交互在用户同意后调用 Intent 并执行结果；存量无阶段标记的交互仍执行已保存候选，不重复 Intent。
 
 | 事件类型 | 标准 payload |
 | --- | --- |

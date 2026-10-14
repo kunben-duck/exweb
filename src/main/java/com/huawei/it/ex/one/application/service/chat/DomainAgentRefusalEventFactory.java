@@ -4,6 +4,7 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalProgress;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
@@ -25,6 +26,48 @@ import java.util.Map;
 
 /** Creates the existing events and private command metadata for DomainAgent refusal rerouting. */
 final class DomainAgentRefusalEventFactory {
+    RuntimeEvent replacementEvent(DomainAgentRerouteContext reroute, RouteTarget route, String action) {
+        if (!reroute.confirmed()) {
+            return rerouteMetadata(reroute.context(), reroute.refusal(), route, action);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "chatservice");
+        payload.put("sourceType", "route-switch-applied");
+        payload.put("metadataType", "route_switch_applied");
+        payload.put("interactionId", reroute.confirmationInteractionId());
+        payload.put("targetProvider", route.type() == RouteType.DOMAIN_AGENT ? "domain-agent" : "relay");
+        payload.put("targetId", route.type() == RouteType.DOMAIN_AGENT ? route.selectedAgentCode() : "relay");
+        payload.put("routeSource", route.routeSource());
+        return RuntimeEvent.metadata(reroute.context().runId(), reroute.context().session().id(), Map.copyOf(payload));
+    }
+
+    RuntimeEvent beforeIntentConfirmation(DomainAgentRerouteContext reroute, String routeSource) {
+        DomainAgentRunContext context = reroute.context();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "chatservice");
+        payload.put("sourceType", "route-switch-confirmation-request");
+        payload.put("interactionType", ChatInteractionType.ROUTE_SWITCH_CONFIRMATION.name());
+        payload.put(RouteSwitchRerouteContext.STAGE_KEY, RouteSwitchRerouteContext.BEFORE_INTENT);
+        payload.put("currentProvider", RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
+        payload.put("currentTargetId", reroute.currentDomainAgentId());
+        putIfNotNull(payload, "currentRouteSource", routeSource);
+        payload.put("message", "当前技能无法处理该问题，是否重新识别并选择合适技能继续回答？");
+        putIfNotNull(payload, "refusalCode", reroute.refusal().code());
+        putIfNotNull(payload, "refusalReasonCode", reroute.refusal().reasonCode());
+        putIfNotNull(payload, "refusalRecoverable", reroute.refusal().recoverable());
+        putIfNotNull(payload, "refusalReason", reroute.refusal().message());
+        payload.put("originalQuery", context.command().message() == null ? "" : context.command().message());
+        Map<String, Object> snapshot = new LinkedHashMap<>(clarificationPayload(reroute, Map.of(), routeSource));
+        snapshot.put("originalQuery", payload.get("originalQuery"));
+        putIfNotNull(snapshot, "routeMemoryQuery", context.routeMemoryQuery());
+        snapshot.putAll(context.persistenceState().runMetadataOverlay());
+        snapshot = IntentExpertContext.withScope(
+                snapshot, context.command().intentExpertScope());
+        // 私有状态仅随 WAIT 事务保存，不将其混入可发布、可分享的卡片。
+        context.pendingInteractionPayloadRef().set(Map.of(RouteSwitchRerouteContext.PRIVATE_KEY, snapshot));
+        return RuntimeEvent.card(context.runId(), context.session().id(), Map.copyOf(payload));
+    }
+
     ChatEvent enrichControlEvent(ChatEvent event, String domainAgentId) {
         if (event == null || event.payload() == null
                 || DomainAgentControlEventMapper.fromNormalizedPayload(event.payload()).isEmpty()) {
@@ -139,10 +182,18 @@ final class DomainAgentRefusalEventFactory {
         putIfNotNull(rerouteState, "refusalAgentId", reroute.refusal().agentId());
         rerouteState.put(DomainAgentRejectReason.METADATA_KEY, reroute.lastIntentRejectReason().toMap());
         rerouteState.put("rerouteCount", context.rerouteCount());
+        putIfNotNull(rerouteState, "confirmationInteractionId", reroute.confirmationInteractionId());
+        if (reroute.confirmed()) {
+            rerouteState.putAll(context.persistenceState().runMetadataOverlay());
+        }
         rerouteState.put("rejectedDomainAgentIds", List.copyOf(reroute.rejectedDomainAgentIds()));
         putIfNotNull(rerouteState, "originalQuery",
                 firstText(context.routeMemoryQuery(), context.command().message()));
-        payload.put(RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA, Map.copyOf(rerouteState));
+        payload.put(RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA,
+                reroute.confirmed()
+                        ? IntentExpertContext.withScope(
+                                rerouteState, context.command().intentExpertScope())
+                        : Map.copyOf(rerouteState));
         return ChatPayloadMaps.immutableCopy(payload);
     }
 

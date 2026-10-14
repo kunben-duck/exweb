@@ -980,6 +980,11 @@ abstract class ChatFlowTestSupport {
                 new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
                 new RouteSignalProperties(false, false)) {
             @Override
+            public Flux<RouteSignalFrame> routeIntentWithProgress(RouteSignalRequest request) {
+                return routeInitialWithProgress(request);
+            }
+
+            @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 routeCalls.incrementAndGet();
                 return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(

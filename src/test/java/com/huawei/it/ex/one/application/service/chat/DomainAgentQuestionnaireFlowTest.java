@@ -183,6 +183,11 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
             rerouteRequest.set(invocation.getArgument(0));
             return Flux.just(RouteSignalFrame.result(rerouteResult.get()));
         }).when(routes).routeInitialWithProgress(any());
+        doAnswer(invocation -> {
+            routeCalls.incrementAndGet();
+            rerouteRequest.set(invocation.getArgument(0));
+            return Flux.just(RouteSignalFrame.result(rerouteResult.get()));
+        }).when(routes).routeIntentWithProgress(any());
         var terminal = new ChatRunTerminalCommitService(streamService, sessionService, runs, leaseService,
                 bindings, interactionService, Duration.ZERO);
         var bindingService = new RuntimeBindingApplicationService(
@@ -520,14 +525,16 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
         ChatInteractionRequest waiting = start();
         refuseAnswer();
         List<ChatEvent> result = respond(waiting, true, Map.of("label", Map.of("期间", "本月")));
-        assertThat(result.getLast().type()).isEqualTo("run.completed");
-        assertThat(queries).hasValue(2);
-        assertThat(rerouteRequest.get().command().message()).contains("original question", "期间", "本月");
-        assertThat(rerouteRequest.get().command().intentAccessName()).isEqualTo("saved-entry");
+        assertThat(result.getLast().type()).isEqualTo("run.waiting_user");
+        assertThat(queries).hasValue(1);
+        assertThat(rerouteRequest.get()).isNull();
+        ChatInteractionRequest confirmation = awaitWaitingInteraction(interactions, waiting.id());
+        assertThat(RouteSwitchRerouteContext.require(confirmation).originalQuery())
+                .contains("original question", "期间", "本月");
         assertThat(query.get().messageId()).isEqualTo(waiting.userMessageId());
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role())).singleElement()
-                .satisfies(message -> assertThat(message.content()).isEqualTo("rerouted"));
-        assertThat(result).extracting(ChatEvent::type).contains("runtime.metadata");
+                .satisfies(message -> assertThat(message.parts()).extracting(ChatMessagePart::partType)
+                        .contains("ROUTE_SWITCH_CONFIRMATION_REQUEST"));
     }
 
     @Test
@@ -538,7 +545,8 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
         assertThat(respond(waiting, true, Map.of("label", Map.of("期间", "本月"))).getLast().type())
                 .isEqualTo("run.waiting_user");
         assertThat(interactions.requests.values()).anySatisfy(request -> {
-            assertThat(request.requestPayload()).containsEntry("candidateTargetId", "skill-b");
+            assertThat(request.requestPayload()).containsEntry("confirmationStage", "BEFORE_INTENT")
+                    .doesNotContainKey("candidateTargetId");
             assertThat(request.status()).isEqualTo(ChatInteractionStatus.WAITING);
         });
         assertThat(queries).hasValue(1);
@@ -553,7 +561,9 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
         assertThat(respond(waiting, true, Map.of("label", Map.of("期间", "本月"))).getLast().type())
                 .isEqualTo("run.waiting_user");
         assertThat(interactions.requests.values()).anySatisfy(request ->
-                assertThat(request.requestPayload()).containsEntry("candidateProvider", "relay"));
+                assertThat(request.requestPayload()).containsEntry("confirmationStage", "BEFORE_INTENT")
+                        .doesNotContainKey("candidateProvider"));
+        assertThat(rerouteRequest.get()).isNull();
     }
 
     private void refuseAnswer() {

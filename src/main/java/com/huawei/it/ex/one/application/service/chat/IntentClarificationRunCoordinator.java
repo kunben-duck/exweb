@@ -114,10 +114,12 @@ final class IntentClarificationRunCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-intent-interaction-execution-create");
-        AssistantAssembly assistant = new AssistantAssembly();
+        AssistantAssembly assistant = new AssistantAssembly(
+                RouteSwitchRerouteContext.continuationPersistenceState(routedCommand));
         // 路由与终态管线共享待提交引用，附件拒绝不能只在局部事件源中确认 Binding 成功。
         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef = new AtomicReference<>();
         AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef = new AtomicReference<>();
+        AtomicReference<PendingRouteSwitchAppliedEvent> pendingSwitch = new AtomicReference<>();
         AtomicReference<java.util.Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
@@ -133,16 +135,15 @@ final class IntentClarificationRunCoordinator {
                 request.startAttempt(),
                 request.input().cumulativeDocumentIds(),
                 deferredDomainAgentBindingRef,
-                pendingRouteMemoryDecisionRef);
+                pendingRouteMemoryDecisionRef, pendingSwitch);
         // 折叠问题用于 RouteMemory；实际 Intent 输入另行传递，避免把澄清回答丢出上下文。
         String foldedRouteQuery = clarificationAssembler.routeMemoryQuery(
                 messagePlan, interaction, request.input().intentQuery());
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(
                     context,
-                    () -> Flux.concat(
-                            Flux.just(responseEvent),
-                            runtimeDispatchCoordinator.execute(new RoutePipelineRequest(
+                    () -> RouteSwitchRerouteContext.afterResponse(routedCommand, responseEvent,
+                            () -> runtimeDispatchCoordinator.execute(new RoutePipelineRequest(
                                     request.user(),
                                     request.session(),
                                     routedCommand,
@@ -168,7 +169,7 @@ final class IntentClarificationRunCoordinator {
                                     assistant.messageSkill(),
                                     pendingInteractionPayloadRef,
                                     deferredDomainAgentBindingRef,
-                                    pendingRouteMemoryDecisionRef))));
+                                    pendingRouteMemoryDecisionRef, pendingSwitch))));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
         }

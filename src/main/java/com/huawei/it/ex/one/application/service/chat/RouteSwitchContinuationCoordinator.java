@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
@@ -34,6 +35,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.time.Instant;
 import java.util.HashSet;
@@ -54,6 +56,7 @@ final class RouteSwitchContinuationCoordinator {
     private final AgentDataPersistenceGate persistenceGate;
     private final RunMemoryContextAssembler memoryAssembler;
     private final DocumentFacade documentFacade;
+    private final RuntimeBindingApplicationService runtimeBindingService;
     private final DomainAgentAttachmentValidationFailureExecutor attachmentFailureExecutor =
             new DomainAgentAttachmentValidationFailureExecutor();
 
@@ -127,6 +130,7 @@ final class RouteSwitchContinuationCoordinator {
             DocumentFacade documentFacade) {
         this.contextResolver = new RouteSwitchContextResolver(
                 runtimeBindingService, sensitiveInformationResolver);
+        this.runtimeBindingService = runtimeBindingService;
         this.lifecycle = lifecycle;
         this.appliedRouteRecorder = appliedRouteRecorder;
         this.interactionEventFactory = interactionEventFactory;
@@ -140,6 +144,8 @@ final class RouteSwitchContinuationCoordinator {
 
     Flux<ChatEvent> execute(Request request) {
         ChatInteractionRequest interaction = request.claim().request();
+        boolean beforeIntent = RouteSwitchRerouteContext.beforeIntent(interaction);
+        RouteSwitchRerouteContext reroute = beforeIntent ? RouteSwitchRerouteContext.require(interaction) : null;
         RouteSwitchInput input = contextResolver.input(
                 interaction, request.claim());
         RuntimeEvent responseEvent = interactionEventFactory.routeSwitchResponseEvent(
@@ -147,7 +153,10 @@ final class RouteSwitchContinuationCoordinator {
                 request.session().id(),
                 interaction,
                 request.claim().responsePayload());
-        RouteTarget route = contextResolver.target(interaction, input);
+        RouteTarget route = beforeIntent
+                ? RouteTarget.domainAgent(input.currentTargetId(), reroute.state().currentRouteSource(),
+                1.0, "pending confirmed intent reroute")
+                : contextResolver.target(interaction, input);
         ChatMessage userMessage = new ChatMessage(
                 interaction.userMessageId(),
                 request.user().tenantId(),
@@ -163,16 +172,20 @@ final class RouteSwitchContinuationCoordinator {
                 userMessage,
                 null);
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
-        ChatRun run = lifecycle.create(new CreateChatRunContext(
+        CreateChatRunContext createContext = new CreateChatRunContext(
                 request.runId(),
                 request.user(),
                 request.session().id(),
                 route,
                 null,
-                lifecycle.metadata(interaction),
+                beforeIntent ? IntentExpertContext.withScope(
+                        lifecycle.metadata(interaction), reroute.expertScope()) : lifecycle.metadata(interaction),
                 ChatRunMode.NEXT,
                 interaction.userMessageId(),
-                interaction.userMessageId()), interaction);
+                interaction.userMessageId());
+        ChatRun run = beforeIntent
+                ? lifecycle.createConfirmedReroute(createContext, interaction, reroute.expertScope())
+                : lifecycle.create(createContext, interaction);
         lifecycle.trackRun(
                 request.startAttempt(), run, "after-domain-switch-run-create");
         RunExecutionClaim executionClaim;
@@ -187,7 +200,7 @@ final class RouteSwitchContinuationCoordinator {
                 "after-domain-switch-execution-create");
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
-        AssistantAssembly assistant = new AssistantAssembly();
+        AssistantAssembly assistant = new AssistantAssembly(beforeIntent ? reroute.persistenceState() : null);
         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef = new AtomicReference<>();
         AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef = new AtomicReference<>();
         AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef =
@@ -231,6 +244,9 @@ final class RouteSwitchContinuationCoordinator {
     }
 
     private Flux<ChatEvent> executeAfterStart(StartedSwitchContext context) {
+        if (RouteSwitchRerouteContext.beforeIntent(context.interaction()) && context.input().approved()) {
+            return executeConfirmedReroute(context);
+        }
         // Gate 先于 Binding 变更；通过后的 DomainAgent 切换仍需在短事务内再次验证执行权。
         Mono<AgentDataPersistenceGate.Decision> preflight = !context.input().approved() || persistenceGate == null
                 ? Mono.just(AgentDataPersistenceGate.Decision.allowed(
@@ -246,6 +262,43 @@ final class RouteSwitchContinuationCoordinator {
                                 context.executionClaim(), "before-route-switch-attachment-rejection")
                         .thenMany(Flux.defer(() -> executeUnsupportedAttachment(context, decision)))
                 : Flux.defer(() -> executeAfterPolicy(context)));
+    }
+
+    private Flux<ChatEvent> executeConfirmedReroute(StartedSwitchContext context) {
+        Sinks.One<Void> confirmed = Sinks.one();
+        // concat 的发出顺序不是提交顺序，必须等响应卡片 ACK 后才能更新 Run 或开始 Intent。
+        return Flux.concat(Flux.just(new PersistenceAcknowledgedEvent(context.responseEvent(), confirmed)),
+                confirmed.asMono().then(eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                                context.executionClaim(), "before-confirmed-intent"))
+                        .thenMany(Flux.defer(() -> confirmedRerouteBody(context))));
+    }
+
+    private Flux<ChatEvent> confirmedRerouteBody(StartedSwitchContext context) {
+        Request request = context.request();
+        RouteSwitchRerouteContext saved = RouteSwitchRerouteContext.require(context.interaction());
+        RuntimeBinding binding = runtimeBindingService.resumeForConfirmedReroute(
+                context.interaction(), context.executionClaim(), saved.state().currentTargetId());
+        context.bindingRef().set(binding);
+        appliedRouteRecorder.bindResolvedRouteRequired(request.runId(), context.route(), binding,
+                context.executionClaim(), context.assistant().persistenceState());
+        ChatCommand command = new ChatCommand(null, request.user().tenantId(), request.user().ownerUserId(),
+                request.session().id(), null, request.session().channel(), saved.originalQuery(),
+                request.resolvedAttachments().attachments(), runtimeMetadata(request), null, null,
+                ChatRunMode.NEXT, context.interaction().assistantMessageId(), null, null, null,
+                null, null, null, Map.of(), null, null, request.agentMode(), null, null,
+                saved.expertScope() == null ? request.intentAccessName() : saved.expertScope().intentAccessName(),
+                saved.expertScope());
+        MemoryContext memory = memoryAssembler == null ? MemoryContext.empty() : memoryAssembler.assemble(
+                command, request.session().currentLeafMessageId(), context.interaction().userMessageId());
+        DomainAgentRunContext source = new DomainAgentRunContext(command, request.runId(),
+                context.interaction().userMessageId(), request.session(), memory, context.route(), request.user(),
+                context.routeRef(), context.bindingRef(), context.executionClaim(), request.forwardHeaders(),
+                request.traceContext(), null, request.resolvedAttachments().documents(),
+                saved.state().rejectedDomainAgentIds(), saved.state().rerouteCount(), saved.routeQuery(),
+                context.assistant().persistenceState(), context.assistant().messageSkill(),
+                context.pendingInteractionPayloadRef(), context.deferredDomainAgentBindingRef(),
+                context.pendingRouteMemoryDecisionRef(), context.pendingRouteSwitchAppliedEventRef());
+        return refusalCoordinator.rerouteConfirmed(source, saved.state(), context.interaction().id(), request.agentMode());
     }
 
     private Flux<ChatEvent> executeUnsupportedAttachment(

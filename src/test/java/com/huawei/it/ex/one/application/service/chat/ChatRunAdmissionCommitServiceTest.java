@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -29,6 +30,8 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
@@ -119,6 +122,57 @@ class ChatRunAdmissionCommitServiceTest {
         verify(fixture.runService()).insertInteractionRunning(context.capture(), eq("interaction1"));
         assertThat(IntentExpertContext.fromMetadata(context.getValue().metadata())).contains(EXPERT_B);
         assertThat(result.intentExpertScope()).isEqualTo(EXPERT_B);
+    }
+
+    @Test
+    void authorizedClarificationRequiresSameExpertEvenAfterInitialConsent() {
+        ChatInteractionRequest interaction = mock(ChatInteractionRequest.class);
+        when(interaction.id()).thenReturn("interaction1");
+        when(interaction.requestPayload()).thenReturn(Map.of("domainAgentRerouteContext",
+                IntentExpertContext.withScope(Map.of("confirmationInteractionId", "consent1"), EXPERT_A)));
+
+        RouteSwitchRerouteContext.validateContinuationScope(interaction, EXPERT_A);
+        assertThatThrownBy(() -> RouteSwitchRerouteContext.validateContinuationScope(interaction, EXPERT_B))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> RouteSwitchRerouteContext.validateContinuationScope(interaction, null))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void authorizedClarificationRejectsScopeChangeBeforeMessageMutation(boolean reuseAssistant) {
+        Fixture fixture = fixture();
+        ChatSession stale = session(EXPERT_A);
+        ChatSession current = session(EXPERT_B);
+        ChatInteractionRequest interaction = mock(ChatInteractionRequest.class);
+        when(interaction.interactionType()).thenReturn(ChatInteractionType.INTENT_CLARIFICATION);
+        when(interaction.id()).thenReturn("interaction1");
+        when(interaction.assistantMessageId()).thenReturn("assistant1");
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("domainAgentRerouteContext", IntentExpertContext.withScope(
+                Map.of("confirmationInteractionId", "consent1"), EXPERT_A));
+        if (reuseAssistant) {
+            payload.put("clarificationType", "AMBIGUOUS_ROUTE");
+        }
+        when(interaction.requestPayload()).thenReturn(payload);
+        when(fixture.sessionService().lockAndReloadForMessageMutation(
+                USER.tenantId(), USER.ownerUserId(), stale)).thenReturn(current);
+        ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand command =
+                new ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand(
+                        USER, stale, "run1", interaction, "answer", List.of(), Map.of());
+
+        assertThatThrownBy(() -> {
+            if (reuseAssistant) {
+                fixture.service().commitReusableIntentClarification(command);
+            } else {
+                fixture.service().commitIntentClarification(command);
+            }
+        }).isInstanceOf(IllegalStateException.class);
+        verify(fixture.sessionService(), never()).prepareIntentClarificationAnswer(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(fixture.sessionService(), never()).prepareReusableIntentClarification(
+                any(), any(), any(), any(), any());
+        verify(fixture.runService(), never()).insertInteractionRunning(any(), any());
     }
 
     @Test

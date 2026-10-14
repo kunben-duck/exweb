@@ -620,6 +620,17 @@ public class ChatRunTerminalCommitService {
         if (!reusableInteraction(context) || event == null || !"run.failed".equals(event.type())) {
             return false;
         }
+        ChatInteractionRequest interaction = context.continuationInteractionRequest();
+        Map<String, Object> reroute = DomainAgentQuestionnaireContext.map(interaction.requestPayload().get(
+                RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA));
+        RuntimeBinding binding = context.bindingRef().get();
+        if ((RouteSwitchRerouteContext.BEFORE_INTENT.equals(
+                interaction.requestPayload().get(RouteSwitchRerouteContext.STAGE_KEY))
+                || reroute.get("confirmationInteractionId") != null)
+                && binding != null && context.runId().equals(binding.lastRunId())) {
+            // 新确认链已接管或替换 Binding 后，不再恢复引用旧 lastRunId 的等待确认。
+            return true;
+        }
         RuntimeInteractionDispatchState dispatchState = context.interactionDispatchState();
         if (dispatchState == null || !dispatchState.trackedInteraction()) {
             return false;

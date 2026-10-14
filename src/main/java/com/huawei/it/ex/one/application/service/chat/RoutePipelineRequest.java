@@ -52,7 +52,8 @@ record RoutePipelineRequest(
         MessageSkillTracker messageSkill,
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
-        AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef
+        AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef,
+        AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
 ) {
     RoutePipelineRequest {
         persistenceState = persistenceState == null
@@ -68,6 +69,26 @@ record RoutePipelineRequest(
         pendingRouteMemoryDecisionRef = pendingRouteMemoryDecisionRef == null
                 ? new AtomicReference<>()
                 : pendingRouteMemoryDecisionRef;
+        pendingRouteSwitchAppliedEventRef = pendingRouteSwitchAppliedEventRef == null
+                ? new AtomicReference<>() : pendingRouteSwitchAppliedEventRef;
+    }
+
+    RoutePipelineRequest(UserContext user, ChatSession session, ChatCommand runCommand,
+                         List<AttachmentRef> attachments, List<UploadedDocument> documents, MemoryContext memory,
+                         String runId, String runtimeBindingLeafId, RuntimeForwardHeaders forwardHeaders,
+                         TraceContext traceContext, AtomicReference<RouteTarget> routeRef,
+                         AtomicReference<RuntimeBinding> bindingRef, AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+                         RunExecutionClaim executionClaim, ChatRun run, String routeMemoryQuery, String intentQuery,
+                         String intentRouteMemoryQuery, Map<String, Object> runtimeMetadataOverride, AgentModeProfile agentMode,
+                         RuntimeBindingDispatchLifecycle bindingLifecycle, AgentDataPersistenceState persistenceState,
+                         MessageSkillTracker messageSkill, AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
+                         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+                         AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef) {
+        this(user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
+                forwardHeaders, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim,
+                run, routeMemoryQuery, intentQuery, intentRouteMemoryQuery, runtimeMetadataOverride, agentMode,
+                bindingLifecycle, persistenceState, messageSkill, pendingInteractionPayloadRef,
+                deferredDomainAgentBindingRef, pendingRouteMemoryDecisionRef, new AtomicReference<>());
     }
 
     RoutePipelineRequest(

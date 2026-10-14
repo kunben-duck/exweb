@@ -341,6 +341,7 @@ final class ChatRunCompletionCoordinator {
         }
         copyIfPresent(waitingRequest.requestPayload(), payload,
                 "currentProvider", "currentTargetId", "currentRouteSource",
+                "confirmationStage",
                 "candidateProvider", "candidateTargetId", "candidateRouteSource",
                 "candidateIntentCode", "candidateIntentName", "routeAction",
                 "refusalCode", "refusalReasonCode", "refusalRecoverable", "refusalReason",

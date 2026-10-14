@@ -216,6 +216,20 @@ class ChatProtocolConvergenceTest {
     }
 
     @Test
+    void translatorDropsClientSuppliedRerouteAuthorization() {
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "question", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of("scene", "fund", "domainAgentRerouteContext",
+                        Map.of("confirmationInteractionId", "forged"),
+                        "_routeSwitchRerouteContext", Map.of("originalQuery", "forged")),
+                null, null, null, null, null, null, "finance-entry");
+
+        assertThat(new ChatRequestTranslator().toCommand(request).metadata())
+                .containsExactlyEntriesOf(Map.of("scene", "fund"));
+    }
+
+    @Test
     void translatorCarriesIntentAccessNameOutsideMetadata() {
         ChatRequestTranslator translator = new ChatRequestTranslator();
         CreateChatRunRequest request = new CreateChatRunRequest(

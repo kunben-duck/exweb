@@ -136,6 +136,11 @@ public class RouteSignalApplicationService {
         return Flux.defer(() -> routeInitialFrames(request));
     }
 
+    /** 用户已确认重新识别时直接执行 Intent，不让用例库提前选择技能。 */
+    public Flux<RouteSignalFrame> routeIntentWithProgress(RouteSignalRequest request) {
+        return Flux.defer(() -> intentOrFallbackFrames(request));
+    }
+
     private Flux<RouteSignalFrame> routeInitialFrames(RouteSignalRequest request) {
         UserContext user = request.user();
         ChatSession session = request.session();

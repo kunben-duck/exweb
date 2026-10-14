@@ -136,7 +136,7 @@ class DomainAgentThinkToolFlowTest extends ChatFlowTestSupport {
         List<ChatMessagePart> parts = assistant.parts().stream()
                 .filter(part -> "THINKING".equals(part.partType()) || "TOOL".equals(part.partType())).toList();
         assertThat(parts).extracting(ChatMessagePart::status).containsExactly("STARTED", "STREAMING", "STREAMING", "COMPLETED");
-        assertThat(parts).extracting(ChatMessagePart::title).containsExactly("正在分析", "思考过程", "工具调用", "分析完成");
+        assertThat(parts).extracting(ChatMessagePart::title).containsExactly("思考过程", "思考过程", "工具调用", "思考过程");
         assertThat(parts).extracting(ChatMessagePart::contentText).containsExactly("我理解", "您希望分析数据", "glob", "分析完成");
         for (int index = 0; index < parts.size(); index++) {
             ChatMessagePart part = parts.get(index);
@@ -204,6 +204,12 @@ class DomainAgentThinkToolFlowTest extends ChatFlowTestSupport {
         assertThat(single.get(user, selectedShare.id()).snapshot().messages().getLast().parts())
                 .filteredOn(part -> "THINKING".equals(part.partType()) || "TOOL".equals(part.partType()))
                 .extracting(part -> part.payload()).containsExactlyElementsOf(parts.stream().map(ChatMessagePart::payload).toList());
+        assertThat(single.get(user, singleShare.id()).snapshot().parts())
+                .filteredOn(part -> "THINKING".equals(part.partType()) || "TOOL".equals(part.partType()))
+                .extracting(part -> part.title()).containsExactly("思考过程", "思考过程", "工具调用", "思考过程");
+        assertThat(single.get(user, selectedShare.id()).snapshot().messages().getLast().parts())
+                .filteredOn(part -> "THINKING".equals(part.partType()) || "TOOL".equals(part.partType()))
+                .extracting(part -> part.title()).containsExactly("思考过程", "思考过程", "工具调用", "思考过程");
     }
 
     @Test

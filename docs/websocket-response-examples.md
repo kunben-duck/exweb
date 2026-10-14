@@ -959,7 +959,7 @@ FULL 模式下，`fin_ex_chat_event_t.event_type` 分别为 `runtime.thinking/ru
     "parts":[
       {
         "partId":"part_think","messageId":"msg_assistant","runId":"run_process",
-        "partType":"THINKING","sourceType":"think","contentText":"我理解","title":"正在分析",
+        "partType":"THINKING","sourceType":"think","contentText":"我理解","title":"思考过程",
         "status":"STARTED","channel":"thinking","displayHint":"collapsible","visible":true,
         "payload":{"source":"domain-agent","sourceType":"think","type":"think","thinkState":"start","thinkTitle":"正在分析","thinkContent":"我理解","serverTimestampMs":1791594000000},
         "partOrder":2,"createdAt":"2026-10-10T01:00:05Z"
@@ -977,9 +977,9 @@ FULL 模式下，`fin_ex_chat_event_t.event_type` 分别为 `runtime.thinking/ru
 }
 ```
 
-Part 的 `title/status/contentText` 是已有列，不是新增 payload 别名。THINKING 缺少标题时显示“思考过程”，增量状态为 STREAMING，stop 为 COMPLETED；TOOL 的 STREAMING 是展示默认值，不证明工具仍在执行。新 Part 可进入新建分享，工具普通文本中的路径不会因字段名脱敏被自动移除。no-store 仍仅实时推送这些业务事件，不能依赖历史或 Resume 补发；不回填旧历史和分享。
+Part 的 `title/status/contentText` 是已有列，不是新增 payload 别名。DomainAgent `type=think` 的 THINKING 展示标题统一为“思考过程”，增量状态为 STREAMING，stop 为 COMPLETED；TOOL 的 STREAMING 是展示默认值，不证明工具仍在执行。新 Part 可进入新建分享，工具普通文本中的路径不会因字段名脱敏被自动移除。no-store 仍仅实时推送这些业务事件，不能依赖历史或 Resume 补发；不回填旧历史和分享。
 
-上述 DomainAgent `type=think` 示例的 Part 展示 `title` 最多256个Unicode码点：超长截取前256码点，不追加省略号、不拆开Emoji代理对；短标题原样保留，缺失或空白仍显示“思考过程”。`payload.thinkTitle` 及 `contentText` 保持完整，因此实时推送、Event Resume与历史payload中的原始标题不受展示列上限影响。
+上述 DomainAgent `type=think` 示例不将下游 `thinkTitle` 提取到 Part 展示 `title` 列。`payload.thinkTitle` 保留完整原值；`contentText` 优先使用非空 `thinkContent`，其次使用 `thinkTitle`，不截断。实时推送、Event Resume与历史payload中的原始标题均不变，旧历史和已有分享快照不改写。
 
 <a id="s03"></a>
 ### S03 Relay Delegate 与专家

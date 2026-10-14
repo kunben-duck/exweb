@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
+import com.huawei.it.ex.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
@@ -38,6 +39,7 @@ import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -53,16 +55,14 @@ class DomainAgentThinkTitlePersistenceTest extends ChatFlowTestSupport {
 
     @ParameterizedTest
     @MethodSource("boundaryTitles")
-    void onlyDisplayTitleIsLimitedByUnicodeCodePoints(String title) throws Exception {
+    void downstreamTitleNeverOverridesSystemTitleOrLosesPayloadContent(String title) throws Exception {
         ChatEvent event = normalizer.normalize("run1", "session1", thinkFrame(title)).getFirst();
         AssistantAssembly assembly = new AssistantAssembly();
         assembly.observe(event);
 
         var part = assembly.parts().getFirst();
-        int length = Math.min(256, title.codePointCount(0, title.length()));
-        assertThat(part.title()).isEqualTo(title.substring(0, title.offsetByCodePoints(0, length)));
-        assertThat(part.title().codePointCount(0, part.title().length())).isEqualTo(length);
-        assertThat(Character.isHighSurrogate(part.title().charAt(part.title().length() - 1))).isFalse();
+        assertThat(part.title()).isNull();
+        assertThat(materialize(part).title()).isEqualTo("思考过程");
         assertThat(part.contentText()).isEqualTo(title);
         assertThat(part.payload()).containsAllEntriesOf(event.payload()).containsEntry("thinkTitle", title);
         assertThat(event.payload()).containsEntry("thinkTitle", title).doesNotContainKeys("title", "text", "status");
@@ -70,10 +70,11 @@ class DomainAgentThinkTitlePersistenceTest extends ChatFlowTestSupport {
     }
 
     private static Stream<String> boundaryTitles() {
-        return Stream.of("a", "中", "😀", "A中😀").flatMap(alphabet -> Stream.of(255, 256, 257).map(count -> {
+        Stream<String> longTitles = Stream.of("a", "中", "😀", "A中😀").flatMap(alphabet -> Stream.of(255, 256, 257).map(count -> {
             String repeated = alphabet.repeat(count);
             return repeated.substring(0, repeated.offsetByCodePoints(0, count));
         }));
+        return Stream.concat(Stream.of("正在分析", " 分析 😀 ", "中".repeat(100), "😀".repeat(65)), longTitles);
     }
 
     @ParameterizedTest
@@ -87,18 +88,34 @@ class DomainAgentThinkTitlePersistenceTest extends ChatFlowTestSupport {
         payload.put("thinkTitle", title);
         AssistantAssembly assembly = new AssistantAssembly();
         normalizer.normalize("run1", "session1", mapper.writeValueAsString(payload)).forEach(assembly::observe);
-        assertThat(assembly.parts().getFirst().title()).isEqualTo("思考过程");
+        assertThat(assembly.parts().getFirst().title()).isNull();
+        assertThat(materialize(assembly.parts().getFirst()).title()).isEqualTo("思考过程");
         assertThat(assembly.parts().getFirst().contentText()).isEqualTo(LONG_TITLE);
     }
 
     @Test
-    void shortTitleIsNotTrimmedAndContentTakesPrecedence() {
+    void shortTitleStaysOnlyInPayloadAndContentTakesPrecedence() {
         AssistantAssembly assembly = new AssistantAssembly();
         normalizer.normalize("run1", "session1",
                 "{\"type\":\"think\",\"thinkTitle\":\" 分析 😀 \",\"thinkContent\":\"完整思考内容\"}")
                 .forEach(assembly::observe);
-        assertThat(assembly.parts().getFirst().title()).isEqualTo(" 分析 😀 ");
+        assertThat(assembly.parts().getFirst().title()).isNull();
+        assertThat(materialize(assembly.parts().getFirst()).title()).isEqualTo("思考过程");
+        assertThat(assembly.parts().getFirst().payload()).containsEntry("thinkTitle", " 分析 😀 ");
         assertThat(assembly.parts().getFirst().contentText()).isEqualTo("完整思考内容");
+    }
+
+    @Test
+    void missingTitleUsesSystemDefaultWithoutAddingPayloadFields() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        normalizer.normalize("run1", "session1", "{\"type\":\"think\",\"thinkContent\":\"分析\"}")
+                .forEach(assembly::observe);
+
+        var part = assembly.parts().getFirst();
+        assertThat(part.title()).isNull();
+        assertThat(materialize(part).title()).isEqualTo("思考过程");
+        assertThat(part.contentText()).isEqualTo("分析");
+        assertThat(part.payload()).doesNotContainKeys("title", "thinkTitle");
     }
 
     @ParameterizedTest
@@ -143,7 +160,7 @@ class DomainAgentThinkTitlePersistenceTest extends ChatFlowTestSupport {
     }
 
     @Test
-    void stopReplaysFullEventIntoBoundedDisplayTitle() throws Exception {
+    void stopReplaysFullEventWithSystemDefaultTitle() throws Exception {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         TitleConstrainedMessageRepository messages = new TitleConstrainedMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -207,16 +224,22 @@ class DomainAgentThinkTitlePersistenceTest extends ChatFlowTestSupport {
         return messages.messages.stream().filter(message -> "assistant".equals(message.role())).findFirst().orElseThrow();
     }
 
+    private static ChatMessagePart materialize(ChatMessagePartDraft draft) {
+        return new ChatMessagePart("part1", "tenant1", "user1", "session1", "msg-assistant", "run1",
+                draft.partType(), draft.sourceType(), draft.contentText(), draft.title(), draft.status(),
+                draft.channel(), draft.displayHint(), draft.visible(), draft.payload(), 1, Instant.EPOCH);
+    }
+
     private static void assertPersistedTitle(ChatMessage assistant) {
         assertThat(assistant.parts()).filteredOn(part -> "THINKING".equals(part.partType()))
                 .singleElement().satisfies(part -> {
-                    assertThat(part.title()).isEqualTo(LONG_TITLE.substring(0, LONG_TITLE.offsetByCodePoints(0, 256)));
+                    assertThat(part.title()).isEqualTo("思考过程");
                     assertThat(part.contentText()).isEqualTo(LONG_TITLE);
                     assertThat(part.payload()).containsEntry("thinkTitle", LONG_TITLE);
                 });
     }
 
-    // 模拟 title VARCHAR(256) 的边界；不替代真实数据库事务及列约束验证。
+    // 模拟 UTF-8 字节语义的 title VARCHAR(256)；不替代真实数据库事务及列约束验证。
     private static final class TitleConstrainedMessageRepository extends InMemoryMessageRepository {
         @Override
         public ChatMessage save(ChatMessage message) {
@@ -240,8 +263,8 @@ class DomainAgentThinkTitlePersistenceTest extends ChatFlowTestSupport {
 
         private static void validateTitles(ChatMessage message) {
             for (ChatMessagePart part : message.parts()) {
-                if (part.title().codePointCount(0, part.title().length()) > 256) {
-                    throw new DataIntegrityViolationException("title exceeds VARCHAR(256)");
+                if (part.title().getBytes(StandardCharsets.UTF_8).length > 256) {
+                    throw new DataIntegrityViolationException("title exceeds VARCHAR(256) UTF-8 byte limit");
                 }
             }
         }

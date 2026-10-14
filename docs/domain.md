@@ -362,10 +362,10 @@ data: {"type":"tool","toolTitle":"glob","toolMatchRes":"[]"}
 
 | Part | contentText | title | status |
 |---|---|---|---|
-| THINKING | 优先非空 thinkContent，其次 thinkTitle | 非空 thinkTitle，最多256个Unicode码点；否则“思考过程” | start→STARTED、stop→COMPLETED、增量→STREAMING |
+| THINKING | 优先非空 thinkContent，其次 thinkTitle | 系统默认“思考过程”，不提取 thinkTitle | start→STARTED、stop→COMPLETED、增量→STREAMING |
 | TOOL | toolTitle | 工具调用 | STREAMING（展示默认值，不证明工具仍在运行） |
 
-仅新 THINKING Part 的展示 `title` 超长时截取前256个Unicode码点，不追加省略号、不拆开Emoji代理对；短标题原样保留，缺失或空白仍使用默认标题。`payload.thinkTitle` 和 `contentText` 不受该限制，Event、WebSocket及Resume中的原始标题保持完整。
+DomainAgent `type=think` 新生成的 THINKING Part 展示 `title` 统一使用系统默认“思考过程”，不再将下游 `thinkTitle` 写入该列。`payload.thinkTitle` 和 `contentText` 保持完整，Event、WebSocket及Resume中的原始标题不变；不回填旧历史或改写已有分享快照。
 
 FULL 下 Event 的 `payload_json` 保存精简字段；assistant 保存时 THINKING/TOOL Part 的 `payload_json` 保留同一 payload，并增加已有 `serverTimestampMs`。每帧独立成 Part，默认可见、可折叠，历史、Event Resume 和新建分享保留原字段；不拼入 assistant 正文。思考仍参与既有历史正文分段，snapshot 和拒答清空优先级不变。no-store 下仅实时推送，不扩大业务留存或补发保证。异步回调复用相同映射，不回填旧 Event、Part 或分享快照。
 

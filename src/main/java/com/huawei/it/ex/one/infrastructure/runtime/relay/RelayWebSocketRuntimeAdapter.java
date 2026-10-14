@@ -737,9 +737,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         config.put("sessionId", relaySessionId);
         config.put("uid", request.userId());
         putTraceId(config, request.traceContext());
-        if (request.runtimeSessionMode() == RuntimeSessionMode.RESUME) {
-            config.put("supports_incremental_recovery", true);
-        }
+        config.put("supports_incremental_recovery", true);
         config.put("appMode", runtimeProfile.appMode());
         putDomainExpertRoleName(config, runtimeProfile);
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));

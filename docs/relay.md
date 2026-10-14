@@ -28,7 +28,8 @@ ws://{host}:{port}/ws/{client_id}
   "config": {
     "sessionMode": "new",
     "sessionId": "17ef2ed5-6a12-4d2a-8f4b-c9f1e3ae6ef7",
-    "uid": "xxx"
+    "uid": "xxx",
+    "supports_incremental_recovery": true
   }
 }
 ```
@@ -55,7 +56,9 @@ ws://{host}:{port}/ws/{client_id}
 | config.uid | string | 否 | 用户工号，用于用户隔离；后端存入 `ctx.uid`，可用于会话归属标识 |
 | config.appMode | string | 否 | 运行模式：普通委托为 `delegate`（默认），ChatService 专家模式为 `domain_expert` |
 | config.roleName | string | 专家模式必填 | Domain Expert角色，来自ChatService可信路由或Binding；Delegate省略 |
-| config.supports_incremental_recovery | bool | 否 | 是否支持增量恢复；`true` 时服务端发送 `session-init(mode="incremental")`，客户端通过 `get-incremental-events` 查询驱动历史恢复；`false` 或缺省时走 legacy 全量回放路径 |
+| config.supports_incremental_recovery | bool | 否 | 是否支持增量恢复；ChatService在NEW和RESUME的config中均发送布尔值`true`，覆盖Delegate和专家。Relay在resume时按该能力选择增量恢复协议；`false`或缺省对应legacy全量回放路径 |
+
+ChatService在NEW时发送该字段仅用于声明能力，不会把`sessionMode=new`改为恢复会话，也不因此新增`get-incremental-events`请求。现有握手完成判定、业务帧发送顺序以及问卷续跑、临时Stop连接的配置保持不变；NEW场景的实际下游兼容性需联调确认。
 
 > **注意**：`project_home` 无需传入，后端自动使用默认路径 `~/tmp/xxx`。
 

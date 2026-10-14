@@ -880,7 +880,7 @@ DomainAgent 当前通过 HTTP 文本流调用，并和 Relay Runtime 一样以 `
 
 AgentRuntime 防腐层仍然保留。应用层普通问答只依赖 `AgentRuntime` 和 `AgentRuntimeRequest` 契约，等待用户输入后的续接只依赖 `AgentRuntimeInteraction` 和 `AgentRuntimeInteractionResponseRequest` 契约。当前 `relay` provider 唯一使用 WebSocket 协议防腐层；后续替换 Runtime 时应新增 `AgentRuntime` provider，Relay 协议细节继续限制在 `RelayRuntimeProtocolAdapter` 内，避免改动主编排。
 
-Relay WebSocket adapter 每个 run 都建立一条短生命周期下游连接，并把 `AgentRuntimeRequest.metadata()` 过滤后的非敏感字段放入 `user-message.metadata`；Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。应用层通过会话级 RuntimeBinding 显式传递 `runtimeSessionMode=NEW|RESUME`：同一 ChatService 会话只首次发送 `new`，此时 `config.sessionId` 使用 ChatService `sessionId`；Relay 返回 `session-ready.session_id` 后回填真实 `runtimeSessionId`，后续提问即使重新建连也全部发送 `resume`，并在 resume config 中声明 `supports_incremental_recovery=true`。
+Relay WebSocket adapter 每个 run 都建立一条短生命周期下游连接，并把 `AgentRuntimeRequest.metadata()` 过滤后的非敏感字段放入 `user-message.metadata`；Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。应用层通过会话级 RuntimeBinding 显式传递 `runtimeSessionMode=NEW|RESUME`：同一 ChatService 会话只首次发送 `new`，此时 `config.sessionId` 使用 ChatService `sessionId`；Relay 返回 `session-ready.session_id` 后回填真实 `runtimeSessionId`，后续提问即使重新建连也全部发送 `resume`。NEW和RESUME的config均声明 `supports_incremental_recovery=true`，覆盖Delegate和专家；该能力字段不改变会话模式、握手或业务帧顺序，也不新增增量事件拉取请求。
 
 上段描述的是 `DELEGATE` 业务帧。`DOMAIN_EXPERT` 使用相同 WebSocket、Cookie、心跳、超时和
 NEW/RESUME 生命周期，但 config 写入专家 `appMode`和`roleName`，随后发送

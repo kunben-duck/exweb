@@ -3369,6 +3369,10 @@ components:
           type: string
           example: message.delta
         payload:
+          type: object
+          properties:
+            runDurationMs:
+              $ref: '#/components/schemas/RunDurationMs'
           anyOf:
             - $ref: '#/components/schemas/RunAsyncRunningPayload'
             - $ref: '#/components/schemas/RunWaitingUserPayload'
@@ -3385,6 +3389,18 @@ components:
         新生成的run.started包含payload.status=STARTED及可信payload.userMessageId，与正常启动响应一致。
         FULL和ASSISTANT_PLACEHOLDER均持久化该开始事件；旧事件不回填该字段。
         前端优先保存启动响应中的ID；仅当Resume游标覆盖开始事件时，才能从run.started恢复该关联。
+        run.completed/run.waiting_user/run.failed/run.cancelled可包含runDurationMs，表示当前Run从创建到
+        终态提交准备阶段的毫秒数，不是跨Run累计耗时。缺少可信开始时间或旧事件时省略；不新增事件。
+
+    RunDurationMs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: |
+        本次执行耗时，包含Intent、全部技能调用、重试及同Run拒答重路由；仅Intent澄清也计时。
+        不含Run创建前的附件/记忆准备及终态提交后的网络发送。WAIT结束本Run计时，等待态Stop不重新计时；
+        续跑、重新生成及候选切换的新Run独立统计。异步任务包含后台执行和等待回调的时间。
+      example: 12580
 
     RunAsyncRunningPayload:
       type: object
@@ -3416,6 +3432,8 @@ components:
       type: object
       required: [status, interactionId, assistantMessageId, interactionType, expiresAt]
       properties:
+        runDurationMs:
+          $ref: '#/components/schemas/RunDurationMs'
         status:
           type: string
           enum: [WAITING_USER]
@@ -4063,7 +4081,10 @@ components:
         metadataJson:
           type: string
           nullable: true
-          description: 新建user消息包含请求边界清理后的metadata，assistant消息包含服务端维护状态；以JSON字符串返回，前端按需JSON.parse
+          description: |
+            新建user消息包含请求边界清理后的metadata，assistant消息包含服务端维护状态；以JSON字符串返回，前端按需JSON.parse。
+            新保存的assistant在可计算时包含runDurationMs，与对应Run终态事件一致；Interaction复用assistant时更新为
+            当前关联Run耗时，不累计旧Run。旧消息不回填；失败未保存assistant时不为耗时额外创建消息。
         parts:
           type: array
           items:

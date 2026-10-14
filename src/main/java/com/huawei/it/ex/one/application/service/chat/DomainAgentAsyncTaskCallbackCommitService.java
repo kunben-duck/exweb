@@ -85,6 +85,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         sessionService.lockForMessageMutation(initial.tenantId(), initial.userId(), session);
 
         Instant finishedAt = Instant.now();
+        RunDuration duration = RunDuration.forRun(initial, finishedAt);
         ChatRunStatus terminalStatus = callback.completed()
                 ? ChatRunStatus.COMPLETED : ChatRunStatus.FAILED;
         // CAS 同时检查 RUNNING、ASYNC_WAITING 和截止时间；Stop、超时及重复回调只有一方可提交。
@@ -104,10 +105,11 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         AgentDataPersistenceState persistenceState =
                 AgentDataPersistenceState.fromRunMetadata(initial.metadata(), null);
         AssistantAssembly assembly = assemble(callback, existing, persistenceState);
-        List<PublishedEvent> sequenced = sequenceAndPersist(ordered, persistenceState);
+        List<PublishedEvent> sequenced = sequenceAndPersist(
+                ordered.stream().map(duration::decorate).toList(), persistenceState);
         ChatEvent terminal = sequenced.getLast().event();
 
-        updateAssistant(callback, session, initial, existing, assembly);
+        updateAssistant(callback, new AssistantUpdateContext(session, initial, existing, assembly, duration));
         ChatRun metadataCleared = claimedRun.withMetadataSnapshot(
                 DomainAgentAsyncTaskMetadata.clearRunMetadata(claimedRun.metadata()));
         runRepository.save(metadataCleared);
@@ -248,15 +250,17 @@ public class DomainAgentAsyncTaskCallbackCommitService {
 
     private void updateAssistant(
             PreparedCallback callback,
-            ChatSession session,
-            ChatRun run,
-            ChatMessage existing,
-            AssistantAssembly assembly) {
+            AssistantUpdateContext context) {
+        ChatSession session = context.session();
+        ChatRun run = context.run();
+        ChatMessage existing = context.existing();
+        AssistantAssembly assembly = context.assembly();
         String metadata = DomainAgentAsyncTaskMetadata.mergeAssistantMetadata(
                 objectMapper,
                 existing.metadataJson(),
                 callback.completed() ? "COMPLETED" : "FAILED",
                 null);
+        metadata = context.duration().mergeMetadata(objectMapper, metadata);
         if (!callback.resultProvided()) {
             // 仅完成通知只更新异步 metadata，不碰已保存的正文和 Parts。
             sessionService.updateAssistantMetadataForInternalUse(session, existing, metadata);
@@ -276,6 +280,14 @@ public class DomainAgentAsyncTaskCallbackCommitService {
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private record AssistantUpdateContext(
+            ChatSession session,
+            ChatRun run,
+            ChatMessage existing,
+            AssistantAssembly assembly,
+            RunDuration duration) {
     }
 
     private String requiredAssistantMessageId(ChatRun run) {

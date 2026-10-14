@@ -2966,6 +2966,31 @@ Relay 映射规则：
 历史消息中，最终正文保存在 `ChatMessageDto.content`；过程信息通过
 `ChatMessageDto.parts` 返回，刷新会话后也可以回显思考、工具、进度和 agent 调用过程。
 
+### 本次执行耗时
+
+新生成的`run.completed/run.waiting_user/run.failed/run.cancelled`在开始时间可用时携带
+`payload.runDurationMs`，类型为非负整数，单位毫秒。前端建议显示“本次执行耗时”，可按展示需要换算为秒。
+不要使用Intent的`latencyMs`替代，也不要按收到事件的时间重新计算或跨Run相加。
+
+- 从当前Run创建计时，包含Execution初始化、Intent、全部技能调用、重试及拒答重路由；仅澄清也有耗时。
+- 不含Run创建前的附件解析、记忆准备，以及终态提交后到前端收到消息的网络时间。
+- 进入WAIT即冻结该Run耗时；等待态Stop不重新计时。用户回答/确认、候选切换和重新生成产生的新Run独立计时。
+- DomainAgent异步任务保持原Run计时，包含后台执行及等待回调；`run.async_running/async_finished`不新增耗时字段。
+- FULL/no-store沿用控制事实留存；WebSocket及Event Resume返回已保存的相同值。
+- 启动响应、`run.started`和`stream-status`不增加计时字段。本轮不提供运行中计时/刷新恢复计时的协议。
+
+历史`/messages`复用已有`metadataJson`返回，解析后读取`runDurationMs`。Interaction复用同一assistant时，
+该值更新为消息当前关联Run的耗时，不是累计耗时。未保存assistant的失败不额外生成消息；字段缺失表示
+未知或旧数据，前端不要按0显示。不回填旧历史或旧事件，不更改其他metadata。
+
+```json
+{
+  "role": "assistant",
+  "runId": "run_b",
+  "metadataJson": "{\"skillId\":\"skill_a\",\"runDurationMs\":12580}"
+}
+```
+
 ### 本地消费游标
 
 前端每处理完一个 `stream-item` 事件后，应在本地保存当前会话的最大 `sequence`，用于后续

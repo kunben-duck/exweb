@@ -147,12 +147,13 @@ public class ChatRunTerminalCommitService {
         // 先锁消息树再验证执行权；Event、assistant、延迟 Binding 与终态必须一起提交或回滚。
         lockOwnerTerminalSession(command.context());
         fenceOwnerTerminalCommit(command.context());
-        CompletedEvents completedEvents = appendCompletedEvents(command);
+        RunDuration duration = RunDuration.between(command.context().runStartedAt(), java.time.Instant.now());
+        CompletedEvents completedEvents = appendCompletedEvents(command, duration);
         completedEvents.precedingEvents().forEach(command.context().assistant()::observe);
         ChatEvent stored = completedEvents.terminalEvent();
         command.context().assistant().observe(stored);
         ChatMessage savedAssistant = saveCompletedAssistant(
-                command, command.context().assistant().messageSkill().current());
+                command, command.context().assistant().messageSkill().current(), duration);
         advanceLatestMessageSeq(command.context(), stored);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         boolean replaceBindingCache = hasDeferredDomainAgentBinding(command.context());
@@ -174,10 +175,11 @@ public class ChatRunTerminalCommitService {
         rejectDeferredDomainAgentBinding(command.context(), "run.waiting_user");
         lockOwnerTerminalSession(command.context());
         fenceOwnerTerminalCommit(command.context());
-        ChatEvent stored = append(command.event(), command.context());
+        RunDuration duration = RunDuration.between(command.context().runStartedAt(), java.time.Instant.now());
+        ChatEvent stored = append(duration.decorate(command.event()), command.context());
         command.context().assistant().observe(stored);
         ChatMessage savedAssistant = saveWaitingAssistant(
-                command, command.context().assistant().messageSkill().current());
+                command, command.context().assistant().messageSkill().current(), duration);
         advanceLatestMessageSeq(command.context(), stored);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
@@ -194,7 +196,8 @@ public class ChatRunTerminalCommitService {
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public CommitResult commitTerminalOnly(TerminalOnlyCommitCommand command) {
         fenceOwnerTerminalCommit(command.context());
-        ChatEvent stored = append(command.event(), command.context());
+        RunDuration duration = RunDuration.between(command.context().runStartedAt(), java.time.Instant.now());
+        ChatEvent stored = append(duration.decorate(command.event()), command.context());
         command.context().assistant().observe(stored);
         observeRun(stored);
         boolean cancelFailedRelayInteraction = cancelFailedRelayInteraction(command.context(), stored);
@@ -248,6 +251,7 @@ public class ChatRunTerminalCommitService {
                 ? ChatRunStatus.CANCELLED
                 : ChatRunStatus.FAILED;
         java.time.Instant finishedAt = java.time.Instant.now();
+        RunDuration duration = RunDuration.forRun(command.run(), finishedAt);
         boolean claimed = runRepository.tryClaimExternalTerminal(
                 new ChatRunRepository.ExternalTerminalClaim(
                         command.run().id(),
@@ -273,13 +277,13 @@ public class ChatRunTerminalCommitService {
         String skillId = MessageSkillContext.runSkillId(latestRun.metadata());
         boolean asyncTask = DomainAgentAsyncTaskMetadata.isAsyncRunning(latestRun);
         if (asyncTask) {
-            persistAsyncTerminalAssistant(latestRun, terminalStatus);
+            persistAsyncTerminalAssistant(latestRun, terminalStatus, duration);
             latestRun = runRepository.save(latestRun.withMetadataSnapshot(
                     DomainAgentAsyncTaskMetadata.clearRunMetadata(latestRun.metadata())));
         } else {
-            persistExternalPartialAssistant(command, latestRun, skillId);
+            persistExternalPartialAssistant(command, latestRun, skillId, duration);
         }
-        ChatEvent stored = chatStreamService.appendWithoutPublish(command.event());
+        ChatEvent stored = chatStreamService.appendWithoutPublish(duration.decorate(command.event()));
         ChatRun committedRun = runRepository.finalizeExternalTerminal(
                 new ChatRunRepository.ExternalTerminalFinalize(
                         latestRun.id(),
@@ -308,7 +312,7 @@ public class ChatRunTerminalCommitService {
         return new ExternalTerminalCommitResult(stored, committedRun, true);
     }
 
-    private void persistAsyncTerminalAssistant(ChatRun run, ChatRunStatus terminalStatus) {
+    private void persistAsyncTerminalAssistant(ChatRun run, ChatRunStatus terminalStatus, RunDuration duration) {
         String assistantMessageId = DomainAgentAsyncTaskMetadata.assistantMessageId(run);
         if (assistantMessageId == null || assistantMessageId.isBlank()) {
             assistantMessageId = run.assistantMessageId();
@@ -322,6 +326,7 @@ public class ChatRunTerminalCommitService {
         String status = terminalStatus == ChatRunStatus.CANCELLED ? "CANCELLED" : "FAILED";
         String metadata = DomainAgentAsyncTaskMetadata.mergeAssistantMetadata(
                 objectMapper, existing.metadataJson(), status, null);
+        metadata = duration.mergeMetadata(objectMapper, metadata);
         sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
                 run.tenantId(), run.userId(), session, existing.id(), existing.content(), run.id(),
                 java.util.List.of(), metadata, false));
@@ -330,7 +335,7 @@ public class ChatRunTerminalCommitService {
     private void persistExternalPartialAssistant(
             ExternalTerminalCommitCommand command,
             ChatRun latestRun,
-            String skillId) {
+            String skillId, RunDuration duration) {
         AssistantMessageSaveCommand partialAssistant = command.partialAssistant();
         if (partialAssistant == null) {
             return;
@@ -350,12 +355,12 @@ public class ChatRunTerminalCommitService {
                     partialAssistant.content(),
                     partialAssistant.runId(),
                     partialAssistant.safePartDrafts(),
-                    assistantMetadata(partialAssistant.metadataJson(), skillId)
+                    duration.mergeMetadata(objectMapper, assistantMetadata(partialAssistant.metadataJson(), skillId))
             ));
         } else {
             saved = sessionService.saveAssistantMessage(withMetadata(
                     partialAssistant,
-                    assistantMetadata(partialAssistant.metadataJson(), skillId)));
+                    duration.mergeMetadata(objectMapper, assistantMetadata(partialAssistant.metadataJson(), skillId))));
         }
         if (expectedId == null || !expectedId.equals(saved.id())) {
             throw new IllegalStateException("stop partial assistant ID 与预分配 ID 不一致");
@@ -400,11 +405,11 @@ public class ChatRunTerminalCommitService {
         return chatStreamService.appendWithExecutionGuard(event, context.executionClaim());
     }
 
-    private CompletedEvents appendCompletedEvents(CompletedCommitCommand command) {
+    private CompletedEvents appendCompletedEvents(CompletedCommitCommand command, RunDuration duration) {
         TerminalCommitContext context = command.context();
         PendingRouteSwitchAppliedEvent pending = pendingRouteSwitchAppliedEvent(context);
         if (pending == null) {
-            return new CompletedEvents(List.of(), append(command.event(), context));
+            return new CompletedEvents(List.of(), append(duration.decorate(command.event()), context));
         }
         DeferredDomainAgentBinding deferred = deferredDomainAgentBinding(context);
         if (deferred == null) {
@@ -420,7 +425,7 @@ public class ChatRunTerminalCommitService {
         }
         // 切换成功标识不能早于 Binding 事实独立提交，否则 Stop/回滚会留下虚假的成功事件。
         List<ChatEvent> stored = chatStreamService.appendBatchWithExecutionGuard(
-                List.of(appliedEvent, command.event()), context.executionClaim());
+                List.of(appliedEvent, duration.decorate(command.event())), context.executionClaim());
         if (stored == null || stored.size() != 2) {
             throw new IllegalStateException("Route-switch terminal event batch size mismatch");
         }
@@ -481,7 +486,7 @@ public class ChatRunTerminalCommitService {
 
     private ChatMessage saveCompletedAssistant(
             CompletedCommitCommand command,
-            String skillId) {
+            String skillId, RunDuration duration) {
         TerminalCommitContext context = command.context();
         UserContext user = context.user();
         if (context.continuationInteractionRequest() == null || newTurnInteraction(context)) {
@@ -494,7 +499,8 @@ public class ChatRunTerminalCommitService {
                     context.messagePlan().userMessage().id(),
                     context.messagePlan().regeneratedFromMessageId(),
                     context.assistant().parts(),
-                    assistantMetadata(context.assistant().assistantMetadata(null), skillId),
+                    duration.mergeMetadata(objectMapper,
+                            assistantMetadata(context.assistant().assistantMetadata(null), skillId)),
                     command.target().assistantMessageId(),
                     context.assistant().appendAnswerPart()
             ));
@@ -507,14 +513,15 @@ public class ChatRunTerminalCommitService {
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
-                assistantMetadata(context.assistant().assistantMetadata(null), skillId),
+                duration.mergeMetadata(objectMapper,
+                        assistantMetadata(context.assistant().assistantMetadata(null), skillId)),
                 context.assistant().appendAnswerPart()
         ));
     }
 
     private ChatMessage saveWaitingAssistant(
             WaitingUserCommitCommand command,
-            String skillId) {
+            String skillId, RunDuration duration) {
         TerminalCommitContext context = command.context();
         UserContext user = context.user();
         ChatInteractionRequest continuation = context.continuationInteractionRequest();
@@ -531,8 +538,8 @@ public class ChatRunTerminalCommitService {
                     context.messagePlan().userMessage().id(),
                     context.messagePlan().regeneratedFromMessageId(),
                     context.assistant().parts(),
-                    assistantMetadata(
-                            context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA), skillId),
+                    duration.mergeMetadata(objectMapper, assistantMetadata(
+                            context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA), skillId)),
                     command.target().assistantMessageId(),
                     context.assistant().appendAnswerPart()
                             && appendWaitingAnswer(command.waitingRequest())
@@ -555,7 +562,8 @@ public class ChatRunTerminalCommitService {
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
-                assistantMetadata(context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA), skillId),
+                duration.mergeMetadata(objectMapper,
+                        assistantMetadata(context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA), skillId)),
                 context.assistant().appendAnswerPart()
                         && appendWaitingAnswer(command.waitingRequest())
         ));
@@ -948,7 +956,8 @@ public class ChatRunTerminalCommitService {
             ChatInteractionRequest continuationInteractionRequest,
             RuntimeInteractionDispatchState interactionDispatchState,
             AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
-            AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
+            AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef,
+            java.time.Instant runStartedAt
     ) {
         public TerminalCommitContext {
             deferredDomainAgentBindingRef = deferredDomainAgentBindingRef == null
@@ -957,6 +966,18 @@ public class ChatRunTerminalCommitService {
             pendingRouteSwitchAppliedEventRef = pendingRouteSwitchAppliedEventRef == null
                     ? new AtomicReference<>()
                     : pendingRouteSwitchAppliedEventRef;
+        }
+
+        public TerminalCommitContext(
+                UserContext user, ChatSession session, ChatRunMessagePlan messagePlan,
+                AtomicReference<RuntimeBinding> bindingRef, AssistantAssembly assistant, String runId,
+                RunExecutionClaim executionClaim, ChatInteractionRequest continuationInteractionRequest,
+                RuntimeInteractionDispatchState interactionDispatchState,
+                AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+                AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef) {
+            this(user, session, messagePlan, bindingRef, assistant, runId, executionClaim,
+                    continuationInteractionRequest, interactionDispatchState, deferredDomainAgentBindingRef,
+                    pendingRouteSwitchAppliedEventRef, null);
         }
 
         public TerminalCommitContext(

@@ -519,11 +519,14 @@ class ChatStreamApplicationServiceTest {
         service.appendAndPublish(MessageDeltaEvent.of("run2", "session1", "other"));
         service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", " world"));
         service.appendAndPublish(new StoredChatEvent("run1", "session1", 0L, "run.completed",
-                Instant.now(), Map.of("status", "COMPLETED")));
+                Instant.now(), Map.of("status", "COMPLETED", "runDurationMs", 12580L)));
 
         StepVerifier.create(service.resumeRun(user(), "run1", first.sequence()))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", " world"))
-                .assertNext(event -> assertThat(event.type()).isEqualTo("run.completed"))
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("run.completed");
+                    assertThat(event.payload()).containsEntry("runDurationMs", 12580L);
+                })
                 .verifyComplete();
     }
 

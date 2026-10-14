@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -47,8 +48,43 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 class DomainAgentAsyncTaskCallbackCommitServiceTest {
+    @ParameterizedTest
+    @ValueSource(strings = {"APPEND", "REPLACE", "EMPTY", "FAILED"})
+    void asyncDurationIncludesBackgroundWaitAndReplacesExistingMetadataValue(String mode) throws Exception {
+        Fixture fixture = new Fixture();
+        boolean completed = !"FAILED".equals(mode);
+        boolean resultProvided = "APPEND".equals(mode) || "REPLACE".equals(mode);
+        fixture.prepare(completed ? ChatRunStatus.COMPLETED : ChatRunStatus.FAILED, 20L, 10L);
+        var existing = fixture.assistant.withMetadataJson(new RunDuration(1L)
+                .mergeMetadata(fixture.objectMapper, fixture.assistant.metadataJson()));
+        when(fixture.sessionService.requireAssistantForInternalUpdate(fixture.session, existing.id())).thenReturn(existing);
+        Instant callbackTime = fixture.running.startedAt().plusSeconds(1800);
+        try (var clock = mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(callbackTime);
+            var result = fixture.service.commit(new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                    fixture.running.id(), completed, resultProvided ? mode : null, resultProvided,
+                    resultProvided ? List.of(new MessageDeltaEvent("run1", "session1", 0L, callbackTime,
+                            "result", Map.of("delta", "result"))) : List.of(), null));
+            assertThat(result.events().getLast().event().payload()).containsEntry("runDurationMs", 1800000L);
+            String metadata;
+            if (resultProvided) {
+                var capture = ArgumentCaptor.forClass(AsyncAssistantResultUpdateCommand.class);
+                verify(fixture.sessionService).updateAssistantAsyncResult(capture.capture());
+                metadata = capture.getValue().metadataJson();
+            } else {
+                var capture = ArgumentCaptor.forClass(String.class);
+                verify(fixture.sessionService).updateAssistantMetadataForInternalUse(
+                        eq(fixture.session), eq(existing), capture.capture());
+                metadata = capture.getValue();
+            }
+            assertThat(fixture.objectMapper.readTree(metadata).get("runDurationMs").longValue()).isEqualTo(1800000L);
+            assertThat(metadata).contains("\"skillId\":\"skill1\"");
+            verify(fixture.runRepository, times(2)).findById("run1");
+        }
+    }
+
     @Test
-    void completedCallbackPersistsNotificationAndUpdatesOnlyAssistantMetadata() {
+    void completedCallbackPersistsNotificationAndUpdatesOnlyAssistantMetadata() throws Exception {
         Fixture fixture = new Fixture();
         fixture.prepare(ChatRunStatus.COMPLETED, 12L, 10L);
 
@@ -72,6 +108,12 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
         assertThat(metadataCaptor.getValue())
                 .contains("\"status\":\"COMPLETED\"")
                 .contains("\"skillId\":\"skill1\"");
+        Object duration = result.events().getLast().event().payload().get("runDurationMs");
+        assertThat(duration).isInstanceOf(Long.class);
+        assertThat(fixture.objectMapper.readTree(metadataCaptor.getValue()).get("runDurationMs").longValue())
+                .isEqualTo((Long) duration);
+        assertThat(result.events().subList(0, result.events().size() - 1))
+                .allSatisfy(item -> assertThat(item.event().payload()).doesNotContainKey("runDurationMs"));
         verify(fixture.sessionService, never()).updateAssistantMessage(any());
         verify(fixture.executionRepository).markTerminal(
                 fixture.running.id(), ChatRunExecutionStatus.COMPLETED);

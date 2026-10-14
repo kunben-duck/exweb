@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -45,6 +46,7 @@ import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.domain.notification.UserNotification;
 import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
@@ -488,7 +490,11 @@ class ChatRunTerminalCommitServiceTest {
                 .thenReturn(latestRun.cancelled(12L));
         when(sessionService.saveAssistantMessage(any(AssistantMessageSaveCommand.class)))
                 .thenReturn(savedAssistant);
-        when(streamService.appendWithoutPublish(event)).thenReturn(stored);
+        when(streamService.appendWithoutPublish(any(ChatEvent.class))).thenAnswer(invocation -> {
+            ChatEvent submitted = invocation.getArgument(0);
+            return new StoredChatEvent(submitted.runId(), submitted.sessionId(), stored.sequence(),
+                    submitted.type(), submitted.createdAt(), submitted.payload());
+        });
 
         ChatRunTerminalCommitService.ExternalTerminalCommitResult result = service.commitExternalTerminal(
                 ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, staleRun, partial));
@@ -506,7 +512,7 @@ class ChatRunTerminalCommitServiceTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void stopOrTimeoutClosesAsyncWaitingRunWithoutReplacingExistingAssistantContent(boolean timeout) {
+    void stopOrTimeoutClosesAsyncWaitingRunWithoutReplacingExistingAssistantContent(boolean timeout) throws Exception {
         ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
         SessionApplicationService sessionService = mock(SessionApplicationService.class);
         ChatRunRepository runRepository = mock(ChatRunRepository.class);
@@ -554,12 +560,21 @@ class ChatRunTerminalCommitServiceTest {
                 .thenReturn(true);
         when(runRepository.findById(stopping.id())).thenReturn(Optional.of(claimed));
         when(runRepository.save(any(ChatRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(streamService.appendWithoutPublish(event)).thenReturn(stored);
+        when(streamService.appendWithoutPublish(any(ChatEvent.class))).thenAnswer(invocation -> {
+            ChatEvent submitted = invocation.getArgument(0);
+            return new StoredChatEvent(submitted.runId(), submitted.sessionId(), stored.sequence(),
+                    submitted.type(), submitted.createdAt(), submitted.payload());
+        });
         when(runRepository.finalizeExternalTerminal(any())).thenReturn(committed);
 
-        ChatRunTerminalCommitService.ExternalTerminalCommitResult result = service.commitExternalTerminal(
-                timeout ? ChatRunTerminalCommitService.ExternalTerminalCommitCommand.asyncTimeout(event, stopping)
-                        : ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, stopping, null));
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result;
+        Instant terminalAt = now.plusSeconds(1800);
+        try (var clock = mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(terminalAt);
+            result = service.commitExternalTerminal(
+                    timeout ? ChatRunTerminalCommitService.ExternalTerminalCommitCommand.asyncTimeout(event, stopping)
+                            : ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, stopping, null));
+        }
 
         ArgumentCaptor<AssistantMessageUpdateCommand> assistantCaptor =
                 ArgumentCaptor.forClass(AssistantMessageUpdateCommand.class);
@@ -570,6 +585,10 @@ class ChatRunTerminalCommitServiceTest {
         assertThat(assistantCaptor.getValue().metadataJson())
                 .contains("\"skillId\":\"skill-a\"")
                 .contains("\"status\":\"" + expected.name() + "\"");
+        assertThat(result.event().payload()).containsEntry("runDurationMs", 1800000L);
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(assistantCaptor.getValue().metadataJson()).get("runDurationMs").longValue())
+                .isEqualTo(1800000L);
         ArgumentCaptor<ChatRun> savedRunCaptor = ArgumentCaptor.forClass(ChatRun.class);
         verify(runRepository).save(savedRunCaptor.capture());
         assertThat(savedRunCaptor.getValue().metadata())
@@ -702,7 +721,11 @@ class ChatRunTerminalCommitServiceTest {
         when(runRepository.tryClaimExternalTerminal(any(ChatRunRepository.ExternalTerminalClaim.class)))
                 .thenReturn(true);
         when(runRepository.findById("run1")).thenReturn(Optional.of(run));
-        when(streamService.appendWithoutPublish(event)).thenReturn(stored);
+        when(streamService.appendWithoutPublish(any(ChatEvent.class))).thenAnswer(invocation -> {
+            ChatEvent submitted = invocation.getArgument(0);
+            return new StoredChatEvent(submitted.runId(), submitted.sessionId(), stored.sequence(),
+                    submitted.type(), submitted.createdAt(), submitted.payload());
+        });
         when(runRepository.finalizeExternalTerminal(any(ChatRunRepository.ExternalTerminalFinalize.class)))
                 .thenReturn(committedRun);
 

@@ -42,6 +42,8 @@ import com.huawei.it.ex.one.domain.routing.RoutingPolicy;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -160,6 +162,12 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
     @ValueSource(strings = {"agent-a", "agent-b"})
     void approvalCallsIntentOnceEvenForSameTargetAndReusesMessages(String skill) {
         ChatInteractionRequest waiting = start();
+        ChatEvent originalWait = events.events.stream().filter(event -> waiting.sourceRunId().equals(event.runId())
+                && "run.waiting_user".equals(event.type())).findFirst().orElseThrow();
+        assertThat(originalWait.payload().get("runDurationMs")).isInstanceOf(Long.class);
+        messages.messages.replaceAll(message -> message.id().equals(waiting.assistantMessageId())
+                ? message.withMetadataJson(new RunDuration(99999999L).mergeMetadata(new ObjectMapper(), message.metadataJson()))
+                : message);
         result = RouteSignalResult.of(RouteTarget.domainAgent(skill, "intent-agent"));
         List<ChatEvent> output = execute(continuation(waiting, true, Map.of(), null, null));
         assertThat(output.getLast().type()).isEqualTo("run.completed");
@@ -174,6 +182,15 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         });
         assertThat(output).extracting(event -> event.payload().get("sourceType"))
                 .containsSubsequence("route-switch-confirmation-response", "intent-result", "route-switch-applied");
+        ChatEvent terminal = output.getLast();
+        long duration = ((Number) terminal.payload().get("runDurationMs")).longValue();
+        assertThat(duration).isBetween(0L, 99999998L);
+        assertThat(messages.messages.stream().filter(message -> message.id().equals(waiting.assistantMessageId())))
+                .singleElement().satisfies(message -> assertThat(message.metadataJson())
+                        .contains("\"runDurationMs\":" + duration));
+        assertThat(events.events).contains(originalWait);
+        assertThat(output.stream().filter(event -> !event.type().startsWith("run.")))
+                .allSatisfy(event -> assertThat(event.payload()).doesNotContainKey("runDurationMs"));
         assertNoPrivateEvents();
     }
 
@@ -338,7 +355,15 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
     @Test
     void stopWhileWaitingPreventsApproval() {
         ChatInteractionRequest first = start();
+        ChatEvent waitingEvent = events.events.stream().filter(event -> first.sourceRunId().equals(event.runId())
+                && "run.waiting_user".equals(event.type())).findFirst().orElseThrow();
+        String waitingMetadata = messages.messages.stream().filter(message -> message.id().equals(first.assistantMessageId()))
+                .findFirst().orElseThrow().metadataJson();
+        assertThat(waitingEvent.payload().get("runDurationMs")).isInstanceOf(Long.class);
         service.stopRun(user, first.sourceRunId(), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
+        assertThat(messages.messages.stream().filter(message -> message.id().equals(first.assistantMessageId()))
+                .findFirst().orElseThrow().metadataJson()).isEqualTo(waitingMetadata);
+        assertThat(events.events).contains(waitingEvent);
         assertThatThrownBy(() -> execute(continuation(first, true, Map.of(), null, null)))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(intents).hasValue(0);

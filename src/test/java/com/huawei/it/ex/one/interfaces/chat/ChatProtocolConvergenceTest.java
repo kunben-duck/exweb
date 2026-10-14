@@ -1060,7 +1060,8 @@ class ChatProtocolConvergenceTest {
 
     @Test
     void historyMessageDtoKeepsRawMetadataJsonUnchanged() {
-        for (String metadataJson : Arrays.asList(null, "", "not-json", "{\"partial\":true}")) {
+        for (String metadataJson : Arrays.asList(null, "", "not-json", "{\"partial\":true}",
+                "{\"skillId\":\"skill1\",\"runDurationMs\":12580}")) {
             ChatMessageDto dto = messageDto(metadataJson);
 
             assertThat(dto.metadataJson()).isSameAs(metadataJson);
@@ -1105,6 +1106,19 @@ class ChatProtocolConvergenceTest {
         assertThat(heartbeat.payload().encodedItem()).isNull();
         assertThat(done.payload().type()).isEqualTo("done");
         assertThat(done.payload().terminalEventType()).isEqualTo("run.completed");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"run.completed", "run.waiting_user", "run.failed", "run.cancelled"})
+    void terminalDurationSurvivesEventAndTurnStreamSerialization(String type) throws Exception {
+        ChatEvent terminal = new com.huawei.it.ex.one.domain.chat.StoredChatEvent(
+                "run1", "session1", 12L, type, Instant.now(), Map.of("runDurationMs", 12580L));
+        var item = new ChatTurnStreamTranslator().streamItem(new ChatEventTranslator().toDto(terminal));
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        var json = mapper.readTree(mapper.writeValueAsString(item));
+        assertThat(json.at("/payload/encodedItem/data/payload/runDurationMs").longValue()).isEqualTo(12580L);
+        assertThat(json.at("/payload/encodedItem/event").asText()).isEqualTo(type);
+        assertThat(json.at("/payload/streamItemId").asText()).isEqualTo("evt_12");
     }
 
     private ChatMessageDto messageDto(String metadataJson) {

@@ -124,6 +124,7 @@ Interaction、异步和路由的非通用字段还需注意以下类型和出现
 | `selectedExpert/sourceExpert` | object | expertId/expertName/intentAccessName 均为 string；父专家不覆盖实际子技能 ID |
 | `candidateSwitchReplay` | object | originRunId:string、originSequence:int64；回放来源，不是当前事件恢复游标 |
 | `messageReady` | boolean | 是否有可定位消息；不能据此判断 FULL 或业务结果完整性 |
+| `runDurationMs` | int64，非负 | 仅run.completed/waiting_user/failed/cancelled的可选字段；当前Run创建至终态提交准备的耗时，单位毫秒；旧事件或缺失开始时间时省略 |
 | `assistantMessageId/feedbackTargetMessageId` | string | 在消息可用的终态/等待/异步事件中出现；message.delta 通常不带 |
 | `interactionId` | string | ChatService 持久化的交互 ID，CONTINUE_INTERACTION 使用它而非 approval_id |
 | `interactionType` | string | INTENT_CLARIFICATION、AGENT_CLARIFICATION、ROUTE_SWITCH_CONFIRMATION；AMBIGUOUS_ROUTE 是 clarificationType，不是此枚举 |
@@ -144,6 +145,12 @@ Interaction、异步和路由的非通用字段还需注意以下类型和出现
 | `limitSource` | string | SERVICE为服务端上限，SKILL为技能配置上限；只在数量拒绝中出现 |
 | `skillInvocationStarted` | boolean | 附件拒绝 message.completed 为 false，不把技能已选中等价成调用已开始 |
 | `error` | string | 异步 FAILED 的简短失败说明，可省略；不是任意业务 JSON |
+
+`runDurationMs`包含当前Run的Intent、全部技能调用、重试和拒答重路由，不含创建Run前的准备及最终发送耗时。
+WAIT冻结本Run计时，用户等待不计入；回答或确认产生的新Run、候选切换和重新生成均重新计时。
+异步任务仍使用原Run，包含后台执行及等待回调。`message.completed/run.async_running/run.async_finished`
+不重复携带此字段。历史从assistant的`metadataJson.runDurationMs`读取；复用assistant时只记录最新关联Run。
+建议显示“本次执行耗时”，不要将缺失值显示为0，不要将它当作跨Run累计或Agent纯计算耗时。
 
 | 边界 | topic / 物理 WS | Run / 前端行为 |
 |---|---|---|
@@ -788,6 +795,7 @@ REST：`POST /v1/chat/runs`，普通 NEXT；示例未命中 Binding/用例库，
             "type": "run.completed",
             "payload": {
               "status": "COMPLETED",
+              "runDurationMs": 12580,
               "messageReady": true,
               "assistantMessageId": "msg_answer",
               "feedbackTargetMessageId": "msg_answer",

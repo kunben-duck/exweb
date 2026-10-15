@@ -30,6 +30,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,6 +42,57 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 class RuntimeBindingApplicationServiceTest {
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void nonStickyExpertReleasesRoutingButKeepsSameScopedSession(boolean pinned, boolean scoped) {
+        Map<String, Object> metadata = new LinkedHashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "analysis"));
+        metadata.put("routeSource", pinned ? "front-selected" : "intent-agent");
+        metadata.put("intentName", "Analysis");
+        metadata.put("invocationSkillId", "EX_RE_analysis");
+        if (pinned) {
+            metadata.put(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
+        }
+        IntentExpertScope scope = scoped ? new IntentExpertScope("expert-a", "Expert A", "entry_a") : null;
+        if (scope != null) {
+            metadata = IntentExpertContext.withScope(metadata, scope);
+        }
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE)
+                .withRuntimeSessionId("real-relay-session").withMetadata(metadata);
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        repository.saved = active;
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        cache.put(active);
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(repository, cache,
+                new FixedIdGenerator(), Duration.ZERO, "relay", "delegate", "domain_expert",
+                new RuntimeBindingCompletionPolicy("analysis"));
+
+        RuntimeBinding completed = service.completeAfterRun(active, "run2", "leaf2");
+
+        assertThat(completed.status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
+        assertThat(completed.id()).isEqualTo(active.id());
+        assertThat(completed.runtimeSessionId()).isEqualTo("real-relay-session");
+        assertThat(completed.lastRunId()).isEqualTo("run2");
+        assertThat(completed.leafMessageId()).isEqualTo("leaf2");
+        assertThat(completed.expiresAt()).isNull();
+        assertThat(completed.metadata()).containsAllEntriesOf(metadata);
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+        assertThat(service.findActiveBySessionInIntentExpertScope("t", "u", "s", scope)).isEmpty();
+
+        RuntimeBindingResolution restored = service.resolveForProfile(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run3", "leaf3", RuntimeProfile.DOMAIN_EXPERT, "analysis"),
+                scoped ? IntentExpertContext.withScope(Map.of(), scope) : Map.of());
+
+        assertThat(restored.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(restored.previousBinding()).isEqualTo(completed);
+        assertThat(restored.binding().id()).isEqualTo(active.id());
+        assertThat(restored.binding().runtimeSessionId()).isEqualTo("real-relay-session");
+        assertThat(restored.binding().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(service.completeAfterRun(restored.binding(), "run3", "leaf3").status())
+                .isEqualTo(RuntimeBindingStatus.RESUMABLE);
+    }
+
     @Test
     void domainQuestionnaireResumeAndConditionalRestoreKeepOriginalTargetAndSession() {
         Instant now = Instant.now();
@@ -931,8 +983,9 @@ class RuntimeBindingApplicationServiceTest {
                 .contains(new IntentExpertScope("tax-expert", "税务专家", "tax_entry"));
     }
 
-    @Test
-    void relayProfileResumeIsIsolatedByIntentExpertIdentity() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void relayProfileResumeIsIsolatedByIntentExpertIdentity(boolean nonSticky) {
         Instant now = Instant.now();
         Map<String, Object> profile = RuntimeProfileMetadata.bindingMetadata(
                 RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "tax-analysis");
@@ -952,7 +1005,8 @@ class RuntimeBindingApplicationServiceTest {
         MultiBindingRepository repository = new MultiBindingRepository(List.of(bindingA, bindingB, global));
         RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
                 repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(),
-                Duration.ofDays(3), "relay");
+                Duration.ofDays(3), "relay", "delegate", "domain_expert",
+                new RuntimeBindingCompletionPolicy(nonSticky ? "tax-analysis" : ""));
         RuntimeBindingApplicationService.ProfiledRunBindingRequest request =
                 new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
                         "t", "u", "s", "run-next", "leaf-next",
@@ -974,6 +1028,26 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(unscoped.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
         assertThat(unscoped.binding().id()).isEqualTo("binding-global");
         assertThat(unscoped.binding().runtimeSessionId()).isEqualTo("runtime-global");
+    }
+
+    @Test
+    void nonStickyConfigurationDoesNotMakeCancelledExpertRecoverable() {
+        RuntimeBinding cancelled = binding(RuntimeBindingStatus.CANCELLED)
+                .withMetadata(RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "analysis"));
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        repository.saved = cancelled;
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(repository, cache,
+                new FixedIdGenerator(), Duration.ZERO, "relay", "delegate", "domain_expert",
+                new RuntimeBindingCompletionPolicy("analysis"));
+
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+        RuntimeBindingResolution resolved = service.resolveForProfile(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run3", "leaf3", RuntimeProfile.DOMAIN_EXPERT, "analysis"));
+        assertThat(resolved.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
+        assertThat(resolved.binding().id()).isNotEqualTo(cancelled.id());
     }
 
     @Test

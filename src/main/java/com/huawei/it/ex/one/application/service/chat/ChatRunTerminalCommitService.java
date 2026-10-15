@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunReposito
 import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingCompletionPolicy;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingExpirationPolicy;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -32,7 +33,6 @@ import com.huawei.it.ex.one.domain.notification.UserNotification;
 import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
-import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -75,11 +75,24 @@ public class ChatRunTerminalCommitService {
     private final Duration runtimeBindingTtl;
     private final MessageSkillMetadata messageSkillMetadata;
     private final ObjectMapper objectMapper;
+    private final RuntimeBindingCompletionPolicy completionPolicy;
     private UserNotificationPublisher notificationPublisher = (recipient, notification) -> { };
 
     @Autowired
     void setNotificationPublisher(UserNotificationPublisher notificationPublisher) {
         this.notificationPublisher = notificationPublisher;
+    }
+
+    public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
+                                        SessionApplicationService sessionService,
+                                        ChatRunRepository runRepository,
+                                        ChatRunLeaseApplicationService runLeaseService,
+                                        RuntimeBindingRepository runtimeBindingRepository,
+                                        ChatInteractionApplicationService chatInteractionService,
+                                        Duration runtimeBindingTtl,
+                                        ObjectMapper objectMapper) {
+        this(chatStreamService, sessionService, runRepository, runLeaseService, runtimeBindingRepository,
+                chatInteractionService, runtimeBindingTtl, objectMapper, new RuntimeBindingCompletionPolicy(""));
     }
 
     @Autowired
@@ -90,7 +103,8 @@ public class ChatRunTerminalCommitService {
                                         RuntimeBindingRepository runtimeBindingRepository,
                                         ChatInteractionApplicationService chatInteractionService,
                                         @Value("${financeex.runtime-binding.ttl:0s}") Duration runtimeBindingTtl,
-                                        ObjectMapper objectMapper) {
+                                        ObjectMapper objectMapper,
+                                        RuntimeBindingCompletionPolicy completionPolicy) {
         this.chatStreamService = chatStreamService;
         this.sessionService = sessionService;
         this.runRepository = runRepository;
@@ -100,6 +114,7 @@ public class ChatRunTerminalCommitService {
         this.runtimeBindingTtl = RuntimeBindingExpirationPolicy.normalize(runtimeBindingTtl);
         this.messageSkillMetadata = new MessageSkillMetadata(objectMapper);
         this.objectMapper = objectMapper;
+        this.completionPolicy = completionPolicy;
     }
 
     public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
@@ -873,9 +888,7 @@ public class ChatRunTerminalCommitService {
         if (binding == null) {
             return null;
         }
-        if (!DOMAIN_AGENT_PROVIDER.equals(binding.provider())
-                && !(RELAY_PROVIDER.equals(binding.provider())
-                && RuntimeProfileMetadata.isDomainExpert(binding.metadata()))) {
+        if (!completionPolicy.retainBindingOnCompletion(binding)) {
             RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
                     .withRun(context.runId(), null);
             if (leafMessageId != null && !leafMessageId.isBlank()

@@ -648,7 +648,7 @@ FULL和no-store均保留新开始事件中的关联；本次不扩展`stream-sta
 | `asyncExpiresAt` | DomainAgent后台任务等待截止时间；超时由服务端收口为`run.failed(code=DOMAIN_AGENT_ASYNC_TIMEOUT)`。 |
 | `selectedExpert` | 当前聚合意图父专家，包含`expertId/expertName/intentAccessName`；未选择或已显式切换到普通目标时为`null`。 |
 
-Intent命中Relay专家后，Binding正常完成仍保持ACTIVE。`stream-status`相关字段示例（非完整响应）：
+Intent命中Relay专家后，Binding默认正常完成仍保持ACTIVE。服务端`non-sticky-role-names`名单内角色完成后转为RESUMABLE，不再回显为当前ACTIVE技能，聚合专家范围不受影响；具体见下文“指定Relay技能不持续绑定”。`stream-status`相关字段示例（非完整响应）：
 
 ```json
 {
@@ -3631,7 +3631,7 @@ DomainAgent binding 返回值。
 }
 ```
 
-首次选择会创建或恢复与该 `roleName` 精确匹配的 Relay Domain Expert Binding。正常完成后 Binding
+首次选择会创建或恢复与该 `roleName` 精确匹配的 Relay Domain Expert Binding。默认正常完成后 Binding
 保持 `ACTIVE`，后续普通提问无需再传 target，仍通过 `chat_expert` 续接同一专家；再次显式选择同一专家时
 无开放 Interaction 且 Profile、`appMode` 和专家范围匹配时复用当前 Binding，选择其他专家或 DomainAgent 时取消旧 ACTIVE Binding 并切换。`forceReroute=true`、
 等待态 stop、会话删除或 Relay session 不可恢复会取消固定关系；运行中 stop 只停止当前 run，Binding 保留。
@@ -3643,6 +3643,15 @@ DomainAgent binding 返回值。
 仅同一个 ChatService `sessionId` 不足以跨 Delegate、不同角色或聚合专家范围复用 Binding。
 切换到首次使用的其他专家时发送 `NEW`；如有匹配的 `RESUMABLE` 专家 Binding，则按原规则恢复，
 不重新激活 `CANCELLED` Binding。已有开放 Interaction 时仍按原等待态替换规则处理，不适用同名保留。
+
+**指定Relay技能不持续绑定**：后端可通过`financeex.agent-runtime.relay.domain-expert.non-sticky-role-names`
+配置最终roleName名单，默认空。名单内技能仍在运行期间绑定，正常完成后转为RESUMABLE，
+包括前端手动选择、普通Intent及聚合专家子技能；前端无需新增参数，也无需为此主动提交forceReroute。
+下一轮省略显式目标即恢复原路由：普通模式允许用例库先匹配，聚合专家模式使用专家Intent；
+再次命中相同角色且范围匹配时复用原下游会话并发送RESUME。若前端每轮继续传DOMAIN_EXPERT，
+仍会显式直连该专家，而不是重新Intent。完成后stream-status不将该RESUMABLE记录作为有效ACTIVE绑定返回。
+Ask User等待期间仍保持ACTIVE并沿用原交互流程，回答完成后才转换；Stop及失败不增加新释放规则。
+存量ACTIVE可能再续接一轮，到下次正常完成才生效；不删除历史或下游会话，不自动迁移存量状态。
 
 每轮固定专家调用前会先推送并持久化一个 `runtime.metadata`，历史中对应 `METADATA` Part：
 

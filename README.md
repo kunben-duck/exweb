@@ -1,6 +1,6 @@
 # FinanceEXChatService
 
-FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用 DomainAgent 会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务、未命中任务以及配置的敏感信息意图进入 Relay Delegate。Intent 的规范化 `accessName` 命中专家前缀时进入动态 Relay Domain Expert；前端也可用`targetType=DOMAIN_EXPERT`固定选择专家，或用`targetType=INTENT_EXPERT`选择带专属Intent入口的聚合专家。Relay Delegate正常完成后释放active RuntimeBinding；所有Relay Domain Expert（包括Intent命中、前端固定及聚合专家子专家）正常完成后保持ACTIVE，下一轮优先续接。
+FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用 DomainAgent 会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务、未命中任务以及配置的敏感信息意图进入 Relay Delegate。Intent 的规范化 `accessName` 命中专家前缀时进入动态 Relay Domain Expert；前端也可用`targetType=DOMAIN_EXPERT`固定选择专家，或用`targetType=INTENT_EXPERT`选择带专属Intent入口的聚合专家。Relay Delegate正常完成后释放active RuntimeBinding；Relay Domain Expert（包括Intent命中、前端固定及聚合专家子专家）默认正常完成后保持ACTIVE，下一轮优先续接；配置为非持续绑定的角色则完成后转为RESUMABLE，下一轮重新路由。
 
 ## 核心链路
 
@@ -226,7 +226,23 @@ sequence 分配顺序，但不执行 Event INSERT；`run.lastSeq` 和 `stream-st
 当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，不再通过配置文件或环境变量模拟
 tenant/user。接入企业身份源时，只需替换该防腐层的身份读取逻辑。
 
-同一个 ChatService 会话下，Relay Delegate 与 Domain Expert 分别维护可恢复会话：各 Profile 首次进入时使用 `new`，再次命中相同 Profile 和相同 `appMode/roleName` 时使用 `resume`。敏感信息意图与普通复杂任务共用 Delegate Profile，但仅该 run 保留答案 `message.delta/message.snapshot`、问卷和必要会话状态；Relay 的 thinking、progress、agent、tool、reference、普通 card 及未知过程事件会在公共 Event 管线前丢弃，不推送、不落库且不生成历史 Parts。答案仍逐帧实时输出并可通过 Event Resume 恢复。该模式只保存在 run 私有 metadata，不写入 Binding，因此后续普通 Delegate run 恢复完整事件流。Delegate正常完成后把Binding从`ACTIVE`改为`RESUMABLE`，下一轮重新路由；Domain Expert保持`ACTIVE`并优先续接。两者均保留真实`runtimeSessionId`，不同Profile和角色不交叉复用。
+同一个 ChatService 会话下，Relay Delegate 与 Domain Expert 分别维护可恢复会话：各 Profile 首次进入时使用 `new`，再次命中相同 Profile 和相同 `appMode/roleName` 时使用 `resume`。敏感信息意图与普通复杂任务共用 Delegate Profile，但仅该 run 保留答案 `message.delta/message.snapshot`、问卷和必要会话状态；Relay 的 thinking、progress、agent、tool、reference、普通 card 及未知过程事件会在公共 Event 管线前丢弃，不推送、不落库且不生成历史 Parts。答案仍逐帧实时输出并可通过 Event Resume 恢复。该模式只保存在 run 私有 metadata，不写入 Binding，因此后续普通 Delegate run 恢复完整事件流。Delegate正常完成后把Binding从`ACTIVE`改为`RESUMABLE`，下一轮重新路由；Domain Expert默认保持`ACTIVE`并优先续接。两者均保留真实`runtimeSessionId`，不同Profile和角色不交叉复用。
+
+#### 指定Relay技能完成后重新路由
+
+```yaml
+financeex:
+  agent-runtime:
+    relay:
+      domain-expert:
+        non-sticky-role-names: ${FINANCEEX_RELAY_NON_STICKY_ROLE_NAMES:}
+```
+
+`FINANCEEX_RELAY_NON_STICKY_ROLE_NAMES`是可选的逗号分隔名单，例如`analysis,case-check`；启动时trim、去空和去重，区分大小写精确匹配最终Relay `roleName`，不是带Intent响应前缀的完整`accessName`，不支持通配符。默认空，保持所有现有专家的完成行为。
+
+名单内`provider=relay + DOMAIN_EXPERT`正常完成后转为`RESUMABLE`，不删除Binding或下游会话；手动选择、普通Intent及聚合专家命中均适用。下一轮未显式选目标时重新进入原路由流程：普通模式可能先命中用例库，聚合专家模式进入专家Intent。再次命中同角色且Provider、Profile、appMode及专家范围匹配时，恢复同一Binding和真实`runtimeSessionId`并发送`RESUME`，否则按原规则NEW。完成后`stream-status`不再回显该Binding为当前ACTIVE技能，聚合专家范围仍保留。
+
+Ask User等待仍保持ACTIVE，回答后正常完成才转换；失败、Stop、删除、失权及`forceReroute`规则不变。该配置不启用敏感信息答案流过滤，不改变Relay协议。存量ACTIVE绑定不迁移，可能再自动续接一轮，到下次正常完成才生效；移除配置也不主动激活存量RESUMABLE记录。数据库操作次数不增加，但重新路由会产生原本被绑定续接跳过的路由调用成本。
 
 `targetType=DOMAIN_AGENT` 用于前端显式选择财经领域 DomainAgent 的场景，`targetId` 为目标 DomainAgent ID。
 该路径会跳过用例库和意图服务，创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，并调用 DomainAgent Runtime。

@@ -53,6 +53,7 @@ import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingCompletionPolicy;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.it.ex.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
@@ -109,6 +110,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 abstract class ChatFlowTestSupport {
+    RuntimeBindingCompletionPolicy bindingCompletionPolicy() {
+        return new RuntimeBindingCompletionPolicy("");
+    }
+
     static int indexOfEvent(List<ChatEvent> events, String type, String sourceType) {
         for (int i = 0; i < events.size(); i++) {
             ChatEvent event = events.get(i);
@@ -930,9 +935,11 @@ abstract class ChatFlowTestSupport {
         ChatInteractionApplicationService interactionService = new ChatInteractionApplicationService(
                 interactions, ids, permissionChecker, new ChatInteractionProperties());
         ChatRunTerminalCommitService terminalCommitService = new ChatRunTerminalCommitService(
-                streamService, sessionService, runs, leaseService, bindings, interactionService, Duration.ZERO);
+                streamService, sessionService, runs, leaseService, bindings, interactionService, Duration.ZERO,
+                new com.fasterxml.jackson.databind.ObjectMapper(), bindingCompletionPolicy());
         RuntimeBindingApplicationService bindingService = new RuntimeBindingApplicationService(
-                bindings, bindingCache, ids, Duration.ZERO, "relay");
+                bindings, bindingCache, ids, Duration.ZERO, "relay", "delegate", "domain_expert",
+                bindingCompletionPolicy());
         DomainAgentExecutor domainExecutor = new DomainAgentExecutor(domainClient, documents, limiter);
         AgentRuntimeExecutor relayExecutor = new AgentRuntimeExecutor(relayRuntime, limiter);
         ChatRunStopCoordinator stopCoordinator = new ChatRunStopCoordinator(

@@ -60,6 +60,7 @@ public class RuntimeBindingApplicationService {
     private final String runtimeProvider;
     private final String delegateAppMode;
     private final String domainExpertAppMode;
+    private final RuntimeBindingCompletionPolicy completionPolicy;
 
     /**
      * 创建 Runtime 绑定服务。
@@ -76,6 +77,18 @@ public class RuntimeBindingApplicationService {
                 "delegate", "domain_expert");
     }
 
+    public RuntimeBindingApplicationService(
+            RuntimeBindingRepository repository,
+            RuntimeBindingCache cache,
+            IdGenerator idGenerator,
+            Duration ttl,
+            String runtimeProvider,
+            String delegateAppMode,
+            String domainExpertAppMode) {
+        this(repository, cache, idGenerator, ttl, runtimeProvider, delegateAppMode, domainExpertAppMode,
+                new RuntimeBindingCompletionPolicy(""));
+    }
+
     @Autowired
     public RuntimeBindingApplicationService(
             RuntimeBindingRepository repository,
@@ -84,7 +97,8 @@ public class RuntimeBindingApplicationService {
             @Value("${financeex.runtime-binding.ttl:0s}") Duration ttl,
             @Value("${financeex.agent-runtime.default-provider:relay}") String runtimeProvider,
             @Value("${financeex.agent-runtime.relay.websocket.app-mode:delegate}") String delegateAppMode,
-            @Value("${financeex.agent-runtime.relay.domain-expert.app-mode:domain_expert}") String domainExpertAppMode) {
+            @Value("${financeex.agent-runtime.relay.domain-expert.app-mode:domain_expert}") String domainExpertAppMode,
+            RuntimeBindingCompletionPolicy completionPolicy) {
         this.repository = repository;
         this.cache = cache;
         this.idGenerator = idGenerator;
@@ -92,6 +106,7 @@ public class RuntimeBindingApplicationService {
         this.runtimeProvider = normalizeProvider(runtimeProvider);
         this.delegateAppMode = requireText(delegateAppMode, "Delegate Relay appMode");
         this.domainExpertAppMode = requireText(domainExpertAppMode, "Domain expert Relay appMode");
+        this.completionPolicy = completionPolicy;
     }
 
     /**
@@ -124,7 +139,7 @@ public class RuntimeBindingApplicationService {
      *
      * <p>这里按会话维度复用 active binding，不再因消息树 leaf 切换而创建新的下游 Runtime
      * session。Delegate 正常完成后释放自动路由，以 RESUMABLE 状态保留真实 session；
-     * Domain Expert 正常完成后保持 ACTIVE，后续普通问题优先续接。</p>
+     * Domain Expert 默认正常完成后保持 ACTIVE；配置为非持续绑定的角色完成后转为 RESUMABLE。</p>
      */
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
@@ -642,15 +657,14 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
-     * Runtime 正常完成后更新绑定生命周期。DomainAgent 和 Relay 专家保持 active；
-     * Delegate 释放自动路由，保留实际 runtimeSessionId 供后续重新路由时恢复。
+     * Runtime 正常完成后更新绑定生命周期。DomainAgent 和默认 Relay 专家保持 active；
+     * Delegate 及名单内专家释放自动路由，保留实际 runtimeSessionId 供后续重新路由时恢复。
      */
     public RuntimeBinding completeAfterRun(RuntimeBinding binding, String runId, String leafMessageId) {
         if (binding == null) {
             return null;
         }
-        if (DOMAIN_AGENT_PROVIDER.equals(binding.provider())
-                || isDomainExpert(binding)) {
+        if (completionPolicy.retainBindingOnCompletion(binding)) {
             return touchAndMoveToLeaf(binding, runId, leafMessageId);
         }
         RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())

@@ -18,6 +18,7 @@ import com.huawei.it.ex.one.application.integration.identity.ApplicationInstance
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingCompletionPolicy;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.it.ex.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
@@ -53,6 +54,7 @@ import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
@@ -318,8 +320,9 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isNotBlank();
     }
 
-    @Test
-    void terminalCommitPersistsWaitingUserStateTogether() {
+    @ParameterizedTest
+    @EnumSource(RuntimeProfile.class)
+    void terminalCommitPersistsWaitingUserStateTogether(RuntimeProfile profile) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -338,7 +341,8 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
         Instant now = Instant.now();
         RuntimeBinding binding = new RuntimeBinding("binding1", user.tenantId(), user.ownerUserId(),
                 session.id(), "relay", userMessage.id(), "runtime-session-1", RuntimeBindingStatus.ACTIVE,
-                "run1", now.plus(Duration.ofMinutes(5)), now, now, Map.of());
+                "run1", now.plus(Duration.ofMinutes(5)), now, now,
+                RuntimeProfileMetadata.bindingMetadata(profile, "delegate", "domain_expert", "financial-analysis"));
         bindings.save(binding);
         ChatInteractionApplicationService interactionService = new ChatInteractionApplicationService(interactionRequests, ids,
                 permissionChecker, new ChatInteractionProperties());
@@ -355,7 +359,8 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
                         new LocalChatRunExecutionRegistry()),
                 bindings,
                 interactionService,
-                Duration.ofDays(3)
+                Duration.ofDays(3), new com.fasterxml.jackson.databind.ObjectMapper(),
+                new RuntimeBindingCompletionPolicy("financial-analysis")
         );
         AssistantAssembly assistant = new AssistantAssembly();
         assistant.observe(RuntimeEvent.card("run1", session.id(), Map.of(
@@ -430,8 +435,9 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
     }
 
     @ParameterizedTest
-    @EnumSource(RuntimeProfile.class)
-    void terminalCommitRetainsExpertsButReleasesDelegateRouteAfterCompletedRun(RuntimeProfile profile) {
+    @CsvSource({"DELEGATE,false", "DELEGATE,true", "DOMAIN_EXPERT,false", "DOMAIN_EXPERT,true"})
+    void terminalCommitRetainsExpertsButReleasesDelegateRouteAfterCompletedRun(
+            RuntimeProfile profile, boolean nonSticky) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -468,7 +474,8 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
                         new LocalChatRunExecutionRegistry()),
                 bindings,
                 interactionService,
-                Duration.ofDays(3)
+                Duration.ofDays(3), new com.fasterxml.jackson.databind.ObjectMapper(),
+                new RuntimeBindingCompletionPolicy(nonSticky ? "financial-analysis" : "")
         );
         AssistantAssembly assistant = new AssistantAssembly();
         assistant.observe(MessageSnapshotEvent.of("run1", session.id(), "Relay answer"));
@@ -496,7 +503,7 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
         assertThat(runs.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo("msg-assistant");
         assertThat(bindings.saved.id()).isEqualTo(binding.id());
-        assertThat(bindings.saved.status()).isEqualTo(profile == RuntimeProfile.DOMAIN_EXPERT
+        assertThat(bindings.saved.status()).isEqualTo(profile == RuntimeProfile.DOMAIN_EXPERT && !nonSticky
                 ? RuntimeBindingStatus.ACTIVE : RuntimeBindingStatus.RESUMABLE);
         assertThat(bindings.saved.leafMessageId()).isEqualTo("msg-assistant");
         assertThat(bindings.saved.runtimeSessionId()).isEqualTo("runtime-session-1");

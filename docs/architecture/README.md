@@ -787,9 +787,18 @@ flowchart LR
 RuntimeBinding 维护前端 chat session、当前消息树 leaf 与当前下游会话的关系。当前 provider 包括 `relay` 和 `domain-agent`。leaf 维度隔离可以避免编辑历史问题、切换版本或从历史消息新建分支时误用另一条路径的下游 session。
 
 Relay Binding 还保存内部 `runtimeProfile/relayAppMode/relayRoleName` 快照。`DELEGATE` 与不同动态角色的
-`DOMAIN_EXPERT` 在同一ChatService会话中按档案隔离；Delegate完成后为RESUMABLE，专家完成后为ACTIVE。存量专家RESUMABLE仅在再次选中时恢复，解析时按
+`DOMAIN_EXPERT` 在同一ChatService会话中按档案隔离；Delegate完成后为RESUMABLE，专家默认完成后为ACTIVE。存量专家RESUMABLE仅在再次选中时恢复，解析时按
 `profile + appMode + roleName` 完整档案筛选并只清理完全匹配档案的重复项；缺少 Profile 的存量 Binding 按 `DELEGATE` 解释，专家 Binding 缺少 `relayRoleName` 时失败关闭。档案同步写入 run 私有
 `_relayRuntimeProfile` 供跨实例 stop 恢复，但会在接口入口清理，且不会进入 Event、RouteMemory 或下游业务 metadata。
+
+可选`financeex.agent-runtime.relay.domain-expert.non-sticky-role-names`通过环境变量
+`FINANCEEX_RELAY_NON_STICKY_ROLE_NAMES`配置，默认空；逗号分隔的最终roleName在启动时trim、去空去重，
+区分大小写精确匹配。`RuntimeBindingCompletionPolicy`供终态事务和兼容完成入口共用，
+仅让名单内Relay专家正常完成后走原RESUMABLE保存分支，保留原Binding ID、实际session及档案。
+手动固定标记不覆盖此规则，Ask User等待不调用此策略。正常终态仍按原事务、事件和缓存顺序提交，
+无额外数据库操作；后续重新路由与匹配恢复均复用现有流程。普通模式仍允许用例库匹配，
+聚合专家范围仍隔离；不批量迁移已有ACTIVE记录，存量从下一次正常完成起生效。
+本章其他专家保持ACTIVE的说明均指默认空名单或名单外角色；Stop、失败及forceReroute规则不变。
 
 ```text
 Redis key:

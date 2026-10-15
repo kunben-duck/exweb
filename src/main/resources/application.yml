@@ -359,6 +359,8 @@ financeex:
       enabled: ${FINANCEEX_RELAY_RUNTIME_ENABLED:true}
       domain-expert:
         app-mode: ${FINANCEEX_RELAY_DOMAIN_EXPERT_APP_MODE:domain_expert}
+        # 逗号分隔的最终 roleName；正常完成后转 RESUMABLE，下一轮重新路由，默认空保持原行为。
+        non-sticky-role-names: ${FINANCEEX_RELAY_NON_STICKY_ROLE_NAMES:}
       websocket:
         url: ${FINANCEEX_RELAY_WS_URL:}
         app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}

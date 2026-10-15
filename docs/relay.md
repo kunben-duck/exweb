@@ -118,11 +118,19 @@ ChatService 在 Intent 的规范化 `accessName` 区分大小写精确命中
 `metadata` 及 WebSocket Cookie Header 与普通问答沿用同一透传规则；当前问题只出现在 `content`。
 专家模式和 Delegate 使用独立的可恢复 Binding，不交叉复用 Runtime session。
 
-ChatService中所有Relay专家Binding（包括Intent命中）正常完成后保持`ACTIVE`，下一轮优先
+ChatService中Relay专家Binding（包括Intent命中）默认正常完成后保持`ACTIVE`，下一轮优先
 使用原roleName和runtimeSessionId执行`RESUME`；Delegate仍在正常完成后转为`RESUMABLE`。
 Intent命中不设置前端手动固定标记；`stream-status`返回`DOMAIN_EXPERT`、roleName及已保存的
 意图摘要。旧RESUMABLE专家记录不会批量激活，仅在再次选中匹配档案时恢复。配置、业务及
 问卷续跑报文不变，`forceReroute`、显式换目标及Stop继续使用ChatService现有处理规则。
+
+可选`financeex.agent-runtime.relay.domain-expert.non-sticky-role-names`（环境变量
+`FINANCEEX_RELAY_NON_STICKY_ROLE_NAMES`，默认空）指定完成后不自动续接的角色。名单以逗号分隔，
+trim、去空去重后区分大小写精确匹配最终`roleName`，不填写完整Intent accessName或通配符。
+名单内角色无论手动选择还是Intent命中，正常完成后都转为`RESUMABLE`；下一轮恢复原路由流程，
+再次命中匹配档案及专家范围时仍以原下游session发送`RESUME`。Profile仍为DOMAIN_EXPERT，
+不改变config、chat_expert或输出过滤方式。问卷等待保持ACTIVE，不提前释放交互绑定。
+存量ACTIVE记录在下次正常完成时应用规则，不批量迁移；失败、Stop及forceReroute沿用原行为。
 
 普通Intent命中专家后，再在同一ChatService会话手动选择同名专家，无开放Interaction且
 Profile、appMode及专家范围匹配时，保留原Binding和真实runtimeSessionId，继续发送`RESUME`，

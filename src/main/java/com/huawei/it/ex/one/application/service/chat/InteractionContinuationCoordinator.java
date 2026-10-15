@@ -36,7 +36,7 @@ final class InteractionContinuationCoordinator {
     private final DocumentFacade documentFacade;
     private final IntentClarificationContextAssembler clarificationAssembler;
     private final AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver;
-    private final RelayQuestionnaireAnswerValidator relayQuestionnaireAnswerValidator;
+    private final RuntimeQuestionnaireAnswerValidator runtimeQuestionnaireAnswerValidator;
 
     InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
                                        ChatInteractionApplicationService interactionService,
@@ -50,7 +50,7 @@ final class InteractionContinuationCoordinator {
         this.documentFacade = documentFacade;
         this.clarificationAssembler = clarificationAssembler;
         this.ambiguousRouteSelectionResolver = ambiguousRouteSelectionResolver;
-        this.relayQuestionnaireAnswerValidator = new RelayQuestionnaireAnswerValidator();
+        this.runtimeQuestionnaireAnswerValidator = new RuntimeQuestionnaireAnswerValidator();
     }
 
     InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
@@ -175,7 +175,7 @@ final class InteractionContinuationCoordinator {
                 context.routeSwitchAttachmentsRef().set(
                         documentFacade.resolveChatAttachmentsForUser(user, command.attachments()));
             }
-            relayQuestionnaireAnswerValidator.validate(command, interaction);
+            runtimeQuestionnaireAnswerValidator.validate(command, interaction);
             return interactionService.prepareResponsePayload(command, interaction.interactionType(), null);
         }
         if (AmbiguousRouteSupport.isAmbiguous(interaction)) {

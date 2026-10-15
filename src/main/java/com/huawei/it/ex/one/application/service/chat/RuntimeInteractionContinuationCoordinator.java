@@ -122,7 +122,7 @@ final class RuntimeInteractionContinuationCoordinator {
                 userMessage,
                 null);
         AgentDataPersistenceState persistenceState = inheritedState.persistenceState();
-        RuntimeInteractionDispatchState dispatchState = RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(interaction)
+        RuntimeInteractionDispatchState dispatchState = RuntimeQuestionnaireAnswerValidator.isQuestionnaire(interaction)
                 ? RuntimeInteractionDispatchState.tracked()
                 : RuntimeInteractionDispatchState.untracked();
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
@@ -205,7 +205,7 @@ final class RuntimeInteractionContinuationCoordinator {
                     DomainAgentQuestionnaireContext.text(DomainAgentQuestionnaireContext.require(interaction).get("skillId")));
             return new InteractionBindingLifecycle(binding, true, dispatchState);
         }
-        if (RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(interaction)) {
+        if (RuntimeQuestionnaireAnswerValidator.isQuestionnaire(interaction)) {
             RuntimeBinding binding = runtimeBindingService.resumeRelayForInteraction(
                     interaction, request.runId(), executionClaim);
             return new InteractionBindingLifecycle(binding, true, dispatchState);

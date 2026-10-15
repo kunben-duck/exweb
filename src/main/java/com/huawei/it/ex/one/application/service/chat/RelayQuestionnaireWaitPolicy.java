@@ -43,7 +43,7 @@ final class RelayQuestionnaireWaitPolicy {
     ChatEvent decorate(ChatEvent event, Instant now) {
         Duration timeout = DomainAgentQuestionnaire.isRequest(event) ? domainAgentTimeout : this.timeout;
         if (event == null || timeout.isZero() || !"runtime.card".equals(event.type())
-                || !RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(event.payload())) {
+                || !RuntimeQuestionnaireAnswerValidator.isQuestionnaire(event.payload())) {
             return event;
         }
         Map<String, Object> payload = new LinkedHashMap<>(event.payload());

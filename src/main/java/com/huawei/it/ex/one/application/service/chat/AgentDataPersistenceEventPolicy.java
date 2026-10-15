@@ -80,7 +80,7 @@ final class AgentDataPersistenceEventPolicy {
         if (event == null || !"runtime.card".equals(event.type()) || event.payload() == null
                 || !("relay".equals(text(event.payload().get("source")))
                         || "domain-agent".equals(text(event.payload().get("source"))))
-                || !RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(event.payload())
+                || !RuntimeQuestionnaireAnswerValidator.isQuestionnaire(event.payload())
                 || text(event.payload().get("approval_id")) == null) {
             return false;
         }

@@ -460,7 +460,8 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
     void invalidAnswerFailsBeforeClaimAndDoesNotSendControl() {
         ChatInteractionRequest waiting = start();
         assertThatThrownBy(() -> respond(waiting, true, Map.of("label", Map.of("unknown", "x"))))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("问卷回答包含未知问题: unknown");
         assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
         assertThat(submitted.get()).isNull();
         assertThat(runs.runs).hasSize(1);

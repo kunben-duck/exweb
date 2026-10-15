@@ -626,6 +626,17 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         ChatInteractionRequest waiting = interactionRequests.requests.values().iterator().next();
         String originalBindingId = bindings.saved.id();
         String originalRuntimeSessionId = bindings.saved.runtimeSessionId();
+        ChatCommand invalidAnswer = new ChatCommand(null, null, null, run.sessionId(), null, "mobile", null,
+                List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                null, waiting.id(), true, "once", Map.of("label", Map.of("unknown", "x")));
+        assertThatThrownBy(() -> service.startRun(user, invalidAnswer, RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("问卷回答包含未知问题: unknown");
+        assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(runs.runs).hasSize(1);
+        assertThat(answerRequest.get()).isNull();
+        assertThat(bindings.saved.id()).isEqualTo(originalBindingId);
+        assertThat(bindings.saved.lastRunId()).isEqualTo(run.id());
         ChatCommand answer = new ChatCommand(null, null, null, run.sessionId(), null, "mobile", null,
                 List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                 null, waiting.id(), true, "once", Map.of("label", Map.of("请选择技术方案", "方案A")));

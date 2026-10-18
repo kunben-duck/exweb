@@ -11,17 +11,20 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentQuestionnaire;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.service.observation.AgentObservationRecorder;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
@@ -46,6 +49,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 @EnableConfigurationProperties(DomainAgentProperties.class)
 public class ConfiguredDomainAgentClient implements DomainAgentClient {
+
+    private AgentObservationRecorder observations = AgentObservationRecorder.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(AgentObservationRecorder value) { this.observations = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(ConfiguredDomainAgentClient.class);
 
     private final WebClient.Builder webClientBuilder;
@@ -67,61 +76,85 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
     public Flux<ChatEvent> query(DomainAgentRequest request) {
         validate(request);
         Map<String, Object> body = requestMapper.toWireRequest(request);
-        return exchange(request.runId(), request.sessionId(), body, request.forwardHeaders(), () -> { });
+        return exchange(new ExchangeRequest(request.runId(), request.sessionId(), body,
+                request.forwardHeaders(), () -> { }, request.turnTraceContext(),
+                new AgentObservationRecorder.Target(
+                        "DOMAIN_AGENT", null, "QUERY", request.domainAgentId(), request.runtimeSessionId())));
     }
 
     @Override
     public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
         validate(null);
         Map<String, Object> body = requestMapper.toInteractionWireRequest(request);
-        return exchange(request.runId(), request.sessionId(), body, request.forwardHeaders(),
-                request.dispatchState()::markResponseDispatched);
+        return exchange(new ExchangeRequest(request.runId(), request.sessionId(), body, request.forwardHeaders(),
+                request.dispatchState()::markResponseDispatched, request.turnTraceContext(),
+                new AgentObservationRecorder.Target(
+                        "DOMAIN_AGENT", null, "INTERACTION_RESPONSE", String.valueOf(body.get("skillId")),
+                        request.runtimeSessionId())));
     }
 
-    private Flux<ChatEvent> exchange(String runId, String sessionId, Map<String, Object> body,
-                                     RuntimeForwardHeaders forwardHeaders, Runnable onSubmit) {
-        Flux<ChatEvent> source = Flux.defer(() -> {
-            DomainAgentResponseNormalizer.DomainAgentStreamState streamState = responseNormalizer.newStreamState();
-            DomainAgentUtf8StreamDecoder utf8Decoder = new DomainAgentUtf8StreamDecoder();
-            // HTTP 提交开始后无法证明答案未送达，失败时不得自动重发问卷答案。
-            onSubmit.run();
-            return webClientBuilder.build()
-                    .post()
-                    .uri(fullUrl(properties.getChatPath()))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_NDJSON, MediaType.APPLICATION_JSON)
-                    .headers(headers -> applyOutboundHeaders(headers, forwardHeaders))
-                    .bodyValue(body)
-                    .retrieve()
-                    /*
-                     * DomainAgent 使用非标准的 "message: {...}" 私有 eventStream 帧。WebClient 在
-                     * text/event-stream 下按标准 SSE 解码 String 时只认 data 行，可能吞掉 message 行。
-                     * 因此这里读取原始 DataBuffer，再交给 DomainAgentResponseNormalizer 兼容 message/data/plain JSON。
-                     */
-                    .bodyToFlux(DataBuffer.class)
-                    .timeout(properties.getStreamIdleTimeout(), Flux.error(domainAgentTimeout(
-                            "IDLE", properties.getStreamIdleTimeout())))
-                    .map(utf8Decoder::decode)
-                    .concatWith(Mono.fromSupplier(utf8Decoder::finish))
-                    .flatMapIterable(chunk -> responseNormalizer.normalize(
-                            runId, sessionId, chunk, streamState))
-                    .concatWith(Flux.defer(() -> Flux.fromIterable(
-                            responseNormalizer.finish(runId, sessionId, streamState))))
-                    /*
-                     * DomainAgent 的 endFlag=true 已经映射为 message.completed。收到后主动闭合本轮流，
-                     * 避免下游 HTTP 连接未关闭时持续占用本机 bulkhead 和 WebClient 资源。
-                     */
-                    .takeUntil(event -> "message.completed".equals(event.type())
-                            || "run.async_running".equals(event.type())
-                            || DomainAgentQuestionnaire.isRequest(event));
+    private record ExchangeRequest(String runId, String sessionId, Map<String, Object> body,
+                                   RuntimeForwardHeaders forwardHeaders, Runnable onSubmit,
+                                   TurnTraceContext context,
+                                   AgentObservationRecorder.Target target) { }
+
+    private Flux<ChatEvent> exchange(ExchangeRequest request) {
+        String runId = request.runId();
+        String sessionId = request.sessionId();
+        Map<String, Object> body = request.body();
+        RuntimeForwardHeaders forwardHeaders = request.forwardHeaders();
+        Runnable onSubmit = request.onSubmit();
+        return Flux.defer(() -> {
+            var observation = observations.begin(request.context(), request.target());
+            Flux<ChatEvent> source = Flux.defer(() -> {
+                DomainAgentResponseNormalizer.DomainAgentStreamState streamState = responseNormalizer.newStreamState();
+                DomainAgentUtf8StreamDecoder utf8Decoder = new DomainAgentUtf8StreamDecoder();
+                // HTTP 提交开始后无法证明答案未送达，失败时不得自动重发问卷答案。
+                onSubmit.run();
+                return webClientBuilder.build()
+                        .post()
+                        .uri(fullUrl(properties.getChatPath()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_NDJSON, MediaType.APPLICATION_JSON)
+                        .headers(headers -> {
+                            applyOutboundHeaders(headers, forwardHeaders);
+                            observation.headers(headers);
+                        })
+                        .bodyValue(body)
+                        .retrieve()
+                        /*
+                         * DomainAgent 使用非标准的 "message: {...}" 私有 eventStream 帧。WebClient 在
+                         * text/event-stream 下按标准 SSE 解码 String 时只认 data 行，可能吞掉 message 行。
+                         * 因此这里读取原始 DataBuffer，再交给 DomainAgentResponseNormalizer 兼容 message/data/plain JSON。
+                         */
+                        .bodyToFlux(DataBuffer.class)
+                        .timeout(properties.getStreamIdleTimeout(), Flux.error(domainAgentTimeout(
+                                "IDLE", properties.getStreamIdleTimeout())))
+                        .map(utf8Decoder::decode)
+                        .concatWith(Mono.fromSupplier(utf8Decoder::finish))
+                        .flatMapIterable(chunk -> responseNormalizer.normalize(
+                                runId, sessionId, chunk, streamState))
+                        .concatWith(Flux.defer(() -> Flux.fromIterable(
+                                responseNormalizer.finish(runId, sessionId, streamState))))
+                        /*
+                         * DomainAgent 的 endFlag=true 已经映射为 message.completed。收到后主动闭合本轮流，
+                         * 避免下游 HTTP 连接未关闭时持续占用本机 bulkhead 和 WebClient 资源。
+                         */
+                        .doOnNext(observation::event)
+                        .takeUntil(event -> "message.completed".equals(event.type())
+                                || "run.async_running".equals(event.type())
+                                || DomainAgentQuestionnaire.isRequest(event));
+            });
+            return enforceDomainAgentTotalDeadline(source)
+                    .doOnError(observation::error)
+                    .doFinally(observation::finish)
+                    .doOnError(ex -> log.warn(SystemErrorLogEntry.builder(classifyDomainAgentFailure(ex),
+                                    "DomainAgent response stream failed")
+                            .runId(runId)
+                            .sessionId(sessionId)
+                            .operation("domain-agent.query")
+                            .build(), ex));
         });
-        return enforceDomainAgentTotalDeadline(source)
-                .doOnError(ex -> log.warn(SystemErrorLogEntry.builder(classifyDomainAgentFailure(ex),
-                                "DomainAgent response stream failed")
-                        .runId(runId)
-                        .sessionId(sessionId)
-                        .operation("domain-agent.query")
-                        .build(), ex));
     }
 
     @Override
@@ -135,24 +168,35 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                 "skillId", request.domainAgentId() == null ? "" : request.domainAgentId(),
                 "reason", request.reason() == null ? "" : request.reason()
         );
-        return webClientBuilder.build()
-                .post()
-                .uri(fullUrl(properties.getStopPath()))
-                .contentType(MediaType.APPLICATION_JSON)
-                .headers(headers -> applyOutboundHeaders(headers, request.forwardHeaders()))
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(Void.class)
-                .timeout(properties.getTimeout())
-                .onErrorResume(ex -> {
-                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DOMAIN_AGENT_CANCEL_FAILED,
-                                    "DomainAgent cancellation request failed")
-                            .runId(request.runId())
-                            .sessionId(request.sessionId())
-                            .operation("domain-agent.cancel")
-                            .build(), ex);
-                    return Mono.empty();
-                });
+        return Mono.defer(() -> {
+            var observation = observations.begin(request.turnTraceContext(),
+                    new AgentObservationRecorder.Target(
+                            "DOMAIN_AGENT", null, "STOP", request.domainAgentId(), request.runtimeSessionId()));
+            return webClientBuilder.build()
+                    .post()
+                    .uri(fullUrl(properties.getStopPath()))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .headers(headers -> {
+                        applyOutboundHeaders(headers, request.forwardHeaders());
+                        observation.headers(headers);
+                    })
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(Void.class)
+                    .timeout(properties.getTimeout())
+                    .doOnSuccess(ignored -> observation.outcome("STOP_ACCEPTED"))
+                    .doOnError(observation::error)
+                    .doFinally(observation::finish)
+                    .onErrorResume(ex -> {
+                        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DOMAIN_AGENT_CANCEL_FAILED,
+                                        "DomainAgent cancellation request failed")
+                                .runId(request.runId())
+                                .sessionId(request.sessionId())
+                                .operation("domain-agent.cancel")
+                                .build(), ex);
+                        return Mono.empty();
+                    });
+        });
     }
 
     private void validate(DomainAgentRequest request) {

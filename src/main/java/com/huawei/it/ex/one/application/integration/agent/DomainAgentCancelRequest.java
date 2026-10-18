@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
@@ -28,8 +29,31 @@ public record DomainAgentCancelRequest(
         String domainAgentId,
         String reason,
         Map<String, Object> metadata,
-        @JsonIgnore RuntimeForwardHeaders forwardHeaders
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders,
+        @JsonIgnore TurnTraceContext turnTraceContext,
+        @JsonIgnore String runtimeSessionId
 ) {
+    /** 保留旧内部调用构造方式；新观测上下文不序列化为业务报文。 */
+    public DomainAgentCancelRequest(
+            UserContext user,
+            String sessionId,
+            String runId,
+            String domainAgentId,
+            String reason,
+            Map<String, Object> metadata,
+            RuntimeForwardHeaders forwardHeaders) {
+        this(user, sessionId, runId, domainAgentId, reason, metadata, forwardHeaders, null, null);
+    }
+
+    public DomainAgentCancelRequest withTurnTraceContext(TurnTraceContext context) {
+        return new DomainAgentCancelRequest(user, sessionId, runId, domainAgentId, reason, metadata, forwardHeaders, context, runtimeSessionId);
+    }
+
+    public DomainAgentCancelRequest withRuntimeSessionId(String value) {
+        return new DomainAgentCancelRequest(user, sessionId, runId, domainAgentId, reason, metadata,
+                forwardHeaders, turnTraceContext, value);
+    }
+
     public DomainAgentCancelRequest {
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;

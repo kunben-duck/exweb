@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ObservationMapper">
+    <!-- 合并问答快照。入参：可信快照；阶段单调更新，首帧及拒答独立合并。 -->
+    <insert id="saveTrace">
+        INSERT INTO fin_ex_turn_trace_t (
+            trace_id, tenant_id, user_id, session_id, root_run_id, root_user_message_id, source_run_id, source_trace_id, current_run_id, origin_type, current_run_ordinal, state_version, status, is_refusal, started_at, first_business_frame_at, first_business_frame_latency_ms, finished_at, duration_ms, error_code, created_at, updated_at
+        ) VALUES (
+            #{traceId}, #{tenantId}, #{userId}, #{sessionId}, #{rootRunId}, #{rootUserMessageId}, #{sourceRunId}, #{sourceTraceId}, #{currentRunId}, #{originType}, #{currentRunOrdinal}, #{stateVersion}, #{status}, #{isRefusal}, #{startedAt}, #{firstBusinessFrameAt}, #{firstBusinessFrameLatencyMs}, #{finishedAt}, #{durationMs}, #{errorCode}, #{createdAt}, #{updatedAt}
+        )
+        ON DUPLICATE KEY UPDATE
+            session_id = CASE WHEN fin_ex_turn_trace_t.session_id IS NULL THEN EXCLUDED.session_id ELSE fin_ex_turn_trace_t.session_id END,
+            root_user_message_id = CASE WHEN fin_ex_turn_trace_t.root_user_message_id IS NULL THEN EXCLUDED.root_user_message_id ELSE fin_ex_turn_trace_t.root_user_message_id END,
+            source_run_id = CASE WHEN fin_ex_turn_trace_t.source_run_id IS NULL THEN EXCLUDED.source_run_id ELSE fin_ex_turn_trace_t.source_run_id END,
+            source_trace_id = CASE WHEN fin_ex_turn_trace_t.source_trace_id IS NULL THEN EXCLUDED.source_trace_id ELSE fin_ex_turn_trace_t.source_trace_id END,
+            origin_type = CASE WHEN fin_ex_turn_trace_t.current_run_ordinal = 0 THEN EXCLUDED.origin_type ELSE fin_ex_turn_trace_t.origin_type END,
+            current_run_id = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.current_run_id ELSE fin_ex_turn_trace_t.current_run_id END,
+            current_run_ordinal = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.current_run_ordinal ELSE fin_ex_turn_trace_t.current_run_ordinal END,
+            state_version = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.state_version ELSE fin_ex_turn_trace_t.state_version END,
+            status = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.status ELSE fin_ex_turn_trace_t.status END,
+            is_refusal = fin_ex_turn_trace_t.is_refusal OR EXCLUDED.is_refusal,
+            first_business_frame_at = CASE WHEN (EXCLUDED.first_business_frame_at IS NOT NULL AND (fin_ex_turn_trace_t.first_business_frame_at IS NULL OR EXCLUDED.first_business_frame_at &lt; fin_ex_turn_trace_t.first_business_frame_at)) THEN EXCLUDED.first_business_frame_at ELSE fin_ex_turn_trace_t.first_business_frame_at END,
+            first_business_frame_latency_ms = CASE WHEN (EXCLUDED.first_business_frame_at IS NOT NULL AND (fin_ex_turn_trace_t.first_business_frame_at IS NULL OR EXCLUDED.first_business_frame_at &lt; fin_ex_turn_trace_t.first_business_frame_at)) THEN EXCLUDED.first_business_frame_latency_ms ELSE fin_ex_turn_trace_t.first_business_frame_latency_ms END,
+            finished_at = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.finished_at ELSE fin_ex_turn_trace_t.finished_at END,
+            duration_ms = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.duration_ms ELSE fin_ex_turn_trace_t.duration_ms END,
+            error_code = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.error_code ELSE fin_ex_turn_trace_t.error_code END,
+            updated_at = CASE WHEN EXCLUDED.updated_at > fin_ex_turn_trace_t.updated_at THEN EXCLUDED.updated_at ELSE fin_ex_turn_trace_t.updated_at END
+    </insert>
+    <!-- 合并调用快照。入参：单次实际尝试快照；只允许STARTED转为FINISHED。 -->
+    <insert id="saveObservation">
+        INSERT INTO fin_ex_agent_observation_t (
+            observation_id, trace_id, tenant_id, user_id, session_id, run_id, user_message_id, parent_observation_id, retry_of_observation_id, attempt_no, agent_type, agent_mode, operation, skill_id, runtime_session_id, status, outcome, started_at, first_business_frame_at, first_business_frame_latency_ms, finished_at, duration_ms, reject_code, reject_reason_code, reject_message, reject_recoverable, created_at, updated_at
+        ) VALUES (
+            #{observationId}, #{traceId}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{userMessageId}, #{parentObservationId}, #{retryOfObservationId}, #{attemptNo}, #{agentType}, #{agentMode}, #{operation}, #{skillId}, #{runtimeSessionId}, #{status}, #{outcome}, #{startedAt}, #{firstBusinessFrameAt}, #{firstBusinessFrameLatencyMs}, #{finishedAt}, #{durationMs}, #{rejectCode}, #{rejectReasonCode}, #{rejectMessage}, #{rejectRecoverable}, #{createdAt}, #{updatedAt}
+        )
+        ON DUPLICATE KEY UPDATE
+            session_id = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.session_id ELSE fin_ex_agent_observation_t.session_id END,
+            run_id = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.run_id ELSE fin_ex_agent_observation_t.run_id END,
+            user_message_id = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.user_message_id ELSE fin_ex_agent_observation_t.user_message_id END,
+            parent_observation_id = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.parent_observation_id ELSE fin_ex_agent_observation_t.parent_observation_id END,
+            retry_of_observation_id = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.retry_of_observation_id ELSE fin_ex_agent_observation_t.retry_of_observation_id END,
+            attempt_no = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.attempt_no ELSE fin_ex_agent_observation_t.attempt_no END,
+            agent_type = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.agent_type ELSE fin_ex_agent_observation_t.agent_type END,
+            agent_mode = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.agent_mode ELSE fin_ex_agent_observation_t.agent_mode END,
+            operation = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.operation ELSE fin_ex_agent_observation_t.operation END,
+            skill_id = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.skill_id ELSE fin_ex_agent_observation_t.skill_id END,
+            runtime_session_id = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.runtime_session_id ELSE fin_ex_agent_observation_t.runtime_session_id END,
+            status = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.status ELSE fin_ex_agent_observation_t.status END,
+            outcome = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.outcome ELSE fin_ex_agent_observation_t.outcome END,
+            first_business_frame_at = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.first_business_frame_at ELSE fin_ex_agent_observation_t.first_business_frame_at END,
+            first_business_frame_latency_ms = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.first_business_frame_latency_ms ELSE fin_ex_agent_observation_t.first_business_frame_latency_ms END,
+            finished_at = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.finished_at ELSE fin_ex_agent_observation_t.finished_at END,
+            duration_ms = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.duration_ms ELSE fin_ex_agent_observation_t.duration_ms END,
+            reject_code = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.reject_code ELSE fin_ex_agent_observation_t.reject_code END,
+            reject_reason_code = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.reject_reason_code ELSE fin_ex_agent_observation_t.reject_reason_code END,
+            reject_message = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.reject_message ELSE fin_ex_agent_observation_t.reject_message END,
+            reject_recoverable = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.reject_recoverable ELSE fin_ex_agent_observation_t.reject_recoverable END,
+            updated_at = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.updated_at ELSE fin_ex_agent_observation_t.updated_at END
+    </insert>
+</mapper>

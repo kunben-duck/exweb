@@ -47,6 +47,58 @@ class ConfiguredDomainAgentClientTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void observationsPropagateOnlyTrustedHeadersForQueryAnswerAndStop() throws Exception {
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.start("run-a");
+            var trace = f.turns.context("run-a");
+            List<ClientRequest> requests = new java.util.concurrent.CopyOnWriteArrayList<>();
+            List<String> bodies = new java.util.concurrent.CopyOnWriteArrayList<>();
+            WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+                requests.add(request);
+                MockClientHttpRequest output = new MockClientHttpRequest(request.method(), request.url());
+                return request.writeTo(output, ExchangeStrategies.withDefaults()).then(Mono.defer(() -> {
+                    bodies.add(output.getBodyAsString().block(Duration.ofSeconds(1)));
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                            .body("data: {\"content\":\"answer\"}\n\ndata: {\"endFlag\":true}\n\n").build());
+                }));
+            });
+            DomainAgentProperties properties = properties();
+            properties.setStopPath("/stop");
+            ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(builder, properties,
+                    new DomainAgentChatRequestMapper(properties), new DomainAgentResponseNormalizer(objectMapper));
+            client.setObservationSupport(f.recorder);
+            var user = new UserContext("t", "u", "u");
+            var query = new DomainAgentRequest(user, "session", "run-a", "skill-a", "real-downstream-session",
+                    "hello", List.of(), Map.of("_turnObservation", Map.of("traceId", "client-forged")),
+                    RuntimeForwardHeaders.empty()).withTurnTraceContext(trace);
+            client.query(query).collectList().block(Duration.ofSeconds(2));
+            var answer = new AgentRuntimeInteractionResponseRequest("t", "u", "u", null, "session", "run-a",
+                    "real-downstream-session", "domain-agent", "interaction", "CLARIFICATION", "q1",
+                    Map.of("approved", false, "questionnaireAnswers", Map.of("ignore", true)),
+                    RuntimeForwardHeaders.empty(), TraceContext.empty(),
+                    Map.of("userMessageId", "user-1", "skillId", "skill-a"), RuntimeInteractionDispatchState.tracked())
+                    .withTurnTraceContext(trace);
+            client.continueWithUserResponse(answer).collectList().block(Duration.ofSeconds(2));
+            client.cancel(new DomainAgentCancelRequest(user, "session", "run-a", "skill-a", "stop",
+                    Map.of(), RuntimeForwardHeaders.empty()).withTurnTraceContext(trace)).block(Duration.ofSeconds(2));
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> f.calls.stream().filter(c -> "FINISHED".equals(c.status())).count() == 3);
+            assertThat(requests).hasSize(3).allSatisfy(request -> {
+                assertThat(request.headers().getFirst("X-Trace-Id")).isEqualTo(trace.traceId());
+                assertThat(request.headers().getFirst("X-Observation-Id")).startsWith("obs_");
+            });
+            assertThat(requests.stream().map(r -> r.headers().getFirst("X-Observation-Id")).distinct()).hasSize(3);
+            assertThat(bodies).allSatisfy(body -> assertThat(body)
+                    .doesNotContain("_turnObservation", "turnTraceContext", trace.traceId(), "client-forged"));
+            assertThat(f.calls.stream().filter(c -> "FINISHED".equals(c.status())).map(c -> c.operation()))
+                    .containsExactly("QUERY", "INTERACTION_RESPONSE", "STOP");
+            assertThat(f.calls.getLast().outcome()).isEqualTo("STOP_ACCEPTED");
+            assertThat(objectMapper.writeValueAsString(query)).doesNotContain("turnTraceContext", trace.traceId());
+        }
+    }
+
+    @Test
     void questionnaireAnswerUsesSameEndpointAndClosesHttpAtNextQuestion() throws Exception {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         AtomicReference<MockClientHttpRequest> outbound = new AtomicReference<>();

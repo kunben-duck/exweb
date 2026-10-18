@@ -13,6 +13,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunReposito
 import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -59,6 +60,12 @@ import java.util.Optional;
  */
 @Service
 public class ChatRunApplicationService {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunApplicationService.class);
     private static final String SESSION_STATUS_ACTIVE = "ACTIVE";
     private static final String SESSION_STATUS_DELETED = "DELETED";
@@ -168,21 +175,25 @@ public class ChatRunApplicationService {
     }
 
     private ChatRun insertRunningAfterSessionValidation(CreateChatRunContext context) {
-        return repository.insert(newRunning(context));
+        ChatRun saved = repository.insert(newRunning(context));
+        turns.committed(saved, null);
+        return saved;
     }
 
     private ChatRun insertInteractionRunningAfterSessionValidation(
             CreateChatRunContext context, String interactionId) {
         ChatRun run = newRunning(context);
-        return repository.insertInteractionContinuationIfClaimed(run, interactionId)
+        ChatRun saved = repository.insertInteractionContinuationIfClaimed(run, interactionId)
                 .orElseThrow(() -> ChatInteractionUnavailableException.alreadyHandled(interactionId));
+        turns.committed(saved, null);
+        return saved;
     }
 
     private ChatRun newRunning(CreateChatRunContext context) {
         // 包括复用消息的续跑在内，新 Run 的 assistant 字段初始为空；保存结果或挂起快照时才关联。
         UserContext user = context.user();
         Instant now = Instant.now();
-        return new ChatRun(
+        return turns.decorate(new ChatRun(
                 context.runId(),
                 user.tenantId(),
                 user.ownerUserId(),
@@ -206,7 +217,7 @@ public class ChatRunApplicationService {
                                 AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata()))),
                 now,
                 now
-        );
+        ));
     }
 
     /**
@@ -236,7 +247,10 @@ public class ChatRunApplicationService {
         }
         ChatRun next = nextRunForEvent(run, event);
         next = withEventRuntimeSession(next, event);
-        return save(next);
+        ChatRun saved = repository.save(turns.decorate(next));
+        turns.committed(saved, event.payload().get("code") instanceof String code ? code : null);
+        synchronizeActiveRunCache(saved);
+        return saved;
     }
 
     private ChatRun nextRunForEvent(ChatRun run, ChatEvent event) {
@@ -849,19 +863,20 @@ public class ChatRunApplicationService {
     }
 
     private ChatRun save(ChatRun run) {
-        ChatRun saved = repository.save(run);
+        ChatRun saved = repository.save(turns.decorate(run));
+        turns.committed(saved, null);
         synchronizeActiveRunCache(saved);
         return saved;
     }
 
     private ChatRun updateResolvedRoute(ChatRun run) {
-        ChatRun saved = repository.updateResolvedRoute(run);
+        ChatRun saved = repository.updateResolvedRoute(turns.decorate(run));
         synchronizeActiveRunCache(saved);
         return saved;
     }
 
     private ChatRun updateResolvedRouteWithExecutionGuard(ChatRun run, RunExecutionClaim claim) {
-        ChatRun saved = repository.updateResolvedRouteWithExecutionGuard(run, claim);
+        ChatRun saved = repository.updateResolvedRouteWithExecutionGuard(turns.decorate(run), claim);
         synchronizeActiveRunCache(saved);
         return saved;
     }

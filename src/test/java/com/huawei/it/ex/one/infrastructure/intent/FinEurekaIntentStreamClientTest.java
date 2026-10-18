@@ -128,6 +128,38 @@ class FinEurekaIntentStreamClientTest {
     }
 
     @Test
+    void observesEachHttpRetryWithoutAddingNewHeadersOrChangingBody() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicReference<String> body = new AtomicReference<>();
+        List<com.sun.net.httpserver.Headers> headers = new CopyOnWriteArrayList<>();
+        try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture();
+             StreamServerFixture server = server(body, null, exchange -> {
+                 headers.add(exchange.getRequestHeaders());
+                 write(exchange, attempts.incrementAndGet() == 1
+                         ? "event: error\ndata: {\"code\":504}\n\n" : ROUTE_SINGLE_RESULT);
+             })) {
+            observation.start("run");
+            var client = client(server, properties(1));
+            client.setObservationSupport(observation.recorder);
+            var frames = client.recognize(command(), MemoryContext.empty(), user(), "user-1",
+                    observation.turns.context("run")).collectList().block(Duration.ofSeconds(5));
+            assertThat(frames).isNotEmpty();
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> observation.calls.stream().filter(c -> "FINISHED".equals(c.status())).count() == 2);
+            assertThat(attempts).hasValue(2);
+            assertThat(headers).allSatisfy(h -> assertThat(h).doesNotContainKeys("X-Trace-Id", "X-Observation-Id"));
+            assertThat(body.get()).doesNotContain("turn_", "obs_", "turnTraceContext", "_turnObservation");
+            var ended = observation.calls.stream().filter(c -> "FINISHED".equals(c.status())).toList();
+            assertThat(ended.get(0).outcome()).isEqualTo("ERROR");
+            assertThat(ended.get(1).attemptNo()).isEqualTo(2);
+            assertThat(ended.get(1).retryOfObservationId()).isEqualTo(ended.get(0).observationId());
+            assertThat(ended.get(1).outcome()).isEqualTo("COMPLETED");
+            assertThat(ended.get(1).firstBusinessFrameAt()).isNotNull();
+            assertThat(observation.turns.context("run").firstBusinessFrameAt()).isNull();
+        }
+    }
+
+    @Test
     void emitsProgressDeltaAndFinalResultInOrder() throws Exception {
         AtomicReference<String> requestBody = new AtomicReference<>();
         AtomicReference<String> accept = new AtomicReference<>();

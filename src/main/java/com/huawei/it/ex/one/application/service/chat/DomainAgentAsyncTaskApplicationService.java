@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutio
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
@@ -18,6 +19,7 @@ import com.huawei.it.ex.one.domain.chat.RunAsyncRunningEvent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,12 @@ import java.time.Instant;
 /** Commits the boundary where a DomainAgent request leaves the live HTTP stream and runs in background. */
 @Service
 public class DomainAgentAsyncTaskApplicationService {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private final DomainAgentProperties properties;
     private final ChatRunRepository runRepository;
     private final ChatRunExecutionRepository executionRepository;
@@ -85,7 +93,8 @@ public class DomainAgentAsyncTaskApplicationService {
         ChatRun pending = current.withAssistantMessageId(assistant.id())
                 .withLastSeq(stored.sequence())
                 .withMetadata(DomainAgentAsyncTaskMetadata.runningOverlay(assistant.id(), expiresAt));
-        ChatRun savedRun = runRepository.transitionToAsyncWaiting(pending, context.executionClaim());
+        ChatRun savedRun = runRepository.transitionToAsyncWaiting(turns.decorate(pending), context.executionClaim());
+        turns.committed(savedRun, null);
         // 与异步事件/Run 快照同事务，撤销原执行租约；此后的结果只能经回调终态竞争写入。
         if (!executionRepository.markAsyncWaiting(context.executionClaim(), expiresAt)) {
             throw new IllegalStateException("DomainAgent async execution transition was rejected");

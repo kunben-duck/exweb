@@ -55,6 +55,7 @@ import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
+import com.huawei.it.ex.one.domain.observation.ObservationMetadata;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentChatRequestMapper;
@@ -315,6 +316,36 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
         ObjectNode frame = (ObjectNode) new ObjectMapper().readTree(prompt(id).substring("data: ".length()));
         frame.put("sessionId", sessionId);
         return "data: " + frame + "\n\n";
+    }
+
+    @Test
+    void observationContextSurvivesQuestionnaireContinuationWithoutPublicPayloadChanges() {
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.wire(service);
+            var startResult = service.startRun(user, new ChatCommand(null, null, null, null, null,
+                    "web", "original question", List.of(), Map.of(), "DOMAIN_AGENT", "skill-a",
+                    ChatRunMode.NEXT, null, null, null), RuntimeForwardHeaders.empty())
+                    .block(Duration.ofSeconds(10));
+            assertThat(awaitTerminal(startResult).getLast().type()).isEqualTo("run.waiting_user");
+            ChatInteractionRequest waiting = interactions.requests.values().iterator().next();
+            var context = ObservationMetadata.read(
+                    waiting.requestPayload(), user.tenantId(), user.ownerUserId());
+            assertThat(context).isNotNull();
+            assertThat(context.rootUserMessageId()).isEqualTo(waiting.userMessageId());
+            assertThat(query.get().turnTraceContext().traceId()).isEqualTo(context.traceId());
+            List<ChatEvent> result = respond(waiting, true, Map.of("label", Map.of("期间", "本月")));
+            var resumed = submitted.get().turnTraceContext();
+            assertThat(resumed.traceId()).isEqualTo(context.traceId());
+            assertThat(resumed.runId()).isNotEqualTo(context.runId());
+            assertThat(resumed.runOrdinal()).isEqualTo(2);
+            assertThat(resumed.rootUserMessageId()).isEqualTo(context.rootUserMessageId());
+            assertThat(result.getLast().type()).isEqualTo("run.completed");
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> f.traces.stream().anyMatch(t -> "COMPLETED".equals(t.status())));
+            assertThat(f.traces.stream().map(t -> t.traceId()).distinct()).containsExactly(context.traceId());
+            assertThat(events.events.toString()).doesNotContain("_turnObservation", context.traceId());
+            assertThat(messages.messages.toString()).doesNotContain("_turnObservation", context.traceId());
+        }
     }
 
     @Test

@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -37,6 +38,12 @@ import java.util.Map;
  */
 @Service
 public class AgentRuntimeExecutor {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
 
     private final AgentRuntimeRegistry runtimeRegistry;
@@ -92,7 +99,7 @@ public class AgentRuntimeExecutor {
         AgentRuntime runtime = context.binding() == null
                 ? runtimeRegistry.defaultRuntime()
                 : runtimeRegistry.runtime(context.binding().provider());
-        return protect(runtime.provider(), runtime.query(request));
+        return protect(runtime.provider(), runtime.query(request.withTurnTraceContext(turns.context(context.runId()))));
     }
 
     public Flux<ChatEvent> continueWithUserResponse(RuntimeInteractionResponseContext context) {
@@ -114,7 +121,8 @@ public class AgentRuntimeExecutor {
                 context.runtimeMetadata(),
                 context.dispatchState()
         );
-        return protect(context.runtimeProvider(), runtimeRegistry.continueWithUserResponse(request));
+        return protect(context.runtimeProvider(), runtimeRegistry.continueWithUserResponse(
+                request.withTurnTraceContext(turns.context(context.runId()))));
     }
 
     public boolean supportsWaitingUserResponse(String runtimeProvider) {
@@ -151,7 +159,7 @@ public class AgentRuntimeExecutor {
                 forwardHeaders,
                 traceContext
         );
-        return cancel(request);
+        return cancel(request.withTurnTraceContext(turns.restore(run, true)));
     }
 
     /**
@@ -164,7 +172,8 @@ public class AgentRuntimeExecutor {
         if (request == null || request.provider() == null || request.provider().isBlank()) {
             return Mono.empty();
         }
-        return runtimeRegistry.runtime(request.provider()).cancel(request);
+        return runtimeRegistry.runtime(request.provider()).cancel(request.turnTraceContext() == null
+                ? request.withTurnTraceContext(turns.context(request.runId())) : request);
     }
 
     private Flux<ChatEvent> protect(String provider, Flux<ChatEvent> source) {

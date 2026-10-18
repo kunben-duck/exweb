@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.application.integration.agent;
 
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
@@ -47,8 +48,34 @@ public record AgentRuntimeInteractionResponseRequest(
         @JsonIgnore RuntimeForwardHeaders forwardHeaders,
         @JsonIgnore TraceContext traceContext,
         @JsonIgnore Map<String, Object> runtimeMetadata,
-        @JsonIgnore RuntimeInteractionDispatchState dispatchState
+        @JsonIgnore RuntimeInteractionDispatchState dispatchState,
+        @JsonIgnore TurnTraceContext turnTraceContext
 ) {
+    /** 保留旧内部调用构造方式；新观测上下文不序列化为业务报文。 */
+    public AgentRuntimeInteractionResponseRequest(
+            String tenantId,
+            String userId,
+            String userAccount,
+            Long globalUserId,
+            String sessionId,
+            String runId,
+            String runtimeSessionId,
+            String provider,
+            String interactionId,
+            String interactionType,
+            String approvalId,
+            Map<String, Object> responsePayload,
+            RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
+            Map<String, Object> runtimeMetadata,
+            RuntimeInteractionDispatchState dispatchState) {
+        this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId, provider, interactionId, interactionType, approvalId, responsePayload, forwardHeaders, traceContext, runtimeMetadata, dispatchState, null);
+    }
+
+    public AgentRuntimeInteractionResponseRequest withTurnTraceContext(TurnTraceContext context) {
+        return new AgentRuntimeInteractionResponseRequest(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId, provider, interactionId, interactionType, approvalId, responsePayload, forwardHeaders, traceContext, runtimeMetadata, dispatchState, context);
+    }
+
     public AgentRuntimeInteractionResponseRequest {
         responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;

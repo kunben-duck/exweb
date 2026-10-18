@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+import com.huawei.it.ex.one.domain.observation.ObservationMetadata;
 
 import org.springframework.stereotype.Component;
 
@@ -33,7 +34,7 @@ public class DomainAgentChatRequestMapper {
     }
 
     public Map<String, Object> toWireRequest(DomainAgentRequest request) {
-        Map<String, Object> body = deepCopyMap(request.metadata());
+        Map<String, Object> body = deepCopyMap(ObservationMetadata.remove(request.metadata()));
         // Gate 已前置数量检查，这里保留出站最后防线，兼容不经过标准路由的调用入口。
         validateAttachmentCount(request.documents());
         validateDocListStructure(body);

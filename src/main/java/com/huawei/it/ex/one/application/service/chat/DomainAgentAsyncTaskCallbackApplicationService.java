@@ -6,6 +6,8 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.it.ex.one.application.service.observation.AgentObservationRecorder;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -27,9 +29,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import jakarta.annotation.PreDestroy;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -43,6 +47,18 @@ import java.util.Set;
 /** Validates and publishes trusted DomainAgent background-task completion callbacks. */
 @Service
 public class DomainAgentAsyncTaskCallbackApplicationService {
+
+    private AgentObservationRecorder observations = AgentObservationRecorder.DISABLED;
+
+    @Autowired(required = false)
+    void setAgentObservationSupport(AgentObservationRecorder value) { this.observations = value; }
+
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setTurnObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final int MAX_ERROR_CODE_POINTS = 1024;
     private static final Set<String> TERMINAL_FRAME_TYPES = Set.of(
             "message.completed", "run.completed", "run.failed", "run.cancelled", "agent.async_finished");
@@ -95,37 +111,60 @@ public class DomainAgentAsyncTaskCallbackApplicationService {
         ValidatedCallback validated = validate(command);
         ChatRun sourceRun = runRepository.findById(validated.runId())
                 .orElse(null);
-        if (sourceRun == null || sourceRun.status() != ChatRunStatus.RUNNING) {
-            return new CallbackResult(false);
+        try (var scope = turns.openScope(sourceRun, false)) {
+            return process(validated, sourceRun);
         }
-        if (!DomainAgentAsyncTaskMetadata.isAsyncRunning(sourceRun)) {
-            // 快速回调可能早于挂起事务提交，用可重试 409 区别于已终态/重复回调的 accepted=false。
-            throw new DomainAgentAsyncCallbackNotReadyException();
+    }
+
+    private CallbackResult process(ValidatedCallback validated, ChatRun sourceRun) {
+        var trace = turns.restore(sourceRun, false);
+        var observation = observations.begin(trace,
+                new AgentObservationRecorder.Target(
+                        "DOMAIN_AGENT", null, "ASYNC_CALLBACK", sourceRun == null ? null : sourceRun.agentCode(),
+                        sourceRun == null ? null : sourceRun.runtimeSessionId()));
+        try {
+            if (sourceRun == null || sourceRun.status() != ChatRunStatus.RUNNING) {
+                observation.outcome("CALLBACK_IGNORED");
+                return new CallbackResult(false);
+            }
+            if (!DomainAgentAsyncTaskMetadata.isAsyncRunning(sourceRun)) {
+                // 快速回调可能早于挂起事务提交，用可重试 409 区别于已终态/重复回调的 accepted=false。
+                throw new DomainAgentAsyncCallbackNotReadyException();
+            }
+            Instant expiresAt = DomainAgentAsyncTaskMetadata.expiresAt(sourceRun);
+            if (expiresAt != null && Instant.now().isAfter(expiresAt)) {
+                observation.outcome("CALLBACK_IGNORED");
+                return new CallbackResult(false);
+            }
+            // 标准化、控制帧拒绝及容量检查都在终态锁/CAS 前，非法结果不会消耗唯一完成机会。
+            List<ChatEvent> businessEvents = normalize(
+                    validated.runId(), sourceRun.sessionId(), validated.frames());
+            // 必须依据过滤后的业务事件判断，纯终态帧的 REPLACE 不能清空旧正文或 Parts。
+            businessEvents.forEach(observation::event);
+            boolean resultProvided = !businessEvents.isEmpty();
+            if (resultProvided && validated.resultMode() == null) {
+                throw new IllegalArgumentException("异步回调包含业务结果时resultMode仅支持APPEND或REPLACE");
+            }
+            DomainAgentAsyncTaskCallbackCommitService.CommitResult committed = commitService.commit(
+                    new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                            validated.runId(), validated.completed(), validated.resultMode(),
+                            resultProvided, businessEvents, validated.error()));
+            if (!committed.accepted()) {
+                observation.outcome("CALLBACK_IGNORED");
+                return new CallbackResult(false);
+            }
+            // accepted 表示数据库受理；提交后发布是 best-effort，no-store 业务事件不保证可恢复。
+            runService.synchronizeCommittedRunCache(committed.run());
+            completeBindingBestEffort(committed.run(), committed.assistantMessageId());
+            publishBestEffort(committed.events());
+            observation.outcome("CALLBACK_APPLIED");
+            return new CallbackResult(true);
+        } catch (RuntimeException ex) {
+            observation.error(ex);
+            throw ex;
+        } finally {
+            observation.finish(SignalType.ON_COMPLETE);
         }
-        Instant expiresAt = DomainAgentAsyncTaskMetadata.expiresAt(sourceRun);
-        if (expiresAt != null && Instant.now().isAfter(expiresAt)) {
-            return new CallbackResult(false);
-        }
-        // 标准化、控制帧拒绝及容量检查都在终态锁/CAS 前，非法结果不会消耗唯一完成机会。
-        List<ChatEvent> businessEvents = normalize(
-                validated.runId(), sourceRun.sessionId(), validated.frames());
-        // 必须依据过滤后的业务事件判断，纯终态帧的 REPLACE 不能清空旧正文或 Parts。
-        boolean resultProvided = !businessEvents.isEmpty();
-        if (resultProvided && validated.resultMode() == null) {
-            throw new IllegalArgumentException("异步回调包含业务结果时resultMode仅支持APPEND或REPLACE");
-        }
-        DomainAgentAsyncTaskCallbackCommitService.CommitResult committed = commitService.commit(
-                new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
-                        validated.runId(), validated.completed(), validated.resultMode(),
-                        resultProvided, businessEvents, validated.error()));
-        if (!committed.accepted()) {
-            return new CallbackResult(false);
-        }
-        // accepted 表示数据库受理；提交后发布是 best-effort，no-store 业务事件不保证可恢复。
-        runService.synchronizeCommittedRunCache(committed.run());
-        completeBindingBestEffort(committed.run(), committed.assistantMessageId());
-        publishBestEffort(committed.events());
-        return new CallbackResult(true);
     }
 
     private ValidatedCallback validate(DomainAgentAsyncTaskCallbackCommand command) {

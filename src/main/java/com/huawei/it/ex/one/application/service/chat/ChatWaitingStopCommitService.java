@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatInteraction
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.memory.RouteMemoryRepository;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
@@ -19,6 +20,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -36,6 +38,12 @@ import java.util.Optional;
  */
 @Service
 public class ChatWaitingStopCommitService {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setTurnObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final String USER_STOP = "USER_STOP";
 
     private final SessionApplicationService sessionService;
@@ -105,6 +113,7 @@ public class ChatWaitingStopCommitService {
         routeMemoryRepository.foldActiveClarifications(
                 interaction.tenantId(), interaction.userId(), interaction.sessionId(), cancelledAt);
         WaitingRuntimeTarget runtimeTarget = runtimeTarget(effectiveRun, binding, sourceRun, interaction);
+        if (effectiveRun == null) { turns.waitingStopped(sourceRun); }
         return new WaitingStopCommitResult(
                 sourceRun, interaction, effectiveRun, true, cancelledAt, binding, runtimeTarget);
     }

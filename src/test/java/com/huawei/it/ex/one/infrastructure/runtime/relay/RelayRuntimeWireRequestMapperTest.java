@@ -13,6 +13,15 @@ import java.util.Map;
 
 class RelayRuntimeWireRequestMapperTest {
     @Test
+    void privateObservationNamespaceNeverEntersRelayBusinessBody() {
+        var result = RelayRuntimeWireRequestMapper.sanitizedMetadata(Map.of(
+                "_turnObservation", Map.of("traceId", "private", "startedAt", "private"),
+                "safe", "kept",
+                "nested", Map.of("_turnObservation", Map.of("userId", "private"), "visible", true)));
+        assertThat(result).isEqualTo(Map.of("safe", "kept", "nested", Map.of("visible", true)));
+    }
+
+    @Test
     void sensitiveMetadataFilteringDoesNotDependOnDefaultLocale() {
         Locale previousLocale = Locale.getDefault();
         try {

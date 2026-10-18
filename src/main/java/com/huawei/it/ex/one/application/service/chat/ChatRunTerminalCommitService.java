@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppend
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingCompletionPolicy;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingExpirationPolicy;
@@ -57,6 +58,12 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Service
 public class ChatRunTerminalCommitService {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunTerminalCommitService.class);
     private static final String WAITING_ASSISTANT_METADATA = "{\"finishReason\":\"WAITING_USER\"}";
     private static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
@@ -323,6 +330,9 @@ public class ChatRunTerminalCommitService {
                     new UserNotification("session.async.finished", Map.of(
                             "sessionId", committedRun.sessionId(), "runId", committedRun.id(),
                             "status", terminalStatus.name())));
+        }
+        try (var scope = turns.openScope(command.run(), terminalStatus == ChatRunStatus.CANCELLED)) {
+            turns.committed(committedRun, stored.payload().get("code") instanceof String code ? code : null);
         }
         return new ExternalTerminalCommitResult(stored, committedRun, true);
     }
@@ -769,7 +779,9 @@ public class ChatRunTerminalCommitService {
                 && !String.valueOf(runtimeSessionId).equals(next.runtimeSessionId())) {
             next = next.withRuntimeSessionId(String.valueOf(runtimeSessionId));
         }
-        return runRepository.save(next);
+        ChatRun saved = runRepository.save(turns.decorate(next));
+        turns.committed(saved, event.payload().get("code") instanceof String code ? code : null);
+        return saved;
     }
 
     private void markExecutionTerminal(ChatEvent event) {

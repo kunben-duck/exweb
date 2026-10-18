@@ -31,6 +31,8 @@ import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.reactivestreams.Publisher;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
@@ -53,6 +55,123 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 class RelayWebSocketRuntimeAdapterTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void observedExpertHandshakePreservesBusinessTraceAndRecordsRealSession() throws Exception {
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.start("run1");
+            FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                    "{\"type\":\"session-ready\",\"session_id\":\"real-relay-session\"}",
+                    "{\"type\":\"agent\",\"content\":\"answer\",\"is_streaming\":true}",
+                    "{\"type\":\"session-state\",\"state\":\"completed\"}"));
+            var adapter = adapter(client);
+            adapter.setObservationSupport(f.recorder);
+            var request = expertRequest(null, RuntimeSessionMode.NEW, MemoryContext.empty())
+                    .withTurnTraceContext(f.turns.context("run1"));
+            adapter.query(request).collectList().block(Duration.ofSeconds(2));
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> f.calls.stream().anyMatch(c -> "FINISHED".equals(c.status())));
+            assertThat(client.headers().getFirst("X-Trace-Id")).isEqualTo(f.turns.context("run1").traceId());
+            assertThat(client.headers().getFirst("X-Observation-Id")).startsWith("obs_");
+            assertThat(client.sent()).allSatisfy(frame -> assertThat(frame)
+                    .doesNotContain("turn_", "obs_", "_turnObservation", "turnTraceContext"));
+            assertThat(f.calls.getLast().agentMode()).isEqualTo("DOMAIN_EXPERT");
+            assertThat(f.calls.getLast().skillId()).isEqualTo("system-awareness");
+            assertThat(f.calls.getLast().runtimeSessionId()).isEqualTo("real-relay-session");
+            assertThat(f.calls.getLast().outcome()).isEqualTo("COMPLETED");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"questionnaire", "QUESTIONNAIRE", "Questionnaire"})
+    void observedQuestionnaireCaseVariantsPreserveTurnBoundaryAndPayload(String operationType) {
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.start("run1");
+            FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                    "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                    "{\"type\":\"agent\",\"content\":\"before questionnaire\",\"is_streaming\":true}",
+                    "{\"type\":\"approval-request\",\"approval_id\":\"approval-1\","
+                            + "\"operation_type\":\"" + operationType + "\","
+                            + "\"message\":\"Choose a period\","
+                            + "\"questions\":[{\"question\":\"Which period?\",\"options\":[{\"label\":\"This month\"}]}],"
+                            + "\"session_id\":\"relay-session-1\"}",
+                    "{\"type\":\"agent\",\"content\":\"must not be consumed\",\"is_streaming\":true}"));
+            var adapter = adapter(client);
+            adapter.setObservationSupport(f.recorder);
+
+            StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())
+                            .withTurnTraceContext(f.turns.context("run1"))))
+                    .assertNext(this::assertSessionReadyMetadata)
+                    .assertNext(event -> {
+                        assertThat(event.type()).isEqualTo("message.delta");
+                        assertThat(event.payload()).containsEntry("delta", "before questionnaire");
+                    })
+                    .assertNext(event -> {
+                        assertThat(event.type()).isEqualTo("runtime.card");
+                        assertThat(event.payload())
+                                .containsEntry("source", "relay")
+                                .containsEntry("sourceType", "approval-request")
+                                .containsEntry("operation_type", operationType)
+                                .containsEntry("approval_id", "approval-1")
+                                .containsEntry("message", "Choose a period")
+                                .containsEntry("questions", List.of(Map.of("question", "Which period?",
+                                        "options", List.of(Map.of("label", "This month")))));
+                    })
+                    .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                    .verifyComplete();
+
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> f.calls.stream().anyMatch(c -> "FINISHED".equals(c.status())));
+            assertThat(f.calls.stream().filter(c -> "FINISHED".equals(c.status())))
+                    .singleElement().satisfies(call -> {
+                        assertThat(call.operation()).isEqualTo("QUERY");
+                        assertThat(call.runtimeSessionId()).isEqualTo("relay-session-1");
+                        assertThat(call.outcome()).isEqualTo("WAITING_USER");
+                    });
+            f.turns.finishStart("run1");
+        }
+    }
+
+    @Test
+    void observedActiveStopDoesNotCreateAnotherWebsocket() {
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.start("run1");
+            ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+            var adapter = adapter(client, Duration.ofSeconds(2));
+            adapter.setObservationSupport(f.recorder);
+            StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1")
+                            .withTurnTraceContext(f.turns.context("run1"))))
+                    .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                    .then(() -> adapter.cancel(cancelRequest("run1")
+                            .withTurnTraceContext(f.turns.context("run1"))).block())
+                    .thenCancel().verify();
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> f.calls.stream().anyMatch(c -> "STOP_ACCEPTED".equals(c.outcome())));
+            assertThat(client.executeCount()).isEqualTo(1);
+            assertThat(client.sent()).contains("{\"type\":\"stop_all_agents\"}");
+            assertThat(f.calls.stream().filter(c -> "FINISHED".equals(c.status())).map(c -> c.operation()))
+                    .containsExactlyInAnyOrder("QUERY", "STOP");
+        }
+    }
+
+    @Test
+    void observedTemporaryStopAddsHandshakeHeadersOnly() {
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.start("run1");
+            FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                    "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                    "{\"type\":\"session-state\",\"state\":\"paused\"}"));
+            var adapter = adapter(client);
+            adapter.setObservationSupport(f.recorder);
+            adapter.cancel(cancelRequest("run1", "relay-session-1", new TraceContext("old-stop-trace"))
+                    .withTurnTraceContext(f.turns.context("run1"))).block(Duration.ofSeconds(2));
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> f.calls.stream().anyMatch(c -> "STOP_ACCEPTED".equals(c.outcome())));
+            assertThat(client.headers().getFirst("X-Trace-Id")).isEqualTo(f.turns.context("run1").traceId());
+            assertThat(client.sent().getFirst()).contains("old-stop-trace").doesNotContain("turn_", "obs_");
+            assertThat(client.sent().getLast()).isEqualTo("{\"type\":\"stop_all_agents\"}");
+        }
+    }
 
     @Test
     void skillBroadcastCardsDoNotTerminateTheTurnAsQuestionnaireRequests() {

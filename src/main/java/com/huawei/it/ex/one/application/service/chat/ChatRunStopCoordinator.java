@@ -9,6 +9,7 @@ import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -34,6 +35,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * Run 取消协调器。
@@ -45,6 +47,12 @@ import java.util.Optional;
  */
 @Service
 public class ChatRunStopCoordinator {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunStopCoordinator.class);
     private static final String INTERACTION_ID_METADATA = "interactionId";
     private static final String INTERACTION_ASSISTANT_MESSAGE_ID_METADATA = "interactionAssistantMessageId";
@@ -152,13 +160,29 @@ public class ChatRunStopCoordinator {
                                                     StopRunContext stopContext) {
         ChatRun requestedRun = chatRunService.requireOwnedRun(user, runId);
         if (requestedRun.status() == ChatRunStatus.WAITING_USER && waitingStopCommitService != null) {
-            return stopWaitingRun(user, requestedRun, reason, stopContext);
+            return withObservationScope(requestedRun,
+                    scope -> stopWaitingRun(user, requestedRun, reason, stopContext));
         }
         return stopActiveRun(user, requestedRun, reason, stopContext);
     }
 
     private Mono<ChatRunStopResult> stopActiveRun(UserContext user, ChatRun requestedRun, String reason,
                                                   StopRunContext stopContext) {
+        return withObservationScope(requestedRun,
+                scope -> stopActiveRun(user, requestedRun, reason, stopContext, scope));
+    }
+
+    private Mono<ChatRunStopResult> withObservationScope(ChatRun run,
+            Function<TurnTraceCoordinator.Scope, Mono<ChatRunStopResult>> operation) {
+        return Mono.using(() -> turns.openScope(run,
+                run.stopRetryable() || run.status() == ChatRunStatus.WAITING_USER), scope -> {
+            // 取消可与同步准入/等待态事务并发，方法实际返回前保留独立持有关系。
+            try (var processing = scope.retain()) { return operation.apply(scope); }
+        }, TurnTraceCoordinator.Scope::close);
+    }
+
+    private Mono<ChatRunStopResult> stopActiveRun(UserContext user, ChatRun requestedRun, String reason,
+                                                  StopRunContext stopContext, TurnTraceCoordinator.Scope scope) {
         String effectiveReason = normalizeReason(reason);
         RuntimeForwardHeaders headerSnapshot = stopContext.forwardHeaders();
         ChatRunStopDecision decision = chatRunService.requestStop(user, requestedRun, effectiveReason);
@@ -174,8 +198,11 @@ public class ChatRunStopCoordinator {
         return cancelDownstreamBeforeFinalization(
                         run, user, stopContext.traceContext(), headerSnapshot)
                 .publishOn(Schedulers.boundedElastic())
-                .then(Mono.fromCallable(() -> finalizeActiveStop(
-                        user, run, effectiveReason, stopContext)));
+                .then(Mono.fromCallable(() -> {
+                    try (var processing = scope.retain()) {
+                        return finalizeActiveStop(user, run, effectiveReason, stopContext);
+                    }
+                }));
     }
 
     private ChatRunStopResult finalizeActiveStop(UserContext user, ChatRun run, String effectiveReason,
@@ -279,7 +306,7 @@ public class ChatRunStopCoordinator {
                 reason,
                 cancelMetadata.isEmpty() ? Map.of() : Map.copyOf(cancelMetadata),
                 stopContext.forwardHeaders(),
-                stopContext.traceContext());
+                stopContext.traceContext()).withTurnTraceContext(turns.context(target == null ? null : target.runId()));
         try {
             agentRuntimeExecutor.cancel(request)
                     .onErrorResume(ex -> {

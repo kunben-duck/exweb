@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -26,12 +27,20 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Owns background subscription and first persisted-event handoff for newly started runs. */
 final class ChatRunStartCoordinator {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunStartCoordinator.class);
 
     private final IdGenerator idGenerator;
@@ -61,16 +70,28 @@ final class ChatRunStartCoordinator {
         return Mono.defer(() -> {
             String runId = idGenerator.newId("run",
                     IdGenerateContext.of(user.tenantId(), user.ownerUserId(), command.sessionId()));
+            turns.begin(user, runId, command.runMode().name(), command.sessionId());
             RunStartAttempt attempt = new RunStartAttempt(user, runId, null);
-            BackgroundStartState state = newState(user, attempt);
-            Flux<ChatEvent> runFlux = runFactory.create(attempt)
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .doOnNext(event -> onEvent(event, state, "chat run"))
-                    .doOnComplete(() -> onComplete(
-                            state, "chat run finished before emitting any persisted event"))
-                    .doFinally(ignored -> finish(state));
-            subscribeStandard(runFlux, state, traceContext);
-            return firstEventResult(state, "chat run");
+            BackgroundStartState state;
+            try {
+                state = newState(user, attempt);
+            } catch (RuntimeException ex) {
+                turns.finishStart(runId);
+                throw ex;
+            }
+            try {
+                Flux<ChatEvent> runFlux = runFactory.create(attempt)
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .doOnNext(event -> onEvent(event, state, "chat run"))
+                        .doOnComplete(() -> onComplete(
+                                state, "chat run finished before emitting any persisted event"))
+                        .doFinally(ignored -> finish(state));
+                subscribeStandard(runFlux, state, traceContext);
+                return firstEventResult(state, "chat run");
+            } catch (RuntimeException ex) {
+                finish(state);
+                throw ex;
+            }
         });
     }
 
@@ -81,16 +102,28 @@ final class ChatRunStartCoordinator {
         return Mono.defer(() -> {
             String runId = idGenerator.newId("run",
                     IdGenerateContext.of(user.tenantId(), user.ownerUserId(), interactionId));
+            turns.prepareContinuation(runId);
             RunStartAttempt attempt = new RunStartAttempt(user, runId, interactionId);
-            BackgroundStartState state = newState(user, attempt);
-            Flux<ChatEvent> runFlux = runFactory.create(runId, attempt)
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .doOnNext(event -> onEvent(event, state, "interaction continuation"))
-                    .doOnComplete(() -> onComplete(
-                            state, "interaction continuation finished before emitting any event"))
-                    .doFinally(ignored -> finish(state));
-            subscribeInteraction(runFlux, state, traceContext, interactionId);
-            return firstEventResult(state, "interaction continuation");
+            BackgroundStartState state;
+            try {
+                state = newState(user, attempt);
+            } catch (RuntimeException ex) {
+                turns.finishStart(runId);
+                throw ex;
+            }
+            try {
+                Flux<ChatEvent> runFlux = runFactory.create(runId, attempt)
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .doOnNext(event -> onEvent(event, state, "interaction continuation"))
+                        .doOnComplete(() -> onComplete(
+                                state, "interaction continuation finished before emitting any event"))
+                        .doFinally(ignored -> finish(state));
+                subscribeInteraction(runFlux, state, traceContext, interactionId);
+                return firstEventResult(state, "interaction continuation");
+            } catch (RuntimeException ex) {
+                finish(state);
+                throw ex;
+            }
         });
     }
 
@@ -132,6 +165,7 @@ final class ChatRunStartCoordinator {
     private void finish(BackgroundStartState state) {
         state.terminal().set(true);
         state.permit().close();
+        turns.finishStart(state.attempt().runId());
     }
 
     private void subscribeStandard(Flux<ChatEvent> runFlux,

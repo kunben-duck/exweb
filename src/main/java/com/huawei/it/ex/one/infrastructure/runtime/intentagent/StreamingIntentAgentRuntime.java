@@ -11,9 +11,12 @@ import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.it.ex.one.application.integration.intent.IntentDecisionStreamClient;
 import com.huawei.it.ex.one.application.integration.intent.IntentDecisionStreamFrame;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
 import reactor.core.publisher.Flux;
+
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -26,6 +29,12 @@ import java.util.concurrent.TimeUnit;
  * kept on the existing intent routing path.</p>
  */
 public class StreamingIntentAgentRuntime implements IntentAgentRuntime {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private final IntentDecisionStreamClient streamClient;
 
     public StreamingIntentAgentRuntime(IntentDecisionStreamClient streamClient) {
@@ -36,9 +45,11 @@ public class StreamingIntentAgentRuntime implements IntentAgentRuntime {
     public Flux<IntentAgentRouteFrame> route(IntentAgentRouteRequest request) {
         long started = System.nanoTime();
         Flux<IntentAgentRouteFrame> start = startFrame(request);
-        Flux<IntentAgentRouteFrame> stream = streamClient
-                .recognize(request.command(), request.memory(), request.user(), request.userMessageId())
-                .concatMap(frame -> toRouteFrames(request, frame, started));
+        var frames = turns.enabled()
+                ? streamClient.recognize(request.command(), request.memory(), request.user(),
+                        request.userMessageId(), turns.context(request.runId()))
+                : streamClient.recognize(request.command(), request.memory(), request.user(), request.userMessageId());
+        Flux<IntentAgentRouteFrame> stream = frames.concatMap(frame -> toRouteFrames(request, frame, started));
         return start.concatWith(stream);
     }
 

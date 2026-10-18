@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.integration.agent;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
@@ -41,8 +42,30 @@ public record DomainAgentRequest(
         List<ConversationMemoryMessage> messages,
         boolean shortTermMemoryEnabled,
         Map<String, Object> metadata,
-        @JsonIgnore RuntimeForwardHeaders forwardHeaders
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders,
+        @JsonIgnore TurnTraceContext turnTraceContext
 ) {
+    /** 保留旧内部调用构造方式；新观测上下文不序列化为业务报文。 */
+    public DomainAgentRequest(
+            UserContext user,
+            String sessionId,
+            String runId,
+            String domainAgentId,
+            String runtimeSessionId,
+            String query,
+            String messageId,
+            List<UploadedDocument> documents,
+            List<ConversationMemoryMessage> messages,
+            boolean shortTermMemoryEnabled,
+            Map<String, Object> metadata,
+            RuntimeForwardHeaders forwardHeaders) {
+        this(user, sessionId, runId, domainAgentId, runtimeSessionId, query, messageId, documents, messages, shortTermMemoryEnabled, metadata, forwardHeaders, null);
+    }
+
+    public DomainAgentRequest withTurnTraceContext(TurnTraceContext context) {
+        return new DomainAgentRequest(user, sessionId, runId, domainAgentId, runtimeSessionId, query, messageId, documents, messages, shortTermMemoryEnabled, metadata, forwardHeaders, context);
+    }
+
     public DomainAgentRequest {
         documents = documents == null ? List.of() : List.copyOf(documents);
         messages = messages == null ? List.of() : List.copyOf(messages);

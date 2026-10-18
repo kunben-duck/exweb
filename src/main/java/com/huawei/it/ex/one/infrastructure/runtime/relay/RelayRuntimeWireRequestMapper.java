@@ -4,6 +4,8 @@
 
 package com.huawei.it.ex.one.infrastructure.runtime.relay;
 
+import com.huawei.it.ex.one.domain.observation.ObservationMetadata;
+
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -72,6 +74,7 @@ final class RelayRuntimeWireRequestMapper {
     }
 
     private static boolean allowedMetadataKey(String key) {
-        return key != null && !"traceid".equals(key.trim().toLowerCase(Locale.ROOT)) && !isSensitiveKey(key);
+        return key != null && !ObservationMetadata.KEY.equals(key)
+                && !"traceid".equals(key.trim().toLowerCase(Locale.ROOT)) && !isSensitiveKey(key);
     }
 }

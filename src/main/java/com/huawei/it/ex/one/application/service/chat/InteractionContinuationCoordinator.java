@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -22,6 +23,8 @@ import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,6 +33,12 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Prepares and claims an Interaction continuation before selecting its execution workflow. */
 final class InteractionContinuationCoordinator {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private final ChatRunStartCoordinator runStartCoordinator;
     private final ChatInteractionApplicationService interactionService;
     private final SessionApplicationService sessionService;
@@ -129,6 +138,11 @@ final class InteractionContinuationCoordinator {
                     runId,
                     interaction -> prepareResponse(context, interaction));
             startAttempt.recordInteraction(claim.request());
+            if (startAttempt.aborted()) {
+                interactionService.markWaiting(claim.request());
+                return Flux.empty();
+            }
+            turns.inherit(claim.request(), runId);
             if (startAttempt.aborted()) {
                 interactionService.markWaiting(claim.request());
                 return Flux.empty();

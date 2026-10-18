@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
 import com.huawei.it.ex.one.common.trace.TraceContext;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
@@ -36,8 +37,29 @@ public record AgentRuntimeCancelRequest(
         String reason,
         Map<String, Object> metadata,
         @JsonIgnore RuntimeForwardHeaders forwardHeaders,
-        @JsonIgnore TraceContext traceContext
+        @JsonIgnore TraceContext traceContext,
+        @JsonIgnore TurnTraceContext turnTraceContext
 ) {
+    /** 保留旧内部调用构造方式；新观测上下文不序列化为业务报文。 */
+    public AgentRuntimeCancelRequest(
+            String tenantId,
+            String userId,
+            String sessionId,
+            String runId,
+            String runtimeSessionId,
+            String provider,
+            String runtimeTargetId,
+            String reason,
+            Map<String, Object> metadata,
+            RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext) {
+        this(tenantId, userId, sessionId, runId, runtimeSessionId, provider, runtimeTargetId, reason, metadata, forwardHeaders, traceContext, null);
+    }
+
+    public AgentRuntimeCancelRequest withTurnTraceContext(TurnTraceContext context) {
+        return new AgentRuntimeCancelRequest(tenantId, userId, sessionId, runId, runtimeSessionId, provider, runtimeTargetId, reason, metadata, forwardHeaders, traceContext, context);
+    }
+
     public AgentRuntimeCancelRequest(String tenantId, String userId, String sessionId, String runId,
                                      String runtimeSessionId, String provider, String reason,
                                      Map<String, Object> metadata,

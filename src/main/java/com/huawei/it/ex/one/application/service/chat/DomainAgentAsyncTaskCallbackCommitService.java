@@ -9,6 +9,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunReposito
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
@@ -38,6 +39,12 @@ import java.util.Map;
 /** Performs one async completion callback terminal CAS and related database writes. */
 @Service
 public class DomainAgentAsyncTaskCallbackCommitService {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private final ChatRunRepository runRepository;
     private final ChatRunExecutionRepository executionRepository;
     private final SessionRepository sessionRepository;
@@ -112,7 +119,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         updateAssistant(callback, new AssistantUpdateContext(session, initial, existing, assembly, duration));
         ChatRun metadataCleared = claimedRun.withMetadataSnapshot(
                 DomainAgentAsyncTaskMetadata.clearRunMetadata(claimedRun.metadata()));
-        runRepository.save(metadataCleared);
+        runRepository.save(turns.decorate(metadataCleared));
         ChatRun committedRun = runRepository.finalizeExternalTerminal(
                 new ChatRunRepository.ExternalTerminalFinalize(
                         initial.id(), initial.tenantId(), initial.userId(), initial.sessionId(),
@@ -126,6 +133,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         notificationPublisher.publish(new UserNotificationRecipient(initial.tenantId(), initial.userId()),
                 new UserNotification("session.async.finished", Map.of(
                         "sessionId", initial.sessionId(), "runId", initial.id(), "status", terminalStatus.name())));
+        turns.committed(committedRun, terminal.payload().get("code") instanceof String code ? code : null);
         return new CommitResult(true, committedRun, existing.id(), List.copyOf(sequenced));
     }
 

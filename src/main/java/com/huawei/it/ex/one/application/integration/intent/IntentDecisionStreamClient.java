@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.integration.intent;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import reactor.core.publisher.Flux;
 
@@ -27,6 +28,11 @@ public interface IntentDecisionStreamClient {
      * @return ordered process and result frames.
      */
     Flux<IntentDecisionStreamFrame> recognize(ChatCommand command, MemoryContext memory, UserContext user);
+
+    default Flux<IntentDecisionStreamFrame> recognize(ChatCommand command, MemoryContext memory,
+                                                     UserContext user, String userMessageId, TurnTraceContext trace) {
+        return recognize(command, memory, user, userMessageId);
+    }
 
     default Flux<IntentDecisionStreamFrame> recognize(ChatCommand command,
                                                       MemoryContext memory,

@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.it.ex.one.application.integration.intent.IntentService;
 import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
+import com.huawei.it.ex.one.application.service.observation.AgentObservationRecorder;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -19,11 +20,13 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import reactor.core.Exceptions;
+import reactor.core.publisher.SignalType;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -36,6 +39,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 import java.util.List;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 财经 Eureka 意图服务 HTTP 适配器。
@@ -46,6 +50,12 @@ import java.util.concurrent.TimeoutException;
 @Component
 @EnableConfigurationProperties(IntentServiceHttpProperties.class)
 public class FinEurekaIntentService implements IntentService {
+
+    private AgentObservationRecorder observations = AgentObservationRecorder.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(AgentObservationRecorder value) { this.observations = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(FinEurekaIntentService.class);
 
     private final WebClient webClient;
@@ -100,6 +110,13 @@ public class FinEurekaIntentService implements IntentService {
                                                         MemoryContext memory,
                                                         UserContext user,
                                                         String userMessageId) {
+        return recognizeForRouting(command, memory, user, userMessageId, null);
+    }
+
+    @Override
+    public IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory,
+                                                        UserContext user, String userMessageId, TurnTraceContext trace) {
+        var observationRef = new AtomicReference<AgentObservationRecorder.Scope>();
         int maxAttempts = 1 + properties.normalizedMaxRetries();
         // 同一次识别的重试共享偏好快照和 userMessageId，不在每次 HTTP 尝试中重复读取偏好。
         List<IntentUserPreferenceCorrection> preferenceCorrections = preferenceLoader == null
@@ -108,7 +125,8 @@ public class FinEurekaIntentService implements IntentService {
                 : preferenceLoader.loadBlocking(command, user);
         IntentRecognitionResult lastResult = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            lastResult = recognizeOnce(command, memory, user, userMessageId, preferenceCorrections);
+            lastResult = recognizeOnce(new BlockingAttempt(command, memory, user, userMessageId,
+                    preferenceCorrections, trace, observationRef));
             if (lastResult.waitingClarification()) {
                 return lastResult;
             }
@@ -139,27 +157,40 @@ public class FinEurekaIntentService implements IntentService {
         }
     }
 
-    private IntentRecognitionResult recognizeOnce(ChatCommand command,
-                                                   MemoryContext memory,
-                                                   UserContext user,
-                                                   String userMessageId,
-                                                   List<IntentUserPreferenceCorrection> preferenceCorrections) {
+    private record BlockingAttempt(ChatCommand command, MemoryContext memory, UserContext user,
+                                   String userMessageId, List<IntentUserPreferenceCorrection> preferences,
+                                   TurnTraceContext trace,
+                                   AtomicReference<AgentObservationRecorder.Scope> observationRef) { }
+
+    private IntentRecognitionResult recognizeOnce(BlockingAttempt attempt) {
+        ChatCommand command = attempt.command();
+        MemoryContext memory = attempt.memory();
+        UserContext user = attempt.user();
+        String userMessageId = attempt.userMessageId();
+        List<IntentUserPreferenceCorrection> preferenceCorrections = attempt.preferences();
         if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
             return IntentRecognitionResult.degraded(wireMapper.degraded("intent service base-url is not configured"));
         }
+        var observation = AgentObservationRecorder.DISABLED
+                .begin(null, null);
         try {
-            IntentRecognitionResult result = webClient.post()
+            var request = webClient.post()
                     .uri(properties.getRecognizePath())
                     .headers(headers -> applyAuthHeaders(headers, user))
                     .bodyValue(wireMapper.toWireRequest(
-                            command, memory, user, userMessageId, preferenceCorrections))
-                    .retrieve()
+                            command, memory, user, userMessageId, preferenceCorrections));
+            observation = observations.begin(attempt.trace(),
+                    new AgentObservationRecorder.Target(
+                            "INTENT", null, "RECOGNIZE", null, null), attempt.observationRef().get());
+            attempt.observationRef().set(observation);
+            IntentRecognitionResult result = request.retrieve()
                     .bodyToMono(JsonNode.class)
                     .map(wireMapper::toRecognitionResult)
                     .timeout(properties.normalizedTimeout())
                     .blockOptional()
                     .orElse(null);
             if (result == null) {
+                observation.outcome("ERROR");
                 log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_EMPTY_RESPONSE,
                                 "IntentDecision returned an empty response")
                         .sessionId(command == null ? null : command.sessionId())
@@ -167,6 +198,9 @@ public class FinEurekaIntentService implements IntentService {
                         .build());
                 return IntentRecognitionResult.degraded(wireMapper.degraded("empty intent response"));
             }
+            observation.intentResult();
+            observation.outcome(result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED
+                    ? "ERROR" : result.waitingClarification() ? "WAITING_USER" : "COMPLETED");
             if (result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED) {
                 log.warn(SystemErrorLogEntry.builder(classifyIntentResult(result),
                                 "IntentDecision returned a non-executable result")
@@ -176,12 +210,15 @@ public class FinEurekaIntentService implements IntentService {
             }
             return result;
         } catch (RuntimeException ex) {
+            observation.error(ex);
             log.warn(SystemErrorLogEntry.builder(classifyIntentFailure(ex),
                             "IntentDecision request failed; returning a degraded result")
                     .sessionId(command == null ? null : command.sessionId())
                     .operation("intent.recognize")
                     .build(), ex);
             return IntentRecognitionResult.degraded(wireMapper.degraded("intent service failed: " + ex.getMessage()));
+        } finally {
+            observation.finish(SignalType.ON_COMPLETE);
         }
     }
 

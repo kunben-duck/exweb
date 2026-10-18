@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -18,6 +19,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -29,6 +32,14 @@ import java.util.function.Function;
  * 同一 run 内按原始顺序执行持久化或仅实时分发，并完成提交后的状态观察。
  */
 final class ChatEventPipeline {
+    private TurnTraceCoordinator turns =
+            TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) {
+        turns = value;
+    }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatEventPipeline.class);
     private static final Set<String> BATCHABLE_RUNTIME_EVENT_TYPES = Set.of(
             "message.delta",
@@ -120,6 +131,7 @@ final class ChatEventPipeline {
                         sink.complete();
                         return;
                     }
+                    turns.event(event);
                     sink.next(event);
                 });
     }

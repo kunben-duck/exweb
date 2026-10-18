@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 /**
  * 意图识别服务。
@@ -44,6 +45,11 @@ public interface IntentService {
      * @param user 当前用户身份上下文。
      * @return 意图路由阶段结果。
      */
+    default IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory,
+                                                        UserContext user, String userMessageId, TurnTraceContext trace) {
+        return recognizeForRouting(command, memory, user, userMessageId);
+    }
+
     default IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory, UserContext user) {
         IntentDecision decision = recognize(command, memory, user);
         return IntentRecognitionResult.finalDecision(decision);

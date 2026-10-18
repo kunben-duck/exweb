@@ -18,6 +18,7 @@ import com.huawei.it.ex.one.application.integration.share.ChatShareRepository;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -69,6 +70,12 @@ import java.util.stream.Collectors;
  */
 @Service
 public class SessionApplicationService implements ChatSessionFacade {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setTurnObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(SessionApplicationService.class);
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_ARCHIVED = "ARCHIVED";
@@ -537,7 +544,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         return switch (mode) {
             case NEXT -> createNextUserMessage(user, command, session, runId, attachments);
             case EDIT_USER -> createEditedUserMessage(user, command, session, runId, attachments);
-            case REGENERATE_ASSISTANT -> resolveRegeneratePlan(user, command, session);
+            case REGENERATE_ASSISTANT -> resolveRegeneratePlan(user, command, session, runId);
             case CONTINUE_INTERACTION ->
                     throw new IllegalArgumentException("CONTINUE_INTERACTION 不创建普通 user 消息");
         };
@@ -1155,14 +1162,16 @@ public class SessionApplicationService implements ChatSessionFacade {
                                                        String runId, List<AttachmentRef> attachments) {
         ChatMessage edited = requireMessageInSession(session, command.editedMessageId());
         ensureUnlockedUserMessage(edited, "被编辑消息");
+        turns.source(runId, edited.runId(), null, "EDIT_USER");
         ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.ownerUserId(), session,
                 command.message(), edited.parentMessageId(), ChatRunMode.EDIT_USER, runId, edited.id(), null,
                 command.metadata(), attachments));
         return new ChatRunMessagePlan(ChatRunMode.EDIT_USER, edited.parentMessageId(), message, null);
     }
 
-    private ChatRunMessagePlan resolveRegeneratePlan(UserContext user, ChatCommand command, ChatSession session) {
+    private ChatRunMessagePlan resolveRegeneratePlan(UserContext user, ChatCommand command, ChatSession session, String runId) {
         ChatMessage regenerated = requireMessageInSession(session, command.regeneratedMessageId());
+        turns.source(runId, regenerated.runId(), null, "REGENERATE_ASSISTANT");
         ensureUnlockedAssistantMessage(regenerated, "被重新生成消息");
         if (regenerated.parentMessageId() == null || regenerated.parentMessageId().isBlank()) {
             throw new IllegalArgumentException("assistant 消息缺少父 user 节点，不能重新生成");

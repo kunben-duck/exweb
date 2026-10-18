@@ -9,6 +9,7 @@ import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -61,8 +62,37 @@ public record AgentRuntimeRequest(
         @JsonIgnore Map<String, Object> bindingMetadata,
         @JsonIgnore RuntimeForwardHeaders forwardHeaders,
         @JsonIgnore TraceContext traceContext,
-        @JsonIgnore String userMessageId
+        @JsonIgnore String userMessageId,
+        @JsonIgnore TurnTraceContext turnTraceContext
 ) {
+    /** 保留旧内部调用构造方式；新观测上下文不序列化为业务报文。 */
+    public AgentRuntimeRequest(
+            String tenantId,
+            String userId,
+            String userAccount,
+            Long globalUserId,
+            String sessionId,
+            String runId,
+            String runtimeSessionId,
+            RuntimeSessionMode runtimeSessionMode,
+            String message,
+            List<AttachmentRef> attachments,
+            List<UploadedDocument> documents,
+            MemoryContext memoryContext,
+            IntentDecision intentDecision,
+            RouteTarget routeTarget,
+            Map<String, Object> metadata,
+            Map<String, Object> bindingMetadata,
+            RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
+            String userMessageId) {
+        this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId, runtimeSessionMode, message, attachments, documents, memoryContext, intentDecision, routeTarget, metadata, bindingMetadata, forwardHeaders, traceContext, userMessageId, null);
+    }
+
+    public AgentRuntimeRequest withTurnTraceContext(TurnTraceContext context) {
+        return new AgentRuntimeRequest(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId, runtimeSessionMode, message, attachments, documents, memoryContext, intentDecision, routeTarget, metadata, bindingMetadata, forwardHeaders, traceContext, userMessageId, context);
+    }
+
     public AgentRuntimeRequest {
         runtimeSessionMode = runtimeSessionMode == null ? RuntimeSessionMode.RESUME : runtimeSessionMode;
         attachments = attachments == null ? List.of() : List.copyOf(attachments);

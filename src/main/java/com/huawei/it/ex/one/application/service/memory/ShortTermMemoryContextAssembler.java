@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
+import com.huawei.it.ex.one.domain.observation.ObservationMetadata;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -95,6 +96,7 @@ public class ShortTermMemoryContextAssembler {
     }
 
     public static Map<String, Object> publicInteractionPayload(Map<String, Object> payload) {
+        payload = ObservationMetadata.remove(payload);
         if (payload == null || payload.isEmpty() || !payload.containsKey(PRIVATE_INTENT_MESSAGES_KEY)) {
             return payload == null ? Map.of() : payload;
         }

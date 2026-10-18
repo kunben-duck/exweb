@@ -87,6 +87,74 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
     }
 
     @Test
+    void trustedCallbackRecordsAppliedAndDuplicateAttemptsButLegacyCallbackAddsNoObservation() {
+        try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            ChatRun base = asyncRun();
+            observation.turns.begin(new com.huawei.it.ex.one.domain.auth.UserContext(
+                    base.tenantId(), base.userId(), base.userId()), base.id(), "NEXT", base.sessionId());
+            ChatRun running = observation.turns.decorate(base);
+            observation.turns.committed(running, null);
+            observation.turns.finishStart(base.id());
+            ChatRunRepository runs = mock(ChatRunRepository.class);
+            when(runs.findById(base.id())).thenReturn(Optional.of(running));
+            var commits = mock(DomainAgentAsyncTaskCallbackCommitService.class);
+            when(commits.commit(any())).thenReturn(new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                    true, running.completed(9), "msg-assistant", List.of()));
+            var service = service(enabledProperties(), commits, runs, mock(ChatRunApplicationService.class),
+                    mock(ChatStreamApplicationService.class), mock(RuntimeBindingApplicationService.class));
+            service.setTurnObservationSupport(observation.turns);
+            service.setAgentObservationSupport(observation.recorder);
+            try {
+                assertThat(service.callback(new DomainAgentAsyncTaskCallbackCommand(base.id(), "COMPLETED", null))
+                        .block().accepted()).isTrue();
+                when(runs.findById(base.id())).thenReturn(Optional.of(running.completed(9)));
+                assertThat(service.callback(new DomainAgentAsyncTaskCallbackCommand(base.id(), "COMPLETED", null))
+                        .block().accepted()).isFalse();
+                com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                        () -> observation.calls.stream().filter(c -> "FINISHED".equals(c.status())).count() == 2);
+                assertThat(observation.calls.stream().filter(c -> "FINISHED".equals(c.status())))
+                        .extracting(c -> c.outcome()).containsExactly("CALLBACK_APPLIED", "CALLBACK_IGNORED");
+                assertThat(observation.calls).allMatch(c -> "ASYNC_CALLBACK".equals(c.operation()));
+                assertThat(observation.turns.context(base.id())).isNull();
+                when(runs.findById(base.id())).thenReturn(Optional.of(base.completed(9)));
+                assertThat(service.callback(new DomainAgentAsyncTaskCallbackCommand(base.id(), "COMPLETED", null))
+                        .block().accepted()).isFalse();
+                assertThat(observation.calls).hasSize(4);
+            } finally { service.closeScheduler(); }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void callbackCommitFailureReleasesOnlyItsScopeAndNeverTheExecutingOwner(boolean executingOwner) {
+        try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            ChatRun base = asyncRun();
+            observation.turns.begin(new com.huawei.it.ex.one.domain.auth.UserContext(
+                    base.tenantId(), base.userId(), base.userId()), base.id(), "NEXT", base.sessionId());
+            ChatRun running = observation.turns.decorate(base);
+            observation.turns.committed(running, null);
+            if (!executingOwner) { observation.turns.finishStart(base.id()); }
+            ChatRunRepository runs = mock(ChatRunRepository.class);
+            when(runs.findById(base.id())).thenReturn(Optional.of(running));
+            var commits = mock(DomainAgentAsyncTaskCallbackCommitService.class);
+            when(commits.commit(any())).thenThrow(new IllegalStateException("callback commit failed"));
+            var service = service(enabledProperties(), commits, runs, mock(ChatRunApplicationService.class),
+                    mock(ChatStreamApplicationService.class), mock(RuntimeBindingApplicationService.class));
+            service.setTurnObservationSupport(observation.turns);
+            service.setAgentObservationSupport(observation.recorder);
+            try {
+                assertThatThrownBy(() -> service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                        base.id(), "COMPLETED", null)).block()).hasMessage("callback commit failed");
+                assertThat(observation.turns.context(base.id()) != null).isEqualTo(executingOwner);
+                observation.turns.finishStart(base.id());
+                assertThat(observation.turns.context(base.id())).isNull();
+                assertThat(observation.traces).noneMatch(t -> "COMPLETED".equals(t.status())
+                        || "FAILED".equals(t.status()));
+            } finally { service.closeScheduler(); }
+        }
+    }
+
+    @Test
     void returnsNotAcceptedForDuplicateOrLateCallback() {
         DomainAgentProperties properties = enabledProperties();
         DomainAgentAsyncTaskCallbackCommitService commitService =

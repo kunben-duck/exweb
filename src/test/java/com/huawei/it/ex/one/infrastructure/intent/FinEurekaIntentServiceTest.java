@@ -120,6 +120,42 @@ class FinEurekaIntentServiceTest {
     }
 
     @Test
+    void blockingAttemptsAreObservedButDoNotPropagateHeaders() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        List<org.springframework.web.reactive.function.client.ClientRequest> captured = new CopyOnWriteArrayList<>();
+        var properties = new IntentServiceHttpProperties();
+        properties.setBaseUrl("http://intent.test");
+        properties.setAccessName("entry");
+        properties.setMaxRetries(1);
+        var mapper = new IntentServiceWireMapper(new IntentServiceRequestMapper(properties),
+                new IntentServiceResponseMapper(objectMapper, properties));
+        var headers = new AuthHeaderProviderRegistry(new IntegrationAuthProperties(), List.of(new NoopAuthHeaderProvider()));
+        WebClient.Builder web = WebClient.builder().exchangeFunction(request -> {
+            captured.add(request);
+            String response = attempts.incrementAndGet() == 1
+                    ? "{\"code\":500,\"data\":{\"status\":\"failed\"}}"
+                    : "{\"code\":200,\"data\":{\"status\":\"success\",\"result\":{\"routeAction\":\"ROUTE_SINGLE\","
+                    + "\"items\":[{\"intentId\":\"ok\",\"intentName\":\"OK\",\"accessName\":\"skill-ok\"}]}}}";
+            return reactor.core.publisher.Mono.just(org.springframework.web.reactive.function.client.ClientResponse
+                    .create(org.springframework.http.HttpStatus.OK).header("Content-Type", "application/json")
+                    .body(response).build());
+        });
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.start("run");
+            var service = new FinEurekaIntentService(web, properties, mapper, headers, new DefaultIntentRetryPolicy());
+            service.setObservationSupport(f.recorder);
+            var result = service.recognizeForRouting(command(), MemoryContext.empty(), user(), "user-1",
+                    f.turns.context("run"));
+            assertThat(result.decision().intentCode()).isEqualTo("ok");
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(() -> f.calls.size() == 4);
+            assertThat(captured).hasSize(2).allSatisfy(request -> assertThat(request.headers())
+                    .doesNotContainKeys("X-Trace-Id", "X-Observation-Id"));
+            assertThat(f.calls.getLast().attemptNo()).isEqualTo(2);
+            assertThat(f.calls.getLast().outcome()).isEqualTo("COMPLETED");
+        }
+    }
+
+    @Test
     void mapsInternalCommandToIntentWireRequest() {
         IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
         properties.setAccessName("eureka2_260718");

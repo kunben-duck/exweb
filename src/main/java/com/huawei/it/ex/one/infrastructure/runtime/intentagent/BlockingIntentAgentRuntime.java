@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentAgentRouteResul
 import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.application.integration.intent.IntentService;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -21,6 +22,8 @@ import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +37,12 @@ import java.util.concurrent.TimeUnit;
  * 只需要替换本 adapter，ChatService 主编排仍消费同一组 IntentAgent 帧。</p>
  */
 public class BlockingIntentAgentRuntime implements IntentAgentRuntime {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(BlockingIntentAgentRuntime.class);
 
     private final IntentService intentService;
@@ -57,8 +66,11 @@ public class BlockingIntentAgentRuntime implements IntentAgentRuntime {
         long started = System.nanoTime();
         IntentRecognitionResult result;
         try {
-            result = intentService.recognizeForRouting(
-                    request.command(), request.memory(), request.user(), request.userMessageId());
+            result = turns.enabled()
+                    ? intentService.recognizeForRouting(request.command(), request.memory(), request.user(),
+                            request.userMessageId(), turns.context(request.runId()))
+                    : intentService.recognizeForRouting(
+                            request.command(), request.memory(), request.user(), request.userMessageId());
         } catch (RuntimeException ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_STREAM_FAILED,
                             "IntentDecision routing failed; returning the configured degraded result")

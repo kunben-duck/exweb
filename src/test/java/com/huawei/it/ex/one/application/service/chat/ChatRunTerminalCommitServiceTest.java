@@ -156,6 +156,52 @@ class ChatRunTerminalCommitServiceTest {
                 .satisfies(part -> assertThat(part.partType()).isEqualTo("METADATA"));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void observedExternalStopOrWatchdogPublishesOnlyCommittedWinningTerminal(boolean timeout) {
+        try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            var run = observation.start("observed-run");
+            var runs = mock(ChatRunRepository.class);
+            var streams = mock(ChatStreamApplicationService.class);
+            var leases = mock(ChatRunLeaseApplicationService.class);
+            var service = new ChatRunTerminalCommitService(
+                    streams, null, runs, leases, null, null, Duration.ZERO);
+            service.setObservationSupport(observation.turns);
+            var event = timeout ? ErrorEvent.of(run.id(), run.sessionId(), "ASYNC_TIMEOUT", "timeout")
+                    : RunCancelledEvent.of(run.id(), run.sessionId(), "USER_STOP", false, null);
+            var command = timeout
+                    ? ChatRunTerminalCommitService.ExternalTerminalCommitCommand.asyncTimeout(event, run)
+                    : ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, run, null);
+            when(runs.tryClaimExternalTerminal(any())).thenReturn(false);
+            when(runs.findById(run.id())).thenReturn(Optional.of(run));
+            assertThat(service.commitExternalTerminal(command).committed()).isFalse();
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> observation.traces.size() == 2);
+            when(runs.tryClaimExternalTerminal(any())).thenReturn(true);
+            when(runs.finalizeExternalTerminal(any())).thenReturn(timeout ? run.failed(4) : run.cancelled(4));
+            when(streams.appendWithoutPublish(any(ChatEvent.class))).thenAnswer(invocation -> {
+                ChatEvent incoming = invocation.getArgument(0);
+                return new StoredChatEvent(run.id(), run.sessionId(), 4, incoming.type(),
+                        incoming.createdAt(), incoming.payload());
+            });
+            var tx = new org.springframework.transaction.support.TransactionTemplate(observation.transactions);
+            tx.executeWithoutResult(status -> {
+                assertThat(service.commitExternalTerminal(command).committed()).isTrue();
+                assertThat(observation.traces).hasSize(2);
+                status.setRollbackOnly();
+            });
+            assertThat(observation.traces).hasSize(2);
+            tx.executeWithoutResult(status -> {
+                assertThat(service.commitExternalTerminal(command).committed()).isTrue();
+                assertThat(observation.traces).hasSize(2);
+            });
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> observation.traces.size() == 3);
+            assertThat(observation.traces.getLast().status()).isEqualTo(timeout ? "FAILED" : "CANCELLED");
+            assertThat(observation.traces.getLast().errorCode()).isEqualTo(timeout ? "ASYNC_TIMEOUT" : null);
+        }
+    }
+
     @Test
     void pendingRouteSwitchEventMustMatchDeferredBindingBeforeAnyEventWrite() {
         ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);

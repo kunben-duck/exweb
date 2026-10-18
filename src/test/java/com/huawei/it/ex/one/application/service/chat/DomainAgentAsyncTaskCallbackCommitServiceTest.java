@@ -278,6 +278,45 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
         org.mockito.Mockito.verifyNoInteractions(fixture.notifications);
     }
 
+    @Test
+    void observationTerminalIsPublishedOnlyAfterWinningCommitNotRollbackOrCasLoss() {
+        try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            Fixture fixture = new Fixture();
+            fixture.prepare(ChatRunStatus.COMPLETED, 12, 10);
+            fixture.service.setObservationSupport(observation.turns);
+            observation.turns.begin(new com.huawei.it.ex.one.domain.auth.UserContext("tenant1", "user1", "user1"),
+                    "run1", "NEXT", "session1");
+            observation.turns.committed(observation.turns.decorate(fixture.running), null);
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> observation.traces.size() == 2);
+            assertThat(observation.traces.getLast().status()).isEqualTo("ASYNC_WAITING");
+            var tx = new org.springframework.transaction.support.TransactionTemplate(observation.transactions);
+            tx.executeWithoutResult(status -> {
+                assertThat(fixture.service.commit(new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                        "run1", true, null)).accepted()).isTrue();
+                assertThat(observation.traces).noneMatch(t -> "COMPLETED".equals(t.status()));
+                status.setRollbackOnly();
+            });
+            org.mockito.Mockito.reset(fixture.streamService);
+            fixture.prepare(ChatRunStatus.COMPLETED, 12, 10);
+            when(fixture.runRepository.tryClaimExternalTerminal(any())).thenReturn(false);
+            tx.executeWithoutResult(status -> assertThat(fixture.service.commit(
+                    new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback("run1", true, null))
+                    .accepted()).isFalse());
+            assertThat(observation.traces).noneMatch(t -> "COMPLETED".equals(t.status()));
+            org.mockito.Mockito.reset(fixture.streamService);
+            fixture.prepare(ChatRunStatus.COMPLETED, 12, 10);
+            tx.executeWithoutResult(status -> {
+                assertThat(fixture.service.commit(new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                        "run1", true, null)).accepted()).isTrue();
+                assertThat(observation.traces).noneMatch(t -> "COMPLETED".equals(t.status()));
+            });
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> observation.traces.stream().anyMatch(t -> "COMPLETED".equals(t.status())));
+            assertThat(observation.traces.stream().filter(t -> "COMPLETED".equals(t.status()))).hasSize(1);
+        }
+    }
+
     private static final class Fixture {
         private final UserNotificationPublisher notifications = mock(UserNotificationPublisher.class);
         private final ChatRunRepository runRepository = mock(ChatRunRepository.class);

@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
+import com.huawei.it.ex.one.domain.observation.ObservationMetadata;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
@@ -117,7 +118,8 @@ public class ChatRequestTranslator {
     }
 
     private Map<String, Object> sanitizeClientMetadata(Map<String, Object> metadata) {
-        Map<String, Object> sanitized = normalizeMetadata(metadata);
+        Map<String, Object> sanitized = ObservationMetadata.remove(
+                normalizeMetadata(metadata));
         sanitized = SelectedIntentContext.removeReserved(sanitized);
         sanitized = MessageSkillContext.removeReserved(sanitized);
         sanitized = com.huawei.it.ex.one.application.integration.agent.IntentExpertContext.removeReserved(sanitized);

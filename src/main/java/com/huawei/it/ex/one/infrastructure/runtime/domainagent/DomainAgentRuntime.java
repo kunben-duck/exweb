@@ -65,7 +65,8 @@ public class DomainAgentRuntime implements AgentRuntime, AgentRuntimeInteraction
                 request.metadata(),
                 request.forwardHeaders()
         );
-        return Flux.concat(Flux.just(selectedDomainAgentEvent(domainRequest, request)), client.query(domainRequest));
+        return Flux.concat(Flux.just(selectedDomainAgentEvent(domainRequest, request)),
+                client.query(domainRequest.withTurnTraceContext(request.turnTraceContext())));
     }
 
     @Override
@@ -88,7 +89,7 @@ public class DomainAgentRuntime implements AgentRuntime, AgentRuntimeInteraction
                 request.reason(),
                 request.metadata(),
                 request.forwardHeaders()
-        ));
+        ).withTurnTraceContext(request.turnTraceContext()).withRuntimeSessionId(request.runtimeSessionId()));
     }
 
     private String domainAgentId(AgentRuntimeRequest request) {

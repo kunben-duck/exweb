@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService.AdmissionCancellation;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -21,6 +22,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +36,12 @@ import java.util.List;
  */
 @Service
 public class ChatRunAdmissionCommitService {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setTurnObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private final SessionApplicationService sessionService;
     private final ChatRunApplicationService chatRunService;
     private final ChatInteractionApplicationService interactionService;
@@ -204,6 +212,7 @@ public class ChatRunAdmissionCommitService {
                 request.source().userMessage().id(),
                 request.source().assistantMessageId(),
                 request.source().reusedAssistantSourceRunId());
+        turns.source(request.runId(), request.source().sourceRunId(), null, "CANDIDATE_SWITCH");
         ChatRun run;
         try {
             run = chatRunService.insertRunning(new CreateChatRunContext(

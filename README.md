@@ -43,6 +43,14 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `infrastructure`：Redis、数据库/MyBatis、用例库 HTTP、DomainAgent HTTP、Relay Runtime WebSocket、DocumentProvider 和对象存储等适配。
 - MyBatis Mapper 接口只保留方法签名，当前 openGauss SQL 统一维护在 `src/main/resources/mapper/**/*.opengauss.xml`；`db/init-20260718.sql` 只保留 DDL。后续适配其他数据库时，通过切换 `mybatis.mapper-locations` 选择对应方言 XML。
 
+## 问答与Agent调用观测
+
+独立观测默认关闭，通过 `FINANCEEX_OBSERVABILITY_ENABLED=true` 受控启用。
+部署前先执行 `src/main/resources/db/incremental-20261018-turn-observation.sql`。
+问答使用 `turn_` 标识，单次调用使用 `obs_` 标识；不替换原日志Trace、不新增前端事件。
+DomainAgent HTTP及Relay WS握手透传 `X-Trace-Id/X-Observation-Id`，Intent仅记录观测、不透传。
+配置、两表字段、计时口径、失败隔离及发布验证见 [问答观测说明](docs/observability.md)。
+
 ## 前端接入协议
 
 完整接口和 WebSocket 联调说明见 [前端联调文档](docs/frontend-integration.md)。其中“逐接口最小入参示例”和“`/v1/chat/runs` 不同场景请求体示例”是前端请求体样例的维护入口。

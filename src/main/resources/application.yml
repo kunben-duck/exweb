@@ -49,6 +49,13 @@ mybatis:
     map-underscore-to-camel-case: true
 
 financeex:
+  observability:
+    enabled: ${FINANCEEX_OBSERVABILITY_ENABLED:false}
+    writer:
+      worker-count: 1
+      queue-capacity: 1024
+      queue-wait-timeout: 1s
+      transaction-timeout: 2s
   redis:
     # Redis 只作为热缓存、取消标记、恢复锁优化和跨实例实时 fanout，不作为事实源。
     # 生产 Redis Cluster 设置 FINANCEEX_REDIS_MODE=cluster 并配置 cluster.nodes；本地 standalone 也必须显式配置 host。

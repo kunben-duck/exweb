@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.application.config.ChatInteractionProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatInteractionRequestRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.observation.TurnTraceCoordinator;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -19,6 +20,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +39,12 @@ import java.util.function.Function;
  */
 @Service
 public class ChatInteractionApplicationService {
+
+    private TurnTraceCoordinator turns = TurnTraceCoordinator.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(TurnTraceCoordinator value) { this.turns = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatInteractionApplicationService.class);
 
     private final ChatInteractionRequestRepository repository;
@@ -84,7 +92,7 @@ public class ChatInteractionApplicationService {
                 approvalId(context.requestPayload()),
                 interactionType(context.requestPayload()),
                 ChatInteractionStatus.WAITING,
-                context.requestPayload(),
+                turns.interactionMetadata(context.sourceRunId(), context.requestPayload()),
                 Map.of(),
                 properties.expiresAt(now),
                 null,

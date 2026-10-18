@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.service.observation.AgentObservationRecorder;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -71,6 +72,12 @@ import java.util.function.Consumer;
 @EnableConfigurationProperties({RelayAgentProperties.class, AgentRuntimeForwardCookieProperties.class})
 @ConditionalOnProperty(prefix = "financeex.agent-runtime.relay", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter {
+
+    private AgentObservationRecorder observations = AgentObservationRecorder.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(AgentObservationRecorder value) { this.observations = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(RelayWebSocketRuntimeAdapter.class);
 
     private final ObjectMapper objectMapper;
@@ -236,8 +243,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
+            var observation = observations.begin(request.turnTraceContext(),
+                    observationTarget(runtimeProfile, "QUERY", request.runtimeSessionId()));
             var subscription = executeWithOpeningHandshakeTimeout(
-                    endpointUri(request), outboundHeaders(request.forwardHeaders()), request.runId(),
+                    endpointUri(request), observedHeaders(request.forwardHeaders(), observation), request.runId(),
                     session -> {
                         Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
                                         .map(session::textMessage))
@@ -250,10 +259,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                         Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
+                                .doOnNext(observation::event)
                                 .doOnNext(sink::next)
                                 .doFinally(signal -> exchange.completeSending());
                         return Mono.when(outbound, normalized.then());
                     })
+                    .doOnError(observation::error)
+                    .doFinally(observation::finish)
                     .doFinally(signal -> activeExchanges.remove(request.runId(), exchange))
                     .subscribe(null, sink::error, sink::complete);
             exchange.subscription(subscription);
@@ -271,8 +283,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
+            var observation = observations.begin(request.turnTraceContext(),
+                    observationTarget(runtimeProfile, "INTERACTION_RESPONSE", request.runtimeSessionId()));
             var subscription = executeWithOpeningHandshakeTimeout(
-                    endpointUri(request.runId()), outboundHeaders(request.forwardHeaders()), request.runId(),
+                    endpointUri(request.runId()), observedHeaders(request.forwardHeaders(), observation), request.runId(),
                     session -> {
                         Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
                                         .map(session::textMessage))
@@ -286,10 +300,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                         frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
+                                .doOnNext(observation::event)
                                 .doOnNext(sink::next)
                                 .doFinally(signal -> exchange.completeSending());
                         return Mono.when(outbound, normalized.then());
                     })
+                    .doOnError(observation::error)
+                    .doFinally(observation::finish)
                     .doFinally(signal -> activeExchanges.remove(request.runId(), exchange))
                     .subscribe(null, sink::error, sink::complete);
             exchange.subscription(subscription);
@@ -321,7 +338,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     ActiveRelayWebSocketExchange exchange = activeExchanges.get(request.runId());
                     if (exchange != null) {
                         log.info("Relay WebSocket interrupt uses active exchange. runId={}", request.runId());
-                        return exchange.interrupt(request.runId());
+                        var observation = observations.begin(request.turnTraceContext(), cancelObservationTarget(request));
+                        return exchange.interrupt(request.runId())
+                                .doOnSuccess(ignored -> observation.outcome("STOP_ACCEPTED"))
+                                .doOnError(observation::error)
+                                .doFinally(observation::finish);
                     }
                     // 跨实例或原连接已结束时，恢复同一个 Runtime session 发送 Stop，不新建业务会话。
                     return interruptViaResumeConnection(request);
@@ -347,8 +368,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         String clientId = interruptClientId(request.runId());
         String relaySessionId = relaySessionIdForCancel(request);
         RuntimeProfileMetadata.Snapshot runtimeProfile = relayProfile(request);
+        var observation = observations.begin(request.turnTraceContext(),
+                observationTarget(runtimeProfile, "STOP", relaySessionId));
         return executeWithOpeningHandshakeTimeout(
-                endpointUri(clientId), outboundHeaders(request.forwardHeaders()), request.runId(), session -> {
+                endpointUri(clientId), observedHeaders(request.forwardHeaders(), observation), request.runId(), session -> {
             Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
             Mono<Void> outboundSend = session.send(Flux.concat(
                             Mono.just(configMessage(request, runtimeProfile)), outbound.asFlux())
@@ -367,7 +390,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             log.info("Relay WebSocket interrupt opens temporary resume connection. runId={}, runtimeSessionId={}, clientId={}",
                     request.runId(), relaySessionId, clientId);
             return Mono.when(outboundSend, releaseInterrupt);
-        });
+        }).doOnSuccess(ignored -> observation.outcome("STOP_ACCEPTED"))
+                .doOnError(observation::error)
+                .doFinally(observation::finish);
     }
 
     private Mono<Void> executeWithOpeningHandshakeTimeout(URI uri, HttpHeaders headers, String runId,
@@ -965,6 +990,28 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private String appendPathSegment(String base, String segment) {
         return base.endsWith("/") ? base + segment : base + "/" + segment;
+    }
+
+    private AgentObservationRecorder.Target observationTarget(
+            RuntimeProfileMetadata.Snapshot profile, String operation, String sessionId) {
+        return new AgentObservationRecorder.Target(
+                "RELAY", profile.profile().name(), operation, profile.roleName(), sessionId);
+    }
+
+    private AgentObservationRecorder.Target cancelObservationTarget(
+            AgentRuntimeCancelRequest request) {
+        try { return observationTarget(relayProfile(request), "STOP", request.runtimeSessionId()); }
+        catch (RuntimeException ignored) {
+            return new AgentObservationRecorder.Target(
+                    "RELAY", null, "STOP", null, request.runtimeSessionId());
+        }
+    }
+
+    private HttpHeaders observedHeaders(RuntimeForwardHeaders forwardHeaders,
+            AgentObservationRecorder.Scope observation) {
+        HttpHeaders headers = outboundHeaders(forwardHeaders);
+        observation.headers(headers);
+        return headers;
     }
 
     private HttpHeaders outboundHeaders(RuntimeForwardHeaders forwardHeaders) {

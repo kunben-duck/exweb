@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentRetryContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
+import com.huawei.it.ex.one.application.service.observation.AgentObservationRecorder;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -19,6 +20,7 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.observation.TurnTraceContext;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,6 +29,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Scheduler;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +50,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * SSE implementation of the IntentDecision streaming client.
@@ -58,6 +62,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 @EnableConfigurationProperties(IntentServiceHttpProperties.class)
 public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
+
+    private AgentObservationRecorder observations = AgentObservationRecorder.DISABLED;
+
+    @Autowired(required = false)
+    void setObservationSupport(AgentObservationRecorder value) { this.observations = value; }
+
     private static final AppLogger log = AppLoggerFactory.getLogger(FinEurekaIntentStreamClient.class);
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
             new ParameterizedTypeReference<>() {};
@@ -113,6 +123,12 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                                                      MemoryContext memory,
                                                      UserContext user,
                                                      String userMessageId) {
+        return recognize(command, memory, user, userMessageId, null);
+    }
+
+    @Override
+    public Flux<IntentDecisionStreamFrame> recognize(ChatCommand command, MemoryContext memory,
+                                                     UserContext user, String userMessageId, TurnTraceContext trace) {
         int maxAttempts = 1 + properties.normalizedMaxRetries();
         Mono<List<IntentUserPreferenceCorrection>> preferences = preferenceLoader == null
                 || properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
@@ -120,7 +136,8 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                 : preferenceLoader.load(command, user);
         // 每次识别先冻结偏好，重试复用逻辑入口、可信消息 ID 及同一快照，不再次查询偏好。
         return preferences.flatMapMany(items -> executeAttempt(new StreamAttemptContext(
-                command, memory, user, userMessageId, items, 1, maxAttempts)));
+                command, memory, user, userMessageId, items, 1, maxAttempts, trace,
+                new AtomicReference<>())));
     }
 
     private Flux<IntentDecisionStreamFrame> executeAttempt(StreamAttemptContext context) {
@@ -138,17 +155,42 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
 
     private Flux<IntentDecisionStreamFrame> requestStream(StreamAttemptContext context,
                                                           Map<String, String> resolvedAuthHeaders) {
-        Flux<IntentDecisionStreamFrame> responseFrames = webClient.post()
-                .uri(properties.getRecognizeStreamPath())
-                .accept(MediaType.TEXT_EVENT_STREAM)
-                .headers(headers -> resolvedAuthHeaders.forEach(headers::set))
-                .bodyValue(wireMapper.toWireRequest(
-                        context.command(), context.memory(), context.user(), context.userMessageId(),
-                        context.preferenceCorrections()))
-                .exchangeToFlux(response -> responseFrames(response, context));
-        Flux<IntentDecisionStreamFrame> firstEventBound = responseFrames.timeout(
-                Mono.delay(properties.normalizedStreamFirstEventTimeout()), ignored -> Mono.never());
-        return withTotalTimeout(firstEventBound);
+        return Flux.defer(() -> {
+            var observation = observations.begin(context.trace(),
+                    new AgentObservationRecorder.Target("INTENT", null, "RECOGNIZE", null, null), context.observationRef().get());
+            context.observationRef().set(observation);
+            Flux<IntentDecisionStreamFrame> responseFrames = webClient.post()
+                    .uri(properties.getRecognizeStreamPath())
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .headers(headers -> resolvedAuthHeaders.forEach(headers::set))
+                    .bodyValue(wireMapper.toWireRequest(
+                            context.command(), context.memory(), context.user(), context.userMessageId(),
+                            context.preferenceCorrections()))
+                    .exchangeToFlux(response -> responseFrames(response, context));
+            Flux<IntentDecisionStreamFrame> firstEventBound = responseFrames.timeout(
+                    Mono.delay(properties.normalizedStreamFirstEventTimeout()), ignored -> Mono.never());
+            return withTotalTimeout(firstEventBound)
+                    .doOnNext(frame -> {
+                        if (frame.type() == IntentDecisionStreamFrame.Type.RESULT) {
+                            observation.intentResult();
+                            var result = frame.recognitionResult();
+                            observation.outcome(result == null || result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED
+                                    ? "ERROR" : result.waitingClarification() ? "WAITING_USER" : "COMPLETED");
+                        }
+                    })
+                    .doOnError(error -> {
+                        if (error instanceof RetryableIntentResultException retryable) {
+                            observation.intentResult();
+                            observation.outcome(retryable.result().status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED
+                                    ? "ERROR" : "COMPLETED");
+                        } else {
+                            observation.error(error);
+                        }
+                        observation.finish(SignalType.ON_ERROR);
+                    })
+                    .doOnComplete(() -> observation.finish(SignalType.ON_COMPLETE))
+                    .doFinally(observation::finish);
+        });
     }
 
     private Mono<Map<String, String>> resolveAuthHeaders(StreamAttemptContext context) {
@@ -484,7 +526,9 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
             String userMessageId,
             List<IntentUserPreferenceCorrection> preferenceCorrections,
             int attempt,
-            int maxAttempts
+            int maxAttempts,
+            TurnTraceContext trace,
+            AtomicReference<AgentObservationRecorder.Scope> observationRef
     ) {
         private StreamAttemptContext {
             preferenceCorrections = preferenceCorrections == null
@@ -499,7 +543,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
         private StreamAttemptContext nextAttempt() {
             return new StreamAttemptContext(
                     command, memory, user, userMessageId, preferenceCorrections,
-                    attempt + 1, maxAttempts);
+                    attempt + 1, maxAttempts, trace, observationRef);
         }
     }
 

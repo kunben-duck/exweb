@@ -89,7 +89,11 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         ChatSession session = sessionRepository.findByTenantIdAndUserIdAndId(
                         initial.tenantId(), initial.userId(), initial.sessionId())
                 .orElseThrow(() -> new IllegalStateException("DomainAgent async callback session is unavailable"));
-        sessionService.lockForMessageMutation(initial.tenantId(), initial.userId(), session);
+        session = sessionService.lockAndReloadForMessageMutation(initial.tenantId(), initial.userId(), session);
+        // 删除提交与后台 Stop 之间仍可能收到回调，必须依据锁后状态阻止消息写入。
+        if ("DELETED".equals(session.status())) {
+            return CommitResult.rejected(initial);
+        }
 
         Instant finishedAt = Instant.now();
         RunDuration duration = RunDuration.forRun(initial, finishedAt);

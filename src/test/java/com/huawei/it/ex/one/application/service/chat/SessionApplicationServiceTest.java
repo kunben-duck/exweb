@@ -582,6 +582,38 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void asyncTerminalReadsLatestDeletedSessionWithoutReusingAnEarlierActiveSnapshot() {
+        ChatSession initial = lifecycleSession("标题", "ACTIVE", "old-leaf", 3L, "{}");
+        ChatSession deleted = lifecycleSession("标题", "DELETED", "latest-leaf", 17L, "{}");
+        StaleThenLockedSessionRepository repository = new StaleThenLockedSessionRepository(initial, deleted);
+        SessionApplicationService service = lifecycleService(repository, null);
+
+        assertThat(service.lockSessionForAsyncTerminal("tenant1", "user1", initial.id())).isEqualTo(deleted);
+        assertThat(repository.lockCalls).isEqualTo(1);
+        assertThat(repository.savedSession).isNull();
+    }
+
+    @Test
+    void asyncTerminalDeletedSessionExceptionDoesNotRelaxOwnershipOrOrdinaryAccess() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        ChatSession deleted = lifecycleSession("标题", "DELETED", "leaf", 3L, "{}");
+        sessions.save(deleted);
+        SessionApplicationService service = service(sessions, new InMemoryMessageRepository());
+
+        assertThat(service.lockSessionForAsyncTerminal("tenant1", "user1", deleted.id())).isEqualTo(deleted);
+        assertThatThrownBy(() -> service.getSession(user(), deleted.id()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("会话不存在");
+        assertThatThrownBy(() -> service.requireSessionForInternalUpdate("tenant1", "user1", deleted.id()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("会话不存在");
+        assertThatThrownBy(() -> service.lockSessionForAsyncTerminal("other", "user1", deleted.id()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.lockSessionForAsyncTerminal("tenant1", "other", deleted.id()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.lockSessionForAsyncTerminal("tenant1", "user1", "missing"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void listMessagesReturnsOwnedSessionHistoryInChronologicalOrder() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();

@@ -174,7 +174,10 @@ public class ChatRunRecoveryOrchestrator {
             payload.put("assistantMessageId", run.assistantMessageId());
             payload.put("feedbackTargetMessageId", run.assistantMessageId());
         }
-        ChatEvent event = ErrorEvent.of(
+        ChatEvent event = run.status() == ChatRunStatus.CANCELLING
+                ? RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason(),
+                        run.assistantMessageId() != null, run.assistantMessageId())
+                : ErrorEvent.of(
                 run.id(),
                 run.sessionId(),
                 "DOMAIN_AGENT_ASYNC_TIMEOUT",

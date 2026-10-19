@@ -1374,6 +1374,11 @@ public class SessionApplicationService implements ChatSessionFacade {
         return requireOwnedSession(tenantId, userId, sessionId, false);
     }
 
+    /** 异步终态仍需收尾已软删除会话的任务；归属与存在性由锁读校验，不放宽业务访问入口。 */
+    ChatSession lockSessionForAsyncTerminal(String tenantId, String userId, String sessionId) {
+        return sessionRepository.lockAndFindForMessageMutation(tenantId, userId, sessionId);
+    }
+
     /**
      * 计算前端版本游标切换后的真实 leaf。
      *

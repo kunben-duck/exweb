@@ -25,7 +25,11 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.apache.ibatis.builder.xml.XMLMapperBuilder;
+import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +39,32 @@ import java.util.List;
 import java.util.Map;
 
 class MyBatisChatRunRepositoryTest {
+    @ParameterizedTest
+    @EnumSource(ChatRunStatus.class)
+    void asyncExpirySqlPairsTargetWithSourceStatusAndKeepsExecutionGuard(ChatRunStatus target) throws Exception {
+        Configuration config = new Configuration();
+        String path = "mapper/persistence/ChatRunMapper.opengauss.xml";
+        try (var input = getClass().getClassLoader().getResourceAsStream(path)) {
+            new XMLMapperBuilder(input, config, path, config.getSqlFragments()).parse();
+        }
+        var row = new ChatRunExternalTerminalClaimRow("run1", "tenant1", "user1", "session1",
+                target.name(), "SESSION_DELETE", Instant.now(), "ASYNC_TIMEOUT", null, null, null, null);
+        var bound = config.getMappedStatement(ChatRunMapper.class.getName() + ".claimExternalTerminal")
+                .getBoundSql(row);
+        String sql = bound.getSql().replaceAll("\\s+", " ");
+        assertThat(sql).contains("r.id = ?", "r.tenant_id = ?", "r.user_id = ?", "r.session_id = ?",
+                "e.run_id = r.id", "e.tenant_id = r.tenant_id", "e.user_id = r.user_id",
+                "e.session_id = r.session_id", "e.execution_status = 'ASYNC_WAITING'",
+                "e.lease_until < CURRENT_TIMESTAMP");
+        if (target == ChatRunStatus.FAILED) {
+            assertThat(sql).contains("AND r.status = 'RUNNING'").doesNotContain("AND r.status = 'CANCELLING'");
+        } else if (target == ChatRunStatus.CANCELLED) {
+            assertThat(sql).contains("AND r.status = 'CANCELLING'").doesNotContain("AND r.status = 'RUNNING'");
+        } else {
+            assertThat(sql).contains("AND 1 = 0");
+        }
+    }
+
     @Test
     void lastRunBriefsReuseOneLightweightQueryWithoutMetadataParsing() {
         ChatRunMapper mapper = mock(ChatRunMapper.class);

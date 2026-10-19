@@ -333,7 +333,17 @@
                 )
             </when>
             <when test='guard == "ASYNC_TIMEOUT"'>
-                AND r.status = 'RUNNING'
+                <choose>
+                    <when test='terminalStatus == "FAILED"'>
+                        AND r.status = 'RUNNING'
+                    </when>
+                    <when test='terminalStatus == "CANCELLED"'>
+                        AND r.status = 'CANCELLING'
+                    </when>
+                    <otherwise>
+                        AND 1 = 0
+                    </otherwise>
+                </choose>
                 AND EXISTS (
                     SELECT 1
                     FROM fin_ex_chat_run_execution_t e

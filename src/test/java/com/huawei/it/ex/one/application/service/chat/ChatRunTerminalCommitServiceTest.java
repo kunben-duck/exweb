@@ -8,9 +8,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -22,6 +24,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppend
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
@@ -56,6 +59,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.annotation.Transactional;
@@ -157,15 +161,23 @@ class ChatRunTerminalCommitServiceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void observedExternalStopOrWatchdogPublishesOnlyCommittedWinningTerminal(boolean timeout) {
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void observedExternalStopOrWatchdogPublishesOnlyCommittedWinningTerminal(boolean timeout, boolean deletedAsync) {
         try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
-            var run = observation.start("observed-run");
+            var original = observation.start("observed-run");
+            var run = deletedAsync ? original.withAssistantMessageId("saved-assistant").withMetadata(
+                    DomainAgentAsyncTaskMetadata.runningOverlay("saved-assistant", Instant.now().minusSeconds(1)))
+                    : original;
             var runs = mock(ChatRunRepository.class);
             var streams = mock(ChatStreamApplicationService.class);
             var leases = mock(ChatRunLeaseApplicationService.class);
+            var sessions = mock(SessionRepository.class);
+            when(sessions.lockAndFindForMessageMutation(run.tenantId(), run.userId(), run.sessionId()))
+                    .thenReturn(new ChatSession(run.sessionId(), run.tenantId(), run.userId(), "title", "DELETED",
+                            "web", Instant.now(), Instant.now()));
+            var sessionService = new SessionApplicationService(sessions, null, null, new PermissionChecker());
             var service = new ChatRunTerminalCommitService(
-                    streams, null, runs, leases, null, null, Duration.ZERO);
+                    streams, sessionService, runs, leases, null, null, Duration.ZERO);
             service.setObservationSupport(observation.turns);
             var event = timeout ? ErrorEvent.of(run.id(), run.sessionId(), "ASYNC_TIMEOUT", "timeout")
                     : RunCancelledEvent.of(run.id(), run.sessionId(), "USER_STOP", false, null);
@@ -178,6 +190,7 @@ class ChatRunTerminalCommitServiceTest {
             com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
                     () -> observation.traces.size() == 2);
             when(runs.tryClaimExternalTerminal(any())).thenReturn(true);
+            when(runs.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
             when(runs.finalizeExternalTerminal(any())).thenReturn(timeout ? run.failed(4) : run.cancelled(4));
             when(streams.appendWithoutPublish(any(ChatEvent.class))).thenAnswer(invocation -> {
                 ChatEvent incoming = invocation.getArgument(0);
@@ -557,10 +570,15 @@ class ChatRunTerminalCommitServiceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void stopOrTimeoutClosesAsyncWaitingRunWithoutReplacingExistingAssistantContent(boolean timeout) throws Exception {
+    @CsvSource({"false,ACTIVE", "true,ACTIVE", "false,ARCHIVED", "true,ARCHIVED",
+            "false,DELETED", "true,DELETED"})
+    void stopOrTimeoutClosesAsyncWaitingRunWithoutReplacingExistingAssistantContent(
+            boolean timeout, String sessionStatus) throws Exception {
         ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
-        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        SessionRepository sessions = mock(SessionRepository.class);
+        ChatMessageRepository messages = mock(ChatMessageRepository.class);
+        SessionApplicationService sessionService = spy(new SessionApplicationService(
+                sessions, messages, null, new PermissionChecker()));
         ChatRunRepository runRepository = mock(ChatRunRepository.class);
         ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
         ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
@@ -587,7 +605,7 @@ class ChatRunTerminalCommitServiceTest {
         ChatRun committed = (timeout ? claimed.failed(12L) : claimed.cancelled(12L))
                 .withMetadataSnapshot(Map.of());
         ChatSession session = new ChatSession(
-                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
+                "session1", "tenant1", "user1", "test", sessionStatus, "web", now, now);
         ChatMessage assistant = new ChatMessage(
                 "msg-assistant", "tenant1", "user1", "session1",
                 "msg-user", 2L, 1, 0, "assistant", "partial async answer", null,
@@ -599,9 +617,11 @@ class ChatRunTerminalCommitServiceTest {
         ChatEvent stored = timeout
                 ? new ErrorEvent(stopping.id(), stopping.sessionId(), 12L, now, "ASYNC_TIMEOUT", "timeout", event.payload())
                 : new RunCancelledEvent(stopping.id(), stopping.sessionId(), 12L, now, event.payload());
-        when(sessionService.requireSessionForInternalUpdate(
-                stopping.tenantId(), stopping.userId(), stopping.sessionId())).thenReturn(session);
-        when(sessionService.requireAssistantForInternalUpdate(session, assistant.id())).thenReturn(assistant);
+        when(sessions.findByTenantIdAndUserIdAndId("tenant1", "user1", "session1"))
+                .thenReturn(Optional.of(session));
+        when(sessions.lockAndFindForMessageMutation("tenant1", "user1", "session1")).thenReturn(session);
+        when(messages.findByOwnerAndId("tenant1", "user1", assistant.id())).thenReturn(Optional.of(assistant));
+        when(messages.updateAssistantMessage(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(runRepository.tryClaimExternalTerminal(any(ChatRunRepository.ExternalTerminalClaim.class)))
                 .thenReturn(true);
         when(runRepository.findById(stopping.id())).thenReturn(Optional.of(claimed));
@@ -622,19 +642,25 @@ class ChatRunTerminalCommitServiceTest {
                             : ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, stopping, null));
         }
 
-        ArgumentCaptor<AssistantMessageUpdateCommand> assistantCaptor =
-                ArgumentCaptor.forClass(AssistantMessageUpdateCommand.class);
-        verify(sessionService).updateAssistantMessage(assistantCaptor.capture());
-        assertThat(assistantCaptor.getValue().content()).isEqualTo("partial async answer");
-        assertThat(assistantCaptor.getValue().safePartDrafts()).isEmpty();
-        assertThat(assistantCaptor.getValue().appendAnswerPart()).isFalse();
-        assertThat(assistantCaptor.getValue().metadataJson())
-                .contains("\"skillId\":\"skill-a\"")
-                .contains("\"status\":\"" + expected.name() + "\"");
+        if ("DELETED".equals(sessionStatus)) {
+            verifyNoInteractions(messages);
+            verify(sessions, never()).updateCurrentLeaf(any(), any(), any(), any());
+            verify(sessionService, never()).updateAssistantMessage(any());
+        } else {
+            ArgumentCaptor<AssistantMessageUpdateCommand> assistantCaptor =
+                    ArgumentCaptor.forClass(AssistantMessageUpdateCommand.class);
+            verify(sessionService).updateAssistantMessage(assistantCaptor.capture());
+            assertThat(assistantCaptor.getValue().content()).isEqualTo("partial async answer");
+            assertThat(assistantCaptor.getValue().safePartDrafts()).isEmpty();
+            assertThat(assistantCaptor.getValue().appendAnswerPart()).isFalse();
+            assertThat(assistantCaptor.getValue().metadataJson())
+                    .contains("\"skillId\":\"skill-a\"")
+                    .contains("\"status\":\"" + expected.name() + "\"");
+            assertThat(new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readTree(assistantCaptor.getValue().metadataJson()).get("runDurationMs").longValue())
+                    .isEqualTo(1800000L);
+        }
         assertThat(result.event().payload()).containsEntry("runDurationMs", 1800000L);
-        assertThat(new com.fasterxml.jackson.databind.ObjectMapper()
-                .readTree(assistantCaptor.getValue().metadataJson()).get("runDurationMs").longValue())
-                .isEqualTo(1800000L);
         ArgumentCaptor<ChatRun> savedRunCaptor = ArgumentCaptor.forClass(ChatRun.class);
         verify(runRepository).save(savedRunCaptor.capture());
         assertThat(savedRunCaptor.getValue().metadata())
@@ -643,6 +669,11 @@ class ChatRunTerminalCommitServiceTest {
                 ? ChatRunExecutionStatus.FAILED : ChatRunExecutionStatus.CANCELLED);
         assertThat(result.committed()).isTrue();
         assertThat(result.run().status()).isEqualTo(expected);
+        var order = inOrder(sessions, runRepository);
+        order.verify(sessions).lockAndFindForMessageMutation("tenant1", "user1", "session1");
+        order.verify(runRepository).tryClaimExternalTerminal(any());
+        verify(sessions, never()).findByTenantIdAndUserIdAndId(any(), any(), any());
+        verify(sessions, never()).lockForMessageMutation(any(), any(), any());
         verify(notifications).publish(new UserNotificationRecipient("tenant1", "user1"),
                 new UserNotification("session.async.finished", Map.of(
                         "sessionId", "session1", "runId", "run-async", "status", expected.name())));

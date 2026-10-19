@@ -268,7 +268,7 @@ public class ChatRunTerminalCommitService {
         if (!"run.cancelled".equals(command.event().type()) && !"run.failed".equals(command.event().type())) {
             throw new IllegalArgumentException("外部终态只支持 run.cancelled/run.failed");
         }
-        lockExternalPartialAssistantSession(command);
+        ChatSession asyncTerminalSession = lockExternalPartialAssistantSession(command);
         ChatRunStatus terminalStatus = "run.cancelled".equals(command.event().type())
                 ? ChatRunStatus.CANCELLED
                 : ChatRunStatus.FAILED;
@@ -299,7 +299,7 @@ public class ChatRunTerminalCommitService {
         String skillId = MessageSkillContext.runSkillId(latestRun.metadata());
         boolean asyncTask = DomainAgentAsyncTaskMetadata.isAsyncRunning(latestRun);
         if (asyncTask) {
-            persistAsyncTerminalAssistant(latestRun, terminalStatus, duration);
+            persistAsyncTerminalAssistant(latestRun, terminalStatus, duration, asyncTerminalSession);
             latestRun = runRepository.save(latestRun.withMetadataSnapshot(
                     DomainAgentAsyncTaskMetadata.clearRunMetadata(latestRun.metadata())));
         } else {
@@ -337,7 +337,12 @@ public class ChatRunTerminalCommitService {
         return new ExternalTerminalCommitResult(stored, committedRun, true);
     }
 
-    private void persistAsyncTerminalAssistant(ChatRun run, ChatRunStatus terminalStatus, RunDuration duration) {
+    private void persistAsyncTerminalAssistant(ChatRun run, ChatRunStatus terminalStatus, RunDuration duration,
+                                               ChatSession lockedSession) {
+        // 删除后只闭合任务控制面，不再修改已删除会话的回答、Parts 或消息树。
+        if (lockedSession != null && "DELETED".equals(lockedSession.status())) {
+            return;
+        }
         String assistantMessageId = DomainAgentAsyncTaskMetadata.assistantMessageId(run);
         if (assistantMessageId == null || assistantMessageId.isBlank()) {
             assistantMessageId = run.assistantMessageId();
@@ -345,7 +350,7 @@ public class ChatRunTerminalCommitService {
         if (assistantMessageId == null || assistantMessageId.isBlank()) {
             return;
         }
-        ChatSession session = sessionService.requireSessionForInternalUpdate(
+        ChatSession session = lockedSession != null ? lockedSession : sessionService.requireSessionForInternalUpdate(
                 run.tenantId(), run.userId(), run.sessionId());
         ChatMessage existing = sessionService.requireAssistantForInternalUpdate(session, assistantMessageId);
         String status = terminalStatus == ChatRunStatus.CANCELLED ? "CANCELLED" : "FAILED";
@@ -463,27 +468,26 @@ public class ChatRunTerminalCommitService {
                 context.user().tenantId(), context.user().ownerUserId(), context.session());
     }
 
-    private void lockExternalPartialAssistantSession(ExternalTerminalCommitCommand command) {
+    private ChatSession lockExternalPartialAssistantSession(ExternalTerminalCommitCommand command) {
         AssistantMessageSaveCommand partialAssistant = command.partialAssistant();
-        if (partialAssistant == null) {
-            ChatRun run = command.run();
-            if (DomainAgentAsyncTaskMetadata.isAsyncRunning(run)) {
-                ChatSession session = sessionService.requireSessionForInternalUpdate(
-                        run.tenantId(), run.userId(), run.sessionId());
-                sessionService.lockForMessageMutation(run.tenantId(), run.userId(), session);
-            }
-            return;
-        }
         ChatRun run = command.run();
-        ChatSession session = partialAssistant.session();
-        if (session == null
-                || !run.tenantId().equals(partialAssistant.tenantId())
-                || !run.userId().equals(partialAssistant.userId())
-                || !run.sessionId().equals(session.id())) {
-            throw new IllegalArgumentException("stop partial assistant 与 run 归属不一致");
+        if (partialAssistant != null) {
+            ChatSession session = partialAssistant.session();
+            if (session == null
+                    || !run.tenantId().equals(partialAssistant.tenantId())
+                    || !run.userId().equals(partialAssistant.userId())
+                    || !run.sessionId().equals(session.id())) {
+                throw new IllegalArgumentException("stop partial assistant 与 run 归属不一致");
+            }
         }
-        sessionService.lockForMessageMutation(
-                partialAssistant.tenantId(), partialAssistant.userId(), session);
+        if (DomainAgentAsyncTaskMetadata.isAsyncRunning(run)) {
+            return sessionService.lockSessionForAsyncTerminal(run.tenantId(), run.userId(), run.sessionId());
+        }
+        if (partialAssistant != null) {
+            sessionService.lockForMessageMutation(
+                    partialAssistant.tenantId(), partialAssistant.userId(), partialAssistant.session());
+        }
+        return null;
     }
 
     private void fenceOwnerTerminalCommit(TerminalCommitContext context) {

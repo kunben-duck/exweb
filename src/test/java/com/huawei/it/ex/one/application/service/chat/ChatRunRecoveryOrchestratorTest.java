@@ -5,8 +5,10 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.ChatInteractionProperties;
@@ -24,11 +26,13 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunReposito
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.application.service.recovery.FailFastRecoveryStrategy;
 import com.huawei.it.ex.one.application.service.recovery.ManualConfirmationRecoveryStrategy;
 import com.huawei.it.ex.one.application.service.recovery.RuntimeTakeoverRecoveryStrategy;
 import com.huawei.it.ex.one.application.service.recovery.StaleRunRecoveryStrategy;
 import com.huawei.it.ex.one.application.service.recovery.StaleRunRecoveryStrategyRegistry;
+import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -47,8 +51,12 @@ import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -64,6 +72,7 @@ class ChatRunRecoveryOrchestratorTest {
     void manualConfirmationClosesStaleRunAndWritesSingleFailedEvent() {
         InMemoryRunRepository runs = new InMemoryRunRepository();
         InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        runs.executions = executions;
         InMemoryEventStore events = new InMemoryEventStore();
         InMemoryRunCache cache = new InMemoryRunCache();
         FixedSessionRepository sessions = new FixedSessionRepository();
@@ -82,7 +91,7 @@ class ChatRunRecoveryOrchestratorTest {
         InMemoryInteractionRepository interactions = new InMemoryInteractionRepository();
         ChatInteractionApplicationService interactionService = interactionService(interactions);
         ChatRunTerminalCommitService terminalCommitService = terminalCommitService(
-                streamService, runs, leaseService, interactionService);
+                streamService, runs, leaseService, interactionService, sessions);
         List<StaleRunRecoveryStrategy> strategies = List.of(
                 new ManualConfirmationRecoveryStrategy(streamService, terminalCommitService, runService),
                 new FailFastRecoveryStrategy(streamService, terminalCommitService, runService),
@@ -128,12 +137,18 @@ class ChatRunRecoveryOrchestratorTest {
         assertThat(fixture.events.events.getFirst().payload()).containsEntry("messageReady", false);
     }
 
-    @Test
-    void watchdogClosesExpiredAsyncWaitingRunWithoutTreatingItAsOwnerRecovery() {
+    @ParameterizedTest
+    @CsvSource({"false,ACTIVE", "true,ACTIVE", "false,DELETED", "true,DELETED"})
+    void watchdogClosesExpiredAsyncWaitingRunWithoutTreatingItAsOwnerRecovery(
+            boolean cancelling, String sessionStatus) {
         TestFixture fixture = fixture();
+        fixture.sessions.status = sessionStatus;
         Instant now = Instant.now();
         ChatRun run = runningRun().withMetadataSnapshot(
                 DomainAgentAsyncTaskMetadata.runningOverlay("", now.minusSeconds(1)));
+        if (cancelling) {
+            run = run.cancelling("SESSION_DELETE");
+        }
         fixture.runs.save(run);
         fixture.executions.put(new ChatRunExecution(
                 "exec-async", run.id(), run.tenantId(), run.userId(), run.sessionId(),
@@ -144,14 +159,99 @@ class ChatRunRecoveryOrchestratorTest {
 
         assertThat(recovered).isEqualTo(1);
         assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
-                .isEqualTo(ChatRunStatus.FAILED);
+                .isEqualTo(cancelling ? ChatRunStatus.CANCELLED : ChatRunStatus.FAILED);
         assertThat(fixture.executions.findByRunId(run.id())).get()
                 .extracting(ChatRunExecution::executionStatus)
-                .isEqualTo(ChatRunExecutionStatus.FAILED);
+                .isEqualTo(cancelling ? ChatRunExecutionStatus.CANCELLED : ChatRunExecutionStatus.FAILED);
         assertThat(fixture.events.events).singleElement().satisfies(event -> {
-            assertThat(event.type()).isEqualTo("run.failed");
-            assertThat(event.payload()).containsEntry("code", "DOMAIN_AGENT_ASYNC_TIMEOUT");
+            assertThat(event.type()).isEqualTo(cancelling ? "run.cancelled" : "run.failed");
+            if (cancelling) {
+                assertThat(event.payload()).containsEntry("reason", "SESSION_DELETE");
+                assertThat(event.payload()).doesNotContainKey("code");
+            } else {
+                assertThat(event.payload()).containsEntry("code", "DOMAIN_AGENT_ASYNC_TIMEOUT");
+            }
         });
+        assertThat(fixture.orchestrator.recoverExpiredRuns()).isZero();
+        assertThat(fixture.events.events).hasSize(1);
+        assertThat(fixture.sessions.status).isEqualTo(sessionStatus);
+    }
+
+    @Test
+    void deleteAsyncSessionUsesRealStopAndTerminalServicesWithoutRewritingMessages() {
+        TestFixture fixture = fixture();
+        ChatRun run = asyncRun(fixture, Instant.now().plusSeconds(3600));
+        ChatMessageRepository messages = mock(ChatMessageRepository.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ChatRunStopCoordinator> stopProvider = mock(ObjectProvider.class);
+        SessionApplicationService sessionService = new SessionApplicationService(
+                fixture.sessions, messages, new FixedIdGenerator(), new PermissionChecker(),
+                fixture.runService, null, null, stopProvider);
+        AgentRuntimeExecutor runtime = mock(AgentRuntimeExecutor.class);
+        when(runtime.cancel(any(), any(), any(), any())).thenReturn(Mono.empty());
+        ChatRunStopCoordinator stop = new ChatRunStopCoordinator(sessionService, fixture.streamService,
+                fixture.runService, fixture.leaseService, new LocalChatRunExecutionRegistry(), runtime,
+                fixture.interactionService, fixture.terminalCommitService, new FixedIdGenerator());
+        when(stopProvider.getIfAvailable()).thenReturn(stop);
+
+        assertThat(sessionService.deleteSession(user(), run.sessionId()).status()).isEqualTo("DELETED");
+
+        assertThat(fixture.runs.findById(run.id()).orElseThrow().status()).isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(fixture.executions.findByRunId(run.id()).orElseThrow().executionStatus())
+                .isEqualTo(ChatRunExecutionStatus.CANCELLED);
+        assertThat(fixture.events.events).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo("run.cancelled");
+            assertThat(event.payload()).containsEntry("reason", "SESSION_DELETE")
+                    .containsEntry("assistantMessageId", "saved-assistant");
+        });
+        verify(runtime).cancel(any(), any(), any(), any());
+        verifyNoInteractions(messages);
+        assertThat(fixture.sessions.status).isEqualTo("DELETED");
+        assertThat(fixture.orchestrator.recoverExpiredRuns()).isZero();
+    }
+
+    @Test
+    void stopWinningAfterTimeoutScanIsNotOverwrittenAndNextScanFinishesCancellation() {
+        TestFixture fixture = fixture();
+        fixture.sessions.status = "DELETED";
+        ChatRun run = asyncRun(fixture, Instant.now().minusSeconds(1));
+        fixture.runs.beforeClaim = () -> fixture.runs.save(run.cancelling("SESSION_DELETE"));
+
+        assertThat(fixture.orchestrator.recoverExpiredRuns()).isZero();
+        assertThat(fixture.events.events).isEmpty();
+        assertThat(fixture.runs.findById(run.id()).orElseThrow().status()).isEqualTo(ChatRunStatus.CANCELLING);
+        assertThat(fixture.orchestrator.recoverExpiredRuns()).isEqualTo(1);
+        assertThat(fixture.events.events).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo("run.cancelled");
+            assertThat(event.payload()).containsEntry("assistantMessageId", "saved-assistant");
+        });
+        assertThat(fixture.orchestrator.recoverExpiredRuns()).isZero();
+    }
+
+    @Test
+    void terminalWinnerAfterScanIsNotOverwrittenOrPublishedAgain() {
+        TestFixture fixture = fixture();
+        fixture.sessions.status = "DELETED";
+        ChatRun run = asyncRun(fixture, Instant.now().minusSeconds(1));
+        fixture.runs.beforeClaim = () -> fixture.runs.save(run.completed(7));
+
+        fixture.orchestrator.recoverExpiredRuns();
+        assertThat(fixture.events.events).isEmpty();
+        assertThat(fixture.runs.findById(run.id()).orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);
+        assertThat(fixture.orchestrator.recoverExpiredRuns()).isZero();
+        assertThat(fixture.executions.findByRunId(run.id()).orElseThrow().executionStatus())
+                .isEqualTo(ChatRunExecutionStatus.COMPLETED);
+    }
+
+    private ChatRun asyncRun(TestFixture fixture, Instant expiresAt) {
+        ChatRun run = runningRun().withResolvedRoute("DOMAIN_AGENT", "skill-a", "domain-agent", "agent-session")
+                .withAssistantMessageId("saved-assistant")
+                .withMetadataSnapshot(DomainAgentAsyncTaskMetadata.runningOverlay("saved-assistant", expiresAt));
+        fixture.runs.save(run);
+        fixture.executions.put(new ChatRunExecution("exec-async", run.id(), run.tenantId(), run.userId(),
+                run.sessionId(), ChatRunExecutionStatus.ASYNC_WAITING, null, null, expiresAt,
+                2L, null, null, 0, null, null, Map.of(), Instant.now(), Instant.now()));
+        return run;
     }
 
     @Test
@@ -412,6 +512,7 @@ class ChatRunRecoveryOrchestratorTest {
     private TestFixture fixture() {
         InMemoryRunRepository runs = new InMemoryRunRepository();
         InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        runs.executions = executions;
         InMemoryEventStore events = new InMemoryEventStore();
         InMemoryRunCache cache = new InMemoryRunCache();
         FixedSessionRepository sessions = new FixedSessionRepository();
@@ -431,7 +532,7 @@ class ChatRunRecoveryOrchestratorTest {
         InMemoryInteractionRepository interactions = new InMemoryInteractionRepository();
         ChatInteractionApplicationService interactionService = interactionService(interactions);
         ChatRunTerminalCommitService terminalCommitService = terminalCommitService(
-                streamService, runs, leaseService, interactionService);
+                streamService, runs, leaseService, interactionService, sessions);
         List<StaleRunRecoveryStrategy> strategies = List.of(
                 new ManualConfirmationRecoveryStrategy(streamService, terminalCommitService, runService),
                 new FailFastRecoveryStrategy(streamService, terminalCommitService, runService),
@@ -443,7 +544,8 @@ class ChatRunRecoveryOrchestratorTest {
                 new StaleRunRecoveryStrategyRegistry(strategies), interactionService,
                 terminalCommitService, streamService, runService);
         return new TestFixture(properties, runs, executions, interactions, interactionService,
-                capacityLimiter, events, terminalCommitService, orchestrator);
+                capacityLimiter, events, terminalCommitService, orchestrator, sessions,
+                runService, streamService, leaseService);
     }
 
     private record TestFixture(ChatRunOperationalProperties properties,
@@ -454,7 +556,11 @@ class ChatRunRecoveryOrchestratorTest {
                                ChatRunRecoveryCapacityLimiter capacityLimiter,
                                InMemoryEventStore events,
                                ChatRunTerminalCommitService terminalCommitService,
-                               ChatRunRecoveryOrchestrator orchestrator) {
+                               ChatRunRecoveryOrchestrator orchestrator,
+                               FixedSessionRepository sessions,
+                               ChatRunApplicationService runService,
+                               ChatStreamApplicationService streamService,
+                               ChatRunLeaseApplicationService leaseService) {
     }
 
     private ChatInteractionApplicationService interactionService(InMemoryInteractionRepository repository) {
@@ -465,15 +571,10 @@ class ChatRunRecoveryOrchestratorTest {
     private ChatRunTerminalCommitService terminalCommitService(ChatStreamApplicationService streamService,
                                                                 ChatRunRepository runs,
                                                                 ChatRunLeaseApplicationService leaseService,
-                                                                ChatInteractionApplicationService interactionService) {
-        SessionApplicationService sessionService = mock(SessionApplicationService.class);
-        when(sessionService.requireSessionForInternalUpdate(anyString(), anyString(), anyString()))
-                .thenAnswer(invocation -> {
-                    Instant now = Instant.now();
-                    return new ChatSession(
-                            invocation.getArgument(2), invocation.getArgument(0), invocation.getArgument(1),
-                            "title", "ACTIVE", "web", now, now);
-                });
+                                                                ChatInteractionApplicationService interactionService,
+                                                                SessionRepository sessions) {
+        SessionApplicationService sessionService = new SessionApplicationService(
+                sessions, null, null, new PermissionChecker());
         return new ChatRunTerminalCommitService(streamService, sessionService, runs, leaseService, null,
                 interactionService, Duration.ofDays(3));
     }
@@ -495,15 +596,32 @@ class ChatRunRecoveryOrchestratorTest {
     private static class InMemoryRunRepository implements ChatRunRepository {
         private final Map<String, ChatRun> runs = new HashMap<>();
         private final Set<String> executionInitOrphanIds = new HashSet<>();
+        private InMemoryExecutionRepository executions;
+        private Runnable beforeClaim = () -> { };
         private boolean rejectExternalTerminalClaims;
         @Override public ChatRun save(ChatRun run) { runs.put(run.id(), run); return run; }
         @Override public synchronized boolean tryClaimExternalTerminal(ExternalTerminalClaim claim) {
+            Runnable action = beforeClaim;
+            beforeClaim = () -> { };
+            action.run();
             if (rejectExternalTerminalClaims) {
                 return false;
             }
             ChatRun current = runs.get(claim.runId());
             if (current == null || current.status().terminal()) {
                 return false;
+            }
+            if (claim.guard() == ExternalTerminalGuard.ASYNC_TIMEOUT) {
+                ChatRunExecution execution = executions.findByRunId(claim.runId()).orElse(null);
+                boolean matchingStatus = (claim.terminalStatus() == ChatRunStatus.FAILED
+                        && current.status() == ChatRunStatus.RUNNING)
+                        || (claim.terminalStatus() == ChatRunStatus.CANCELLED
+                        && current.status() == ChatRunStatus.CANCELLING);
+                if (!matchingStatus || execution == null
+                        || execution.executionStatus() != ChatRunExecutionStatus.ASYNC_WAITING
+                        || !execution.leaseUntil().isBefore(Instant.now())) {
+                    return false;
+                }
             }
             ChatRun claimed = claim.terminalStatus() == ChatRunStatus.CANCELLED
                     ? current.cancelled(0L)
@@ -752,14 +870,15 @@ class ChatRunRecoveryOrchestratorTest {
     }
 
     private static class FixedSessionRepository implements SessionRepository {
+        private String status = "ACTIVE";
         @Override public Optional<ChatSession> findById(String sessionId) { return Optional.empty(); }
         @Override public Optional<ChatSession> findByTenantIdAndUserIdAndId(String tenantId, String userId, String sessionId) {
             Instant now = Instant.now();
-            return Optional.of(new ChatSession(sessionId, tenantId, userId, "title", "ACTIVE", "web", now, now));
+            return Optional.of(new ChatSession(sessionId, tenantId, userId, "title", status, "web", now, now));
         }
         @Override public List<ChatSession> findByTenantIdAndUserId(String tenantId, String userId) { return List.of(); }
         @Override public ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String cursor, int limit) { return new ChatSessionPage(List.of(), null); }
-        @Override public ChatSession save(ChatSession session) { return session; }
+        @Override public ChatSession save(ChatSession session) { status = session.status(); return session; }
     }
 
     private static class FixedIdGenerator implements IdGenerator {

@@ -11,14 +11,27 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
+import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.it.ex.one.application.integration.notification.UserNotificationPublisher;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
+import com.huawei.it.ex.one.application.service.observation.DefaultFirstBusinessFrameClassifier;
+import com.huawei.it.ex.one.application.service.observation.ObservationTestFixture;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
+import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackNotReadyException;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackPayloadTooLargeException;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
@@ -29,17 +42,91 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 class DomainAgentAsyncTaskCallbackApplicationServiceTest {
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void deletedSessionReturnsIgnoredWithoutPublishingOrCompletingTrace(boolean noStore, boolean observed)
+            throws Exception {
+        try (var observation = new ObservationTestFixture(observed, new DefaultFirstBusinessFrameClassifier())) {
+            ChatRun base = asyncRun();
+            var metadata = new LinkedHashMap<>(base.metadata());
+            if (noStore) {
+                metadata.putAll(new AgentDataPersistenceState("placeholder")
+                        .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER).runMetadataOverlay());
+            }
+            base = base.withMetadataSnapshot(metadata);
+            observation.turns.begin(new UserContext(base.tenantId(), base.userId(), base.userId()),
+                    base.id(), "NEXT", base.sessionId());
+            ChatRun running = observation.turns.decorate(base);
+            observation.turns.committed(running, null);
+            observation.turns.finishStart(base.id());
+            var runs = mock(ChatRunRepository.class);
+            when(runs.findById(running.id())).thenReturn(Optional.of(running));
+            var sessions = mock(SessionRepository.class);
+            ChatSession deleted = new ChatSession(running.sessionId(), running.tenantId(), running.userId(),
+                    "deleted", "DELETED", "web", Instant.now(), Instant.now());
+            when(sessions.findByTenantIdAndUserIdAndId(running.tenantId(), running.userId(), running.sessionId()))
+                    .thenReturn(Optional.of(deleted));
+            when(sessions.lockAndFindForMessageMutation(running.tenantId(), running.userId(), running.sessionId()))
+                    .thenReturn(deleted);
+            var messages = mock(ChatMessageRepository.class);
+            var executions = mock(ChatRunExecutionRepository.class);
+            var notifications = mock(UserNotificationPublisher.class);
+            var runService = mock(ChatRunApplicationService.class);
+            var streams = mock(ChatStreamApplicationService.class);
+            var bindings = mock(RuntimeBindingApplicationService.class);
+            ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+            var commits = new DomainAgentAsyncTaskCallbackCommitService(runs, executions, sessions,
+                    new SessionApplicationService(sessions, messages, null, new PermissionChecker()),
+                    streams, new ChatEventBatcher(new ChatStreamProperties(), mapper), mapper);
+            commits.setNotificationPublisher(notifications);
+            commits.setObservationSupport(observation.turns);
+            var service = service(enabledProperties(), commits, runs, runService, streams, bindings);
+            service.setTurnObservationSupport(observation.turns);
+            service.setAgentObservationSupport(observation.recorder);
+            try {
+                var result = service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                        running.id(), "COMPLETED", "REPLACE",
+                        List.of(mapper.readTree("{\"content\":\"replacement\"}")), null))
+                        .block(Duration.ofSeconds(5));
+
+                assertThat(result).isNotNull();
+                assertThat(result.accepted()).isFalse();
+                verifyNoInteractions(messages, executions, notifications, runService, streams, bindings);
+                verify(runs, never()).tryClaimExternalTerminal(any());
+                verify(runs, never()).save(any());
+                verify(runs, never()).finalizeExternalTerminal(any());
+                if (observed) {
+                    ObservationTestFixture.await(() -> observation.calls.stream()
+                            .anyMatch(call -> "FINISHED".equals(call.status())));
+                    assertThat(observation.calls.stream().filter(call -> "FINISHED".equals(call.status())))
+                            .singleElement().satisfies(call -> assertThat(call.outcome()).isEqualTo("CALLBACK_IGNORED"));
+                    assertThat(observation.traces).noneMatch(trace -> List.of("COMPLETED", "FAILED", "CANCELLED")
+                            .contains(trace.status()));
+                } else {
+                    assertThat(observation.calls).isEmpty();
+                    assertThat(observation.traces).isEmpty();
+                }
+                assertThat(observation.turns.context(running.id())).isNull();
+            } finally {
+                service.closeScheduler();
+            }
+        }
+    }
+
     @Test
     void commitsCompletionNotificationAndPublishesCommittedEvents() {
         DomainAgentProperties properties = enabledProperties();

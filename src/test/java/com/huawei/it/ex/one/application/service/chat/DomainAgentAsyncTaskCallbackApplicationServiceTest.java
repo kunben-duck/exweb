@@ -212,6 +212,54 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
     }
 
     @ParameterizedTest
+    @CsvSource({"content,true", "diyCardScene,true", "contentAgent,true", "cardUrl,false", "openCard,false"})
+    void callbackUsesDomainFirstFrameRulesWithoutDroppingOtherBusinessResults(String field, boolean firstFrame)
+            throws Exception {
+        try (var observation = new ObservationTestFixture()) {
+            ChatRun base = asyncRun();
+            observation.turns.begin(new UserContext(base.tenantId(), base.userId(), base.userId()),
+                    base.id(), "NEXT", base.sessionId());
+            ChatRun running = observation.turns.decorate(base);
+            observation.turns.committed(running, null);
+            observation.turns.finishStart(base.id());
+            observation.advance(Duration.ofSeconds(1));
+            var runs = mock(ChatRunRepository.class);
+            when(runs.findById(base.id())).thenReturn(Optional.of(running));
+            var commits = mock(DomainAgentAsyncTaskCallbackCommitService.class);
+            when(commits.commit(any())).thenAnswer(invocation -> {
+                var trace = observation.turns.context(base.id());
+                assertThat(trace.firstBusinessFrameAt() != null).isEqualTo(firstFrame);
+                assertThat(trace.firstBusinessFrameLatencyMs()).isEqualTo(firstFrame ? 1000L : null);
+                DomainAgentAsyncTaskCallbackCommitService.PreparedCallback prepared = invocation.getArgument(0);
+                assertThat(prepared.resultProvided()).isTrue();
+                assertThat(prepared.businessEvents()).hasSize(1);
+                return new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(9), "msg-assistant", List.of());
+            });
+            var service = service(enabledProperties(), commits, runs, mock(ChatRunApplicationService.class),
+                    mock(ChatStreamApplicationService.class), mock(RuntimeBindingApplicationService.class));
+            service.setTurnObservationSupport(observation.turns);
+            service.setAgentObservationSupport(observation.recorder);
+            try {
+                var result = service.callback(new DomainAgentAsyncTaskCallbackCommand(base.id(), "COMPLETED", "APPEND",
+                        List.of(new ObjectMapper().readTree("{\"" + field + "\":\"value\"}")), null))
+                        .block(Duration.ofSeconds(5));
+                assertThat(result).isNotNull();
+                assertThat(result.accepted()).isTrue();
+                ObservationTestFixture.await(() -> observation.calls.stream()
+                        .anyMatch(call -> "FINISHED".equals(call.status())));
+                assertThat(observation.calls).filteredOn(call -> "FINISHED".equals(call.status())).singleElement()
+                        .satisfies(call -> {
+                            assertThat(call.outcome()).isEqualTo("CALLBACK_APPLIED");
+                            assertThat(call.firstBusinessFrameAt() != null).isEqualTo(firstFrame);
+                            assertThat(call.firstBusinessFrameLatencyMs()).isEqualTo(firstFrame ? 0L : null);
+                        });
+                assertThat(observation.turns.context(base.id())).isNull();
+            } finally { service.closeScheduler(); }
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void callbackCommitFailureReleasesOnlyItsScopeAndNeverTheExecutingOwner(boolean executingOwner) {
         try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {

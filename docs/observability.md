@@ -89,10 +89,14 @@ WAIT和异步等待不结束Trace；最终完成、失败或取消结束Trace。
 - Trace总耗时：`max(0, finished_at - started_at)`，含准备、重试、人工及异步等待；WAIT不填写结束时间。
 - Observation总耗时：本次实际尝试从连接调用边界到结束，包含连接获取和握手，不包含此前准备/排队或下次重试退避。
 - 同进程使用单调时钟计算耗时；跨实例恢复用可信UTC起点。UTC回拨时不会覆盖本机已采到的首帧；负时差钳制为0。
-- Trace默认首帧：非空正文delta/snapshot、业务卡片、引用，包括本地生成的澄清、模糊候选和问卷卡片。
+- DomainAgent默认首帧仅包括`content`产生的非空白正文，以及`runtime.card`顶层非空的`diyCardScene/contentAgent`。正文按现有`sourceType=domain-agent-content`的`message.delta`识别，不要求payload重复携带`content`。
+- 两类卡片字段接受非空白字符串、非空对象或非空数组；缺失、null、空字符串/空白、空对象/数组、数值和布尔值不计入。仅判断顶层容器是否非空，不递归校验内容，不识别大小写别名或嵌套同名字段。
+- DomainAgent的纯`<think>`内容、问卷、引用、单独`cardUrl`、推荐问及其他卡片不触发首帧；混合卡片只检查标准化器已保留的上述两类字段，不改变原始帧解析、字段透传或业务结果处理。异步回调复用同一规则。
+- Relay和本地业务事件保持原首帧口径：非空正文delta/snapshot、业务卡片、引用，包括本地生成的Intent澄清、模糊候选及问卷回答确认等交互卡片；因此整轮Trace并非统一为“只计正文”。DomainAgent规则同时用于其Observation和Trace采样。
 - 思考、工具、心跳、进度、元数据、纯终态及带`candidateSwitchReplay`标记的历史回放不计入首帧。
 - Intent最终结果只计入自身Observation首帧，普通意图命中不计入Trace首帧。两级分类独立，不取各调用延迟的最小值。
 - 首帧记录接收/接受事件时的采样，不代表数据库提交或前端已收到；没有可靠样本则为空，不虚构0。首帧不单独写SQL，随阶段/结束快照保存。
+- 首帧一旦采集不因续跑或后续输出重置。规则调整只影响后续采样，不回填旧记录，也不重新计算已持久化的首帧；自定义`FirstBusinessFrameClassifier`仍可替换默认策略。
 
 ## 表定义
 

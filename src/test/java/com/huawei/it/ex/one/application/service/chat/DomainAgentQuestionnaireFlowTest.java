@@ -318,9 +318,14 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
         return "data: " + frame + "\n\n";
     }
 
-    @Test
-    void observationContextSurvivesQuestionnaireContinuationWithoutPublicPayloadChanges() {
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void observationContextSurvivesQuestionnaireContinuationWithoutPublicPayloadChanges(
+            boolean priorContent, boolean noStoreContinuation) {
         try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            if (!priorContent) {
+                initialFrames = "data: {\"cardUrl\":\"web.js\"}\n\n" + prompt("q1");
+            }
             f.wire(service);
             var startResult = service.startRun(user, new ChatCommand(null, null, null, null, null,
                     "web", "original question", List.of(), Map.of(), "DOMAIN_AGENT", "skill-a",
@@ -332,17 +337,31 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
                     waiting.requestPayload(), user.tenantId(), user.ownerUserId());
             assertThat(context).isNotNull();
             assertThat(context.rootUserMessageId()).isEqualTo(waiting.userMessageId());
+            assertThat(context.firstBusinessFrameAt() != null).isEqualTo(priorContent);
             assertThat(query.get().turnTraceContext().traceId()).isEqualTo(context.traceId());
+            if (noStoreContinuation) {
+                runs.save(runs.runs.get(waiting.sourceRunId()).withMetadata(new AgentDataPersistenceState("hidden")
+                        .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER)
+                        .markRuntimeDispatchStarted().runMetadataOverlay()));
+            }
+            f.advance(Duration.ofSeconds(5));
             List<ChatEvent> result = respond(waiting, true, Map.of("label", Map.of("期间", "本月")));
             var resumed = submitted.get().turnTraceContext();
             assertThat(resumed.traceId()).isEqualTo(context.traceId());
             assertThat(resumed.runId()).isNotEqualTo(context.runId());
             assertThat(resumed.runOrdinal()).isEqualTo(2);
             assertThat(resumed.rootUserMessageId()).isEqualTo(context.rootUserMessageId());
+            // 本地回答确认卡片仍按原口径采样；它在下游续跑请求前提交，不属于DomainAgent输出。
+            assertThat(resumed.firstBusinessFrameAt()).isEqualTo(priorContent
+                    ? context.firstBusinessFrameAt() : f.clock.instant());
+            assertThat(resumed.retainText()).isEqualTo(!noStoreContinuation);
             assertThat(result.getLast().type()).isEqualTo("run.completed");
             com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
                     () -> f.traces.stream().anyMatch(t -> "COMPLETED".equals(t.status())));
             assertThat(f.traces.stream().map(t -> t.traceId()).distinct()).containsExactly(context.traceId());
+            assertThat(f.traces).filteredOn(trace -> "COMPLETED".equals(trace.status())).singleElement()
+                    .satisfies(trace -> assertThat(trace.firstBusinessFrameLatencyMs())
+                            .isEqualTo(priorContent ? context.firstBusinessFrameLatencyMs() : 5000L));
             assertThat(events.events.toString()).doesNotContain("_turnObservation", context.traceId());
             assertThat(messages.messages.toString()).doesNotContain("_turnObservation", context.traceId());
         }

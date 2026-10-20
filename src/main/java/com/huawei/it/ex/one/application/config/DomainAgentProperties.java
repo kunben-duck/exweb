@@ -9,6 +9,7 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.Map;
 
 /**
  * 财经领域 DomainAgent 指定调用配置。
@@ -25,6 +26,10 @@ public class DomainAgentProperties {
 
     /** 是否启用 DomainAgent 指定调用能力。 */
     private boolean enabled = false;
+    /** 是否仅在历史响应中补齐移动端卡片地址；不依赖 DomainAgent 调用总开关。 */
+    private boolean historyMobileCardFallbackEnabled = false;
+    /** 按 assistant 消息 skillId 精确匹配的移动端卡片地址，由各环境配置。 */
+    private Map<String, String> historyMobileCardUrls = Map.of();
     /** DomainAgent 服务基础地址。 */
     private String baseUrl = "";
     /** DomainAgent HTTP 请求 Referer；为空时回退到 baseUrl。 */
@@ -81,6 +86,14 @@ public class DomainAgentProperties {
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    public boolean isHistoryMobileCardFallbackEnabled() { return historyMobileCardFallbackEnabled; }
+    public void setHistoryMobileCardFallbackEnabled(boolean enabled) {
+        this.historyMobileCardFallbackEnabled = enabled;
+    }
+    public Map<String, String> getHistoryMobileCardUrls() { return historyMobileCardUrls; }
+    public void setHistoryMobileCardUrls(Map<String, String> urls) {
+        this.historyMobileCardUrls = urls == null ? Map.of() : urls;
+    }
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
     public String getReferer() { return referer; }

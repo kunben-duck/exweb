@@ -507,6 +507,22 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `partOrder` | 同一 assistant 消息内的展示顺序。 |
 | `createdAt` | part 创建时间。 |
 
+#### 历史移动卡片地址补齐
+
+可选开关 `FINANCEEX_DOMAIN_AGENT_HISTORY_MOBILE_CARD_FALLBACK_ENABLED` 默认 false。
+开启后，服务端使用 `financeex.domain-agent.history-mobile-card-urls.<skillId>` 环境映射，
+在 messages、messages/tree 和 messages/{messageId}/variants 返回的 assistant Parts 中补齐移动地址。
+技能取自该消息的服务端 `metadataJson.skillId`，不取请求参数、不查询当前 Binding、不比较 `cardUrl` 地址。
+
+仅处理 `partType=CARD`、`payload.source=domain-agent` 且 `cardUrl` 为非空白字符串的卡片。
+`mobileCardUrl` 缺失、null 或空白时才补齐；已有非空值及错误类型不覆盖。
+卡片 `domainAgentId` 缺失/null/空白时按消息技能处理；明确冲突或类型错误时跳过。
+无匹配配置、空地址或非法消息 metadata 均保持原响应。没有一个月时间限制，旧消息同样适用。
+
+这是只读展示兜底，不修改原 Parts、Event 或缓存对象，也不影响实时 WS、Resume、分享详情和新旧分享快照。
+配置发布后重启实例生效；停用独立开关后原响应恢复，移动端仍须将 `mobileCardUrl` 视为可选字段。
+配置方式及 SIT 示例见 [README](../README.md)。本功能不保证外部脚本可访问或移动端渲染兼容。
+
 ### `ChatMessageTreeDto`
 
 | 字段 | 含义 |

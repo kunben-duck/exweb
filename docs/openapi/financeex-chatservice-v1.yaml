@@ -4118,6 +4118,10 @@ components:
         回放节点按candidateSwitchReplay.originRunId关联原Run；候选切换标识兜底使用sourceRunId。
         每个来源Run只标注最后一个对应命中节点；没有节点不虚构Part。
         此字段只在返回DTO时装配，不写原Parts、Event或sequence，WebSocket和Resume不增加反馈事件。
+        可选的历史移动卡片兜底仅作用于messages、messages/tree和messages/{messageId}/variants：
+        按assistant metadataJson.skillId的服务端配置，为含非空cardUrl的DomainAgent CARD补齐缺失/null/空白的mobileCardUrl。
+        不比较cardUrl、不覆盖已有地址，卡片domainAgentId明确冲突时跳过；不写库，不改变实时流、Resume或分享响应。
+        默认关闭且映射为空，关闭后恢复原响应；mobileCardUrl始终为可选字段。
       required: [partId, messageId, partType, payload, createdAt]
       properties:
         partId:

@@ -397,6 +397,8 @@ data: {"cardUrl":"https://example.com/web/card.js","mobileCardUrl":"https://exam
 
 - 两个地址同时保留；不根据请求 `channel` 替换 `cardUrl`，服务端不加载卡片地址。
 - `mobileCardUrl` 缺失或 null 时省略；字符串原样保留，包括空字符串。移动端优先使用有效的移动端地址，缺失或无效时沿用原卡片处理策略。
+- 历史消息接口可通过独立默认关闭的[只读补齐配置](frontend-integration.md#历史移动卡片地址补齐)，
+  按消息 skillId 为缺少移动地址的 URL 卡片提供环境兜底；该配置不改变本节的下游标准化、实时事件、Resume 或分享。
 - 新字段是附加信息，不加入 `cardSources`，不改变原有分类；混合卡片仍沿用原规则。仅有 `mobileCardUrl` 不会新增 URL 卡片识别。
 - FULL 模式下通过现有事件及 Part 保存机制进入历史、Event Resume 和新建分享快照；no-store 仍只实时推送普通业务卡片。异步回调复用同一标准化规则。
 - 不回填旧历史或已有分享快照；移动端脚本的可访问性及实际渲染需前端联调。

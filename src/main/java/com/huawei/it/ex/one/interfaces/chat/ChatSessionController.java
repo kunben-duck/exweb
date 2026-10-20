@@ -93,12 +93,14 @@ public class ChatSessionController {
     private final PermissionChecker permissionChecker;
     private final ChatMessageVersionViewAssembler versionViewAssembler;
     private final IntentFeedbackViewAssembler intentFeedbackViewAssembler;
+    private final HistoryMobileCardViewAssembler historyMobileCardViewAssembler;
 
     @Autowired
     public ChatSessionController(ChatSessionFacade facade, ChatFeedbackApplicationService feedbackService,
                                  ChatRunApplicationService chatRunService, AuthContextProvider auth,
                                  PermissionChecker permissionChecker, ChatMessageVersionViewAssembler versionViewAssembler,
-                                 IntentFeedbackViewAssembler intentFeedbackViewAssembler) {
+                                 IntentFeedbackViewAssembler intentFeedbackViewAssembler,
+                                 HistoryMobileCardViewAssembler historyMobileCardViewAssembler) {
         this.facade = facade;
         this.feedbackService = feedbackService;
         this.chatRunService = chatRunService;
@@ -106,6 +108,15 @@ public class ChatSessionController {
         this.permissionChecker = permissionChecker;
         this.versionViewAssembler = versionViewAssembler;
         this.intentFeedbackViewAssembler = intentFeedbackViewAssembler;
+        this.historyMobileCardViewAssembler = historyMobileCardViewAssembler;
+    }
+
+    public ChatSessionController(ChatSessionFacade facade, ChatFeedbackApplicationService feedbackService,
+                                 ChatRunApplicationService chatRunService, AuthContextProvider auth,
+                                 PermissionChecker permissionChecker, ChatMessageVersionViewAssembler versionViewAssembler,
+                                 IntentFeedbackViewAssembler intentFeedbackViewAssembler) {
+        this(facade, feedbackService, chatRunService, auth, permissionChecker, versionViewAssembler,
+                intentFeedbackViewAssembler, null);
     }
 
     public ChatSessionController(ChatSessionFacade facade, ChatFeedbackApplicationService feedbackService,
@@ -571,7 +582,7 @@ public class ChatSessionController {
                 message.editedFromMessageId(),
                 message.regeneratedFromMessageId(),
                 message.metadataJson(),
-                toPartDtos(message.parts()),
+                toPartDtos(message),
                 toAttachmentDtos(message.attachments()),
                 feedback == null ? null : toFeedbackDto(feedback),
                 versionInfo,
@@ -579,11 +590,12 @@ public class ChatSessionController {
         );
     }
 
-    private List<ChatMessagePartDto> toPartDtos(List<ChatMessagePart> parts) {
+    private List<ChatMessagePartDto> toPartDtos(ChatMessage message) {
+        List<ChatMessagePart> parts = message.parts();
         if (parts == null || parts.isEmpty()) {
             return List.of();
         }
-        return parts.stream()
+        List<ChatMessagePartDto> views = parts.stream()
                 .map(part -> new ChatMessagePartDto(
                         part.id(),
                         part.messageId(),
@@ -601,6 +613,7 @@ public class ChatSessionController {
                         part.createdAt()
                 ))
                 .toList();
+        return historyMobileCardViewAssembler == null ? views : historyMobileCardViewAssembler.enrich(message, views);
     }
 
     private List<ChatMessageAttachmentDto> toAttachmentDtos(List<ChatMessageAttachment> attachments) {

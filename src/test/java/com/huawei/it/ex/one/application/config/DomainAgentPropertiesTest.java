@@ -34,6 +34,8 @@ class DomainAgentPropertiesTest {
             DomainAgentProperties properties = context.getBean(DomainAgentProperties.class);
 
             assertThat(properties.isRefusalAutoSwitchEnabled()).isFalse();
+            assertThat(properties.isHistoryMobileCardFallbackEnabled()).isFalse();
+            assertThat(properties.getHistoryMobileCardUrls()).isEmpty();
             assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(120));
             assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
             assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofMinutes(15));
@@ -111,6 +113,35 @@ class DomainAgentPropertiesTest {
                 "FINANCEEX_RELAY_QUESTIONNAIRE_WAIT_TIMEOUT", "90s"));
 
         assertThat(properties.getQuestionnaireWaitTimeout()).isEqualTo(Duration.ofSeconds(45));
+    }
+
+    @Test
+    void bindsHistoryCardMapFromFullConfigurationCenterPropertyNames() {
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.history-mobile-card-urls.d470445f950243c58a46d0582cbc5981"
+                                + "=https://example.com/mobile/knowledge.js",
+                        "financeex.domain-agent.history-mobile-card-urls.skill-b=https://example.com/mobile/b.js")
+                .run(context -> {
+                    DomainAgentProperties properties = context.getBean(DomainAgentProperties.class);
+                    assertThat(properties.isHistoryMobileCardFallbackEnabled()).isFalse();
+                    assertThat(properties.getHistoryMobileCardUrls()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                            "d470445f950243c58a46d0582cbc5981", "https://example.com/mobile/knowledge.js",
+                            "skill-b", "https://example.com/mobile/b.js"));
+                });
+    }
+
+    @Test
+    void applicationYamlBindsIndependentHistoryFallbackSwitchAndExternalMap() throws IOException {
+        for (boolean enabled : new boolean[]{true, false}) {
+            DomainAgentProperties properties = bindApplicationYaml(Map.of(
+                    "FINANCEEX_DOMAIN_AGENT_HISTORY_MOBILE_CARD_FALLBACK_ENABLED", Boolean.toString(enabled),
+                    "financeex.domain-agent.history-mobile-card-urls.skill-a", "https://example.com/mobile/a.js"));
+            assertThat(properties.isHistoryMobileCardFallbackEnabled()).isEqualTo(enabled);
+            assertThat(properties.getHistoryMobileCardUrls())
+                    .containsEntry("skill-a", "https://example.com/mobile/a.js");
+            assertThat(properties.isEnabled()).isFalse();
+        }
+        assertThat(bindApplicationYaml(Map.of()).isHistoryMobileCardFallbackEnabled()).isFalse();
     }
 
     @Test

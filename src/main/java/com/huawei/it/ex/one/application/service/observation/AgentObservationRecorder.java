@@ -105,20 +105,23 @@ public final class AgentObservationRecorder {
             });
         }
 
-        public synchronized void event(ChatEvent event) {
-            safe(() -> {
-                if (finished || event == null || event.payload() == null) { return; }
-                // 首帧策略可替换且失败开放，不能阻断独立的拒答/问卷结果识别。
+        public void event(ChatEvent event) {
+            if (context == null) { return; }
+            synchronized (this) {
                 safe(() -> {
-                    var classification = recorder.classifier.classify(event);
-                    if (classification.observation()) { firstFrame(); }
-                    if (classification.turn()) { recorder.turns.sample(context.turn().runId(), false, null); }
+                    if (finished || event == null || event.payload() == null) { return; }
+                    // 首帧策略可替换且失败开放，不能阻断独立的拒答/问卷结果识别。
+                    safe(() -> {
+                        var classification = recorder.classifier.classify(event);
+                        if (classification.observation()) { firstFrame(); }
+                        if (classification.turn()) { recorder.turns.sample(context.turn().runId(), false, null); }
+                    });
+                    Map<String, Object> payload = event.payload();
+                    String session = text(payload.get("runtimeSessionId"));
+                    if (session != null) { runtimeSessionId = session; }
+                    semanticOutcome(event, payload);
                 });
-                Map<String, Object> payload = event.payload();
-                String session = text(payload.get("runtimeSessionId"));
-                if (session != null) { runtimeSessionId = session; }
-                semanticOutcome(event, payload);
-            });
+            }
         }
 
         private void semanticOutcome(ChatEvent event, Map<String, Object> payload) {
@@ -155,10 +158,13 @@ public final class AgentObservationRecorder {
         }
 
         /** Intent最终结果只计入该调用首帧，不将普通路由结果当作问答首帧。 */
-        public synchronized void intentResult() {
-            safe(() -> {
-                if (recorder.classifier.classifyIntentResult().observation()) { firstFrame(); }
-            });
+        public void intentResult() {
+            if (context == null) { return; }
+            synchronized (this) {
+                safe(() -> {
+                    if (recorder.classifier.classifyIntentResult().observation()) { firstFrame(); }
+                });
+            }
         }
 
         private void firstFrame() {
@@ -168,35 +174,44 @@ public final class AgentObservationRecorder {
             }
         }
 
-        public synchronized void outcome(String value) {
-            safe(() -> {
-                if (!finished && (outcome == null || "ASYNC_CALLBACK".equals(context.operation()))) { outcome = value; }
-            });
+        public void outcome(String value) {
+            if (context == null) { return; }
+            synchronized (this) {
+                safe(() -> {
+                    if (!finished && (outcome == null || "ASYNC_CALLBACK".equals(context.operation()))) { outcome = value; }
+                });
+            }
         }
 
-        public synchronized void error(Throwable error) {
-            safe(() -> {
-                if (finished || outcome != null && !"COMPLETED".equals(outcome)) { return; }
-                outcome = "ERROR";
-                Throwable current = error;
-                for (int depth = 0; current != null && depth < 16; depth++, current = current.getCause()) {
-                    if (current instanceof java.util.concurrent.TimeoutException
-                            || current.getClass().getSimpleName().contains("Timeout")) { outcome = "TIMEOUT"; break; }
-                }
-            });
+        public void error(Throwable error) {
+            if (context == null) { return; }
+            synchronized (this) {
+                safe(() -> {
+                    if (finished || outcome != null && !"COMPLETED".equals(outcome)) { return; }
+                    outcome = "ERROR";
+                    Throwable current = error;
+                    for (int depth = 0; current != null && depth < 16; depth++, current = current.getCause()) {
+                        if (current instanceof java.util.concurrent.TimeoutException
+                                || current.getClass().getSimpleName().contains("Timeout")) { outcome = "TIMEOUT"; break; }
+                    }
+                });
+            }
         }
 
-        public synchronized void finish(SignalType signal) {
-            safe(() -> {
-                if (finished) { return; }
-                finished = true;
-                if (outcome == null) {
-                    outcome = signal == SignalType.CANCEL ? "CANCELLED"
-                            : signal == SignalType.ON_ERROR ? "ERROR" : "STREAM_ENDED";
-                }
-                AgentObservationSnapshot snapshot = snapshot(recorder.clock.instant());
-                recorder.writer.afterCommit(() -> recorder.writer.observation(snapshot));
-            });
+        public void finish(SignalType signal) {
+            if (context == null) { return; }
+            synchronized (this) {
+                safe(() -> {
+                    if (finished) { return; }
+                    finished = true;
+                    if (outcome == null) {
+                        outcome = signal == SignalType.CANCEL ? "CANCELLED"
+                                : signal == SignalType.ON_ERROR ? "ERROR" : "STREAM_ENDED";
+                    }
+                    AgentObservationSnapshot snapshot = snapshot(recorder.clock.instant());
+                    recorder.writer.afterCommit(() -> recorder.writer.observation(snapshot));
+                });
+            }
         }
 
         private AgentObservationSnapshot snapshot(Instant end) {

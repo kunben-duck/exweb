@@ -50,6 +50,7 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 | 会话详情 | `GET` | `/v1/chat/sessions/{sessionId}` | 查询单个会话元数据 |
 | 标记会话已读 | `POST` | `/v1/chat/sessions/{sessionId}/read` | 提交已经实际展示到的 `readThroughSeq`，返回最新会话水位 |
 | 历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path 的最近一页；使用 `nextCursor`向前翻页并 prepend，消息带轻量 `versionInfo` 和附件快照 |
+| 运营历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages/operations` | 仅限Jalor独立授权；跨租户、跨用户读取未删除会话，分页及响应复用messages；不开放其他接口权限 |
 | 消息树视图 | `GET` | `/v1/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试，节点消息同样带附件快照 |
 | 消息版本详情 | `GET` | `/v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
 | 切换路径 | `POST` | `/v1/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
@@ -216,6 +217,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 为上一页游标，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo`，并原样返回 `metadataJson` 字符串 | 首页取最近消息；后续页 prepend。cursor 固定首次 leaf，损坏、跨会话或 leaf 不匹配返回400 |
+| `GET /chat/sessions/{sessionId}/messages/operations` | Path：`sessionId`；Query与messages相同，不接受目标tenantId/userId | 同messages；关联数据按数据库中的目标会话归属读取 | Jalor运营授权；跨归属、只读；DELETED拒绝，不标记已读 |
 | `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system 或下游工具原始节点 |
 | `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 查询完整候选内容和排障；普通聊天页优先使用 `/messages` 的 `versionInfo` |
 | `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 持久化当前 active leaf；UI 切换可先用 `/messages?leafMessageId=` 刷新，不必阻塞等待该接口 |
@@ -258,6 +260,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 为上一页返回值。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 首页返回路径最近一页；后续页读取更早消息并 prepend。cursor 固定首次 leaf，后续可调整 limit。 |
+| `GET /v1/chat/sessions/{sessionId}/messages/operations` | 运营跨归属历史回看。 | 同messages，不提交目标归属。 | 同`ChatMessagePageDto`。 | 仅Jalor独立授权可用；ACTIVE/ARCHIVED可读，DELETED拒绝；不合并分支。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
 | `POST /v1/chat/sessions/{sessionId}/path` | 用户选择某个历史版本作为当前路径。 | Path：`sessionId`；JSON body：`leafMessageId`。 | `ChatSessionDto`。 | 只切换 `currentLeafMessageId`，不创建 run。 |
@@ -324,6 +327,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `GET /v1/chat/sessions/{sessionId}` | Path：`session_xxx`。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | Body：`{"readThroughSeq":63252}`；使用已经实际展示的会话水位或实时终态 sequence。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | Query：`?limit=50`；查看指定版本路径时传 `?leafMessageId=msg_xxx&limit=50`。 |
+| `GET /v1/chat/sessions/{sessionId}/messages/operations` | Query：`?limit=50`；指定路径及翻页与messages相同；仅经运营授权网关调用。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/tree` | Path：`session_xxx`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`session_xxx`、`msg_xxx`。 |
 | `POST /v1/chat/sessions/{sessionId}/path` | Body：`{"leafMessageId":"msg_leaf_xxx"}`。 |
@@ -1190,6 +1194,28 @@ curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?cursor=opaque_
 所以翻页过程中即使会话收到新消息或切换 current leaf，旧 cursor 仍沿原路径读取。后续页允许调整
 `limit`；若同时携带 `leafMessageId`，它必须与 cursor 固定的 leaf 一致。损坏、跨会话、起点不存在或
 leaf 不匹配均返回 `400 BAD_REQUEST`。
+
+**运营历史分页（独立授权）：**
+
+```http
+GET /v1/chat/sessions/session_xxx/messages/operations?limit=50
+GET /v1/chat/sessions/session_xxx/messages/operations?leafMessageId=msg_older_leaf&limit=50
+GET /v1/chat/sessions/session_xxx/messages/operations?cursor=opaque_cursor&limit=50
+```
+
+- 只新增此历史分页入口，不新增运营会话列表或详情。可跨租户、跨用户读取ACTIVE/ARCHIVED；
+  会话不存在或DELETED沿用`400 BAD_REQUEST`。原messages的归属限制不变。
+- 默认50条、最多200条；非正数回退50、超过200按200处理，与原messages一致。
+  不传leaf读当前路径，指定leaf读对应分支，不合并全部分支；空历史返回空`items`。
+- 响应使用下方相同的`ChatMessagePageDto`，包括Parts、附件快照、版本、普通反馈、assistant来源、
+  意图反馈及启用的移动卡片地址补齐。所有关联读取使用数据库中的目标归属，不接受目标tenantId/userId。
+- 不自动调用已读、path、分享等写接口；本次授权不放开WS、Resume、附件下载或其他会话接口。
+  读取不修改未读水位、Run、Binding或消息路径。
+- **发布前必须配置Jalor对该GET路径的独立运营授权，并阻断绕过网关的访问。**
+  不可让普通聊天用户的通配规则放行；当前`PermissionChecker`不是运营权限校验。
+  后端保留操作者身份解析，日志只记录操作者、目标归属及sessionId，不记录正文或凭据。
+- 相比原messages多一次Session主键查询，其余分页与批量装配复用，不新增COUNT或逐消息查询。
+  网关授权和目标库性能仍需部署环境验收，不作为普通聊天页替代入口。
 
 响应示例：
 

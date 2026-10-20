@@ -1461,6 +1461,63 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /v1/chat/sessions/{sessionId}/messages/operations:
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: listOperationsChatMessages
+      summary: 运营跨归属查询会话历史消息
+      description: |
+        仅供 Jalor 单独授权的运营人员使用。允许跨租户、跨用户读取 ACTIVE/ARCHIVED 会话，
+        DELETED 或不存在的会话返回 400。调用方身份仍正常解析；目标租户和用户仅从数据库
+        Session 主键查询取得，不接受客户端指定，不替换当前操作者身份。
+
+        参数、排序、游标与响应均复用普通 messages：不传 leafMessageId 查询当前路径，
+        指定 leaf 查询该分支，不合并所有分支。首页取最近一页，后续按 nextCursor 向前翻页；
+        每页正序，前端 prepend。cursor 固定首次 leaf，后续页可省略 leafMessageId，
+        若显式传入则须匹配；损坏、跨会话、起点失效或 leaf 不匹配返回 400。
+        Parts、附件快照、versionInfo、普通反馈、assistant 来源、意图反馈及启用的历史移动卡片补齐
+        均按目标会话归属装配。无总数查询，不标记已读，不改变路径或业务状态。
+
+        上线前必须在 Jalor 对此 GET 路径独立授权并阻断绕过网关的访问，不能沿用普通用户通配放行。
+        当前 PermissionChecker 不提供运营权限校验。此权限不扩展到 session 列表/详情、
+        WS、Resume、附件下载或任何写接口。服务只记录操作者、目标归属及 sessionId 的访问日志。
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: leafMessageId
+          in: query
+          required: false
+          description: 指定需要读取的消息树叶子；为空使用会话 current leaf
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          description: 上一页返回的不透明游标；用于读取同一固定 leaf 路径上的更早消息
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: 沿用 messages 规则；非正数回退 50，超过 200 按 200 处理
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: 与普通 messages 相同的历史消息页，空会话返回空 items
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatMessagePage'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /v1/chat/sessions/{sessionId}/messages/tree:
     get:
       tags: [Chat Sessions & Messages]

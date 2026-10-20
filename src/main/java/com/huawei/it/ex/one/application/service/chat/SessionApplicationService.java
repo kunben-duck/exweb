@@ -209,6 +209,17 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
+    public ChatSession getSessionForOperations(UserContext operator, String sessionId) {
+        checkChatUser(operator);
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("sessionId 不能为空");
+        }
+        return sessionRepository.findById(sessionId)
+                .map(this::ensureNotDeleted)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + sessionId));
+    }
+
+    @Override
     public ChatSession markSessionRead(UserContext user, String sessionId, long readThroughSeq) {
         checkChatUser(user);
         if (readThroughSeq < 0L) {

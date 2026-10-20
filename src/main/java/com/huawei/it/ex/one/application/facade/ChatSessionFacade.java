@@ -54,6 +54,12 @@ public interface ChatSessionFacade {
     ChatSession getSession(UserContext user, String sessionId);
 
     /**
+     * 运营历史读取入口：跨归属读取未删除会话，仅供 Jalor 独立授权的运营接口使用。
+     * 返回的归属用于后续只读查询，不替换当前操作者身份。
+     */
+    ChatSession getSessionForOperations(UserContext operator, String sessionId);
+
+    /**
      * 将会话已读水位推进到前端实际展示的服务端消息 sequence。
      */
     ChatSession markSessionRead(UserContext user, String sessionId, long readThroughSeq);

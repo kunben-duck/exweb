@@ -1,6 +1,6 @@
 # 功能场景、资源状态与接口索引
 
-按需阅读：[12场景与24张时序图](#flows) → [资源生命周期及状态转换](#resources) → [45个HTTP操作与非REST入口](#interfaces)。资源表统一说明当前资源/状态口径；各场景的源码索引用于核对具体方法和边界。
+按需阅读：[12场景与24张时序图](#flows) → [资源生命周期及状态转换](#resources) → [46个HTTP操作与非REST入口](#interfaces)。资源表统一说明当前资源/状态口径；各场景的源码索引用于核对具体方法和边界。
 
 <a id="flows"></a>
 
@@ -39,7 +39,7 @@ DB是Chat持久化事实源；Chat使用Redis做派生缓存和Pub/Sub分发。�
 | S11 | 短期记忆、RouteMemory、标题、Intent记录分别关闭/启用；缓存miss；旁路超时/排队/迟到提交 | [S11可选旁路](#s11) |
 | S12 | 心跳、过期租约、初始化孤儿、Interaction对账、async到期、缓存同步；滚动发布、进程退出、依赖切换 | [S12后台与部署](#s12) |
 
-接口逐项索引见本页[45个HTTP操作与非REST入口](#interfaces)；REST 的同一路径不同方法是不同操作，不能用路径去重替代接口覆盖。全局身份解析、参数绑定和错误封装在每个 HTTP 入口成立；以下图省略其重复方法箭头，不省略其网关故障影响。
+接口逐项索引见本页[46个HTTP操作与非REST入口](#interfaces)；REST 的同一路径不同方法是不同操作，不能用路径去重替代接口覆盖。全局身份解析、参数绑定和错误封装在每个 HTTP 入口成立；以下图省略其重复方法箭头，不省略其网关故障影响。
 
 <a id="flows--部署故障如何进入业务场景"></a>
 #### 部署故障如何进入业务场景
@@ -1171,6 +1171,12 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 
 会话重命名新增POST并保留PATCH后，45个handler对应45个唯一HTTP操作；两个重命名方法共用一个handler，原索引20推荐POST，兼容PATCH单列为20P，其他编号不变。`POST /v1/documents`有Servlet/Reactive互斥实现，生产Servlet只计一次。WS不是REST操作；Actuator管理端点另列。
 
+新增运营历史分页后共46个唯一HTTP操作，新增索引15O，保留原编号。15O先通过Session主键读取目标归属，
+再复用15的分页及关联批量读取，比15多一次Session点查；不加COUNT、锁或写入。
+它允许跨租户/用户读取ACTIVE和ARCHIVED，但拒绝DELETED。Jalor必须对新路径单独授权且阻断绕过网关的访问，
+不能依赖当前PermissionChecker或普通聊天通配放行。操作者身份保持不变，关联读取只使用数据库目标归属；
+不放开其他session、WS、Resume、附件下载及写接口。网关权限和真实数据库性能另行验收。
+
 公共处理：企业身份和权限检查后进入Controller；多数阻塞服务以全局boundedElastic执行，MVC异步返回。反馈、候选鉴权、Event与回调另有专用资源。参数错误通常400；身份缺失401；**资源越权沿现有协议为HTTP200、body.code=ACCESS_DENIED**，前端不能只检查response.ok。运行已受理后的错误多为Event，不再改变早已返回的启动HTTP状态。
 
 下表的S编号链接到本页双层时序图、场景差异及源码入口。资源获取、释放和作用域见[资源表](#resources)，配置默认值见[application.yml](../../../src/main/resources/application.yml)；风险和整改分别见[当前登记](risks.md#risk-register)及[加固工作包](risks.md#hardening)。
@@ -1178,7 +1184,7 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 物理入口为ALB文根→Jalor→Chat；文根、身份与转发策略按实际配置验收。操作01依次关联[S01受理](#s01)、[S02路由](#s02)、[S03输出](#s03)，CONTINUE_INTERACTION和操作02另看[S04](#s04)；操作03看[S05](#s05)，异步回调看[S06](#s06)，操作06/07/08及WS看[S07](#s07)与[S12治理](#s12)。标题不是新增接口，触发来自操作01中合格的NEXT/EDIT，见[S11标题调度及提交](#s11)；结果由操作11/12/13等会话读取返回。
 
 <a id="interfaces--44个操作逐项覆盖"></a>
-### 45个操作逐项覆盖
+### 46个操作逐项覆盖
 
 | ID | 方法与本地路径 | 视图/资源与差异 | 前端成功、失败及恢复规则 | 风险 |
 |---|---|---|---|---|
@@ -1197,6 +1203,7 @@ WCM、ALB、ADS及底层数据库/Redis故障切换能力都必须取得平台E�
 | 13 | `GET /v1/chat/sessions/{sessionId}` | [S08](#s08)；归属会话读取 | 无Run结果查询；不是主流程状态替代 | R02 |
 | 14 | `POST /v1/chat/sessions/{sessionId}/read` | [S08](#s08)；已读水位更新 | 以已消费水位标记，不能把建立WS连接视为已读所有消息 | R02 |
 | 15 | `GET /v1/chat/sessions/{sessionId}/messages` | [S08](#s08)；当前路径分页、Parts/附件/版本与反馈批量装配 | 当前assistant版本；intentFeedback在DTO关联，失败省略；普通LIKE/DISLIKE查询错误不降级 | R11 R17 |
+| 15O | `GET /v1/chat/sessions/{sessionId}/messages/operations` | [S08](#s08)；多一次Session主键点查，之后复用15及目标归属；记录运营访问日志 | Jalor独立授权；跨归属只读、DELETED拒绝；分页/分支/错误语义同15，不标记已读 | R11 R17；须验收网关隔离 |
 | 16 | `GET /v1/chat/sessions/{sessionId}/messages/tree` | [S08](#s08)；全树及子数据 | 不能频繁刷新大树代替分页；无总节点/字节保护 | R11 |
 | 17 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | [S08](#s08)；sibling及关联数据，不装配versionInfo | 可查看A/B，展示不等于已切换当前path | R11 |
 | 18 | `POST /v1/chat/sessions/{sessionId}/path` | [S08](#s08)；归属/未删除/消息归属检查，更新leaf；无active检查或CAS | 后续消息/候选操作基于新leaf；运行中切换有竞态，前端应避免 | R02 R08 R24 |

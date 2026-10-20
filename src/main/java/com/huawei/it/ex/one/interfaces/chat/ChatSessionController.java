@@ -303,19 +303,45 @@ public class ChatSessionController {
                                                   @RequestParam(value = "cursor", required = false) String cursor,
                                                   @RequestParam(value = "limit", defaultValue = "50") int limit) {
         UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> readMessagePage(user, sessionId, leafMessageId, cursor, limit))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 运营跨归属历史分页。Jalor 必须单独授权此路径并阻断绕过网关的访问；
+     * 通用 PermissionChecker 不提供运营权限校验。
+     */
+    @GetMapping("/{sessionId}/messages/operations")
+    public Mono<ChatMessagePageDto> operationsMessages(@PathVariable("sessionId") String sessionId,
+                                                      @RequestParam(value = "leafMessageId", required = false) String leafMessageId,
+                                                      @RequestParam(value = "cursor", required = false) String cursor,
+                                                      @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        UserContext operator = resolveChatUser();
         return Mono.fromCallable(() -> {
-                    ChatMessagePage page = facade.listMessages(user, sessionId, leafMessageId, cursor, limit);
-                    Map<String, ChatMessageVersionInfoDto> versionInfos = page.items().isEmpty()
-                            ? Map.of()
-                            : versionViewAssembler.assemblePage(
-                                    page.items(),
-                                    facade.listMessageVersionCandidates(
-                                            user,
-                                            sessionId,
-                                            page.items().stream().map(ChatMessage::id).toList()));
-                    return toMessagePageDto(user, sessionId, page, versionInfos);
+                    ChatSession session = facade.getSessionForOperations(operator, sessionId);
+                    // 仅用于本次历史读取的归属上下文，不写入认证上下文或用于任何写操作。
+                    UserContext owner = new UserContext(session.tenantId(), session.userId(), session.userId());
+                    log.info("Operations message history access: operatorTenantId={} operatorUserId={} "
+                                    + "targetTenantId={} targetUserId={} sessionId={}",
+                            operator.tenantId(), operator.ownerUserId(),
+                            session.tenantId(), session.userId(), session.id());
+                    return readMessagePage(owner, session.id(), leafMessageId, cursor, limit);
                 })
                 .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private ChatMessagePageDto readMessagePage(
+            UserContext user, String sessionId, String leafMessageId, String cursor, int limit) {
+        ChatMessagePage page = facade.listMessages(user, sessionId, leafMessageId, cursor, limit);
+        Map<String, ChatMessageVersionInfoDto> versionInfos = page.items().isEmpty()
+                ? Map.of()
+                : versionViewAssembler.assemblePage(
+                        page.items(),
+                        facade.listMessageVersionCandidates(
+                                user,
+                                sessionId,
+                                page.items().stream().map(ChatMessage::id).toList()));
+        return toMessagePageDto(user, sessionId, page, versionInfos);
     }
 
     /**

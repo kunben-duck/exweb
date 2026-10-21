@@ -597,6 +597,29 @@ payload
 本机只有出现对应 topic 订阅者时才向 Redis listener container 动态注册精确 channel；不使用全局 pattern 订阅，
 降低 Redis Cluster 下的广播和路由不确定性。
 
+监听注册、退订及销毁使用同一生命周期协调机制。每代 topic 使用独立 Listener，订阅引用计数与关闭状态
+在同一短临界区修改，锁内不访问 Redis。旧 Listener 的迟到清理只移除旧实例，不能删除同频道的替代监听。
+
+应用侧注册及退订由专用单线程执行器处理：最多 1024 个注册任务许可、1025 个排队位置，拒绝时不回退到
+请求线程或公共线程池。清理按 Listener 实例合并，最多一个任务运行或排队，每批最多 16 项后让出执行机会。
+`financeex.websocket.redis-live-max-listeners` 默认 `4096`，环境变量为
+`FINANCEEX_WEBSOCKET_REDIS_LIVE_MAX_LISTENERS`，必须为正、按实例启动生效。容量包含注册中、活动、待清理及
+清理失败的 Listener；同 topic 共享监听只计一个，同频道旧、新 Listener 分别计数。创建前非阻塞预留名额，
+直到确定未注册或实际清理成功后才释放。满额只拒绝新 Listener，保留已有共享订阅并走原订阅失败恢复链路；
+不淘汰活动监听、不清空失败引用、不重启容器。该保护阈值不是生产承载保证，也不是服务整体内存上限。
+
+退订部分失败保留有界引用，后续生命周期活动触发到期重试；先恢复已关闭旧 Listener 的容器映射，再按实例移除。
+失败重试按 `1、2、4、8、16、30秒` 退避，之后保持 30 秒；全实例任意一秒内最多发起 16 项失败重试。
+每个 Listener 仅登记一次，按到期时间取队首，不随每次订阅整体重试或扫描失败集合。没有后续生命周期活动时
+不会主动唤醒重试，不新增定时线程。重复故障告警最多每 30 秒一次，附带累计失败次数及清理积压量。
+ACK 及消息派发保持在 Spring 原有执行路径，不使用等待 ACK 的生命周期线程；派发提交异常不会打断 Spring
+内部确认链，丢弃的 ACK 不会被当成订阅成功。
+
+首次注册从本地取得监听资源起最多等待 2 秒，只有注册返回、收到匹配频道 ACK 且监听未关闭才确认就绪。
+首次就绪与超时在 Listener 内原子裁决；就绪后重复 ACK 或迟到的注册超时不再套用该期限，不中断既有订阅。
+排队过期的注册不会迟到调用 Redis。这个期限不是 Redis 底层操作的硬超时：底层永久阻塞仍可能阻塞后续实时
+注册和清理；现有监听的正常消息派发不经过生命周期执行器。真实 Redis 故障及容量、延迟仍需目标环境压测。
+
 ### 10.2 默认实时源
 
 `financeex.chat-stream.live-source-mode` 默认是 `redis-only`：
@@ -648,18 +671,26 @@ WebSocket run topic。
 run 恢复和 WebSocket subscribe 复用同一套 DB/live 拼接逻辑。session resume 只查询数据库，不建立 live
 buffer，不适用本节流程。
 
-每次 run SSE 或 WebSocket topic 订阅都会在处理请求的应用实例中创建一个独立的
+HTTP Run Resume 读取的可信 Run 快照已经为 COMPLETED、FAILED、CANCELLED、WAITING_USER，或已处于
+DomainAgent 异步挂起时，直接执行原历史查询，不创建 live buffer 或 Redis 订阅。权限、游标及输出封装不变，
+不额外查询 Run 或数据库总数。WebSocket 对异步任务仍保持实时监听，不套用 HTTP 的异步边界退出规则。
+
+其余 run SSE 和 WebSocket topic 订阅会在处理请求的应用实例中创建一个独立的
 `RunTopicLiveBuffer`。该对象不是 Redis 数据结构，也不在不同浏览器连接之间共享。建立顺序固定如下：
 
 1. 创建 `Sinks.Many<ChatEvent>` 单消费者有界队列。
 2. 根据 `financeex.chat-stream.live-source-mode` 选择实时源；生产默认 `redis-only`。
-3. 向 Redis listener container 动态注册当前 run 的精确 channel，并立即订阅实时 Flux。
+3. 先接入实时 Flux 缓冲，再后台注册当前 run 的精确 channel；已有共享监听可复用。
 4. 对实时事件依次执行 `afterSeq`、`runId/sessionId` 过滤、有限去重和短窗口排序。
 5. 将符合条件的事件写入本机 live buffer。
-6. 完成上述订阅后，再在 `boundedElastic` 上发起数据库查询。
+6. 收到该频道 ACK 且注册返回后，再在 `boundedElastic` 上发起数据库查询；local-only 模式无需等待 Redis。
+
+注册失败仍允许回放数据库历史，之后沿用原恢复语义：HTTP live tail 结束，WebSocket 返回
+`RECOVER_REQUIRED`。不新增数据库轮询、自动订阅重试或业务事件。`subscribe.reply` 仍只表示协议层接受订阅，
+不表示频道 ACK 已完成或历史已经补发。
 
 外层使用 `Flux.using` 管理资源。连接完成、取消或异常时会 dispose 实时订阅；本实例中该 topic 的最后一个
-订阅者离开后，Redis listener container 注销对应 channel。
+订阅者离开后立即关闭本地监听，并后台合并清理 Redis channel，不占用公共线程逐个等待退订。
 
 ```mermaid
 sequenceDiagram
@@ -672,6 +703,7 @@ sequenceDiagram
     Client->>Resume: afterSeq=N
     Resume->>Buffer: 创建每订阅有界队列
     Resume->>Redis: 订阅精确 run channel
+    Redis-->>Resume: 匹配频道 ACK 且注册已返回
     Resume->>DB: SELECT seq > N ORDER BY seq
     par 数据库查询期间
         Redis-->>Buffer: 已落库的新事件持续写入 buffer
@@ -1256,6 +1288,7 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | `financeex.websocket.redis-publish-executor-core-size` | `2` |
 | `financeex.websocket.redis-publish-executor-max-size` | `8` |
 | `financeex.websocket.redis-channel-prefix` | `fin_ex:chat_stream` 逻辑前缀 |
+| `financeex.websocket.redis-live-max-listeners` | `4096`，本实例含未清理旧代的 Listener 总量，必须为正 |
 | `financeex.websocket.redis-publish-queue-capacity` | `4096` |
 | `financeex.websocket.redis-publish-topic-queue-size` | `1024` |
 | `financeex.websocket.redis-publish-topic-max-bytes` | `8MB` |

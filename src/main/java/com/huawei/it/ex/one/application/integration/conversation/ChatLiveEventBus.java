@@ -6,7 +6,9 @@ package com.huawei.it.ex.one.application.integration.conversation;
 
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 跨实例聊天实时事件总线端口。
@@ -40,4 +42,20 @@ public interface ChatLiveEventBus {
      * @return 远端实例经事件总线转发过来的实时事件流。
      */
     Flux<ChatEvent> subscribe(String topicId);
+
+    /**
+     * 先接入 events 的有界缓冲，再等待 ready，最后读取数据库历史。
+     * 自定义同步总线沿用原订阅行为；异步注册实现必须覆盖就绪确认。
+     */
+    default Subscription openSubscription(String topicId) {
+        return new Subscription(subscribe(topicId), Mono.empty(), () -> { });
+    }
+
+    /** 内部订阅资源；调用方在成功、失败和取消时均须释放。 */
+    record Subscription(Flux<ChatEvent> events, Mono<Void> ready, Disposable cleanup) implements Disposable {
+        @Override
+        public void dispose() {
+            cleanup.dispose();
+        }
+    }
 }

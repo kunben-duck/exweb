@@ -26,7 +26,10 @@ import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.RunStartedEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
@@ -39,8 +42,153 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 class ChatStreamApplicationServiceTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void cancellationWhileAwaitingAckReleasesHandleAndNeverQueriesHistory(boolean websocket) throws Exception {
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger releases = new AtomicInteger();
+        CountDownLatch awaiting = new CountDownLatch(1);
+        Sinks.One<Void> ready = Sinks.one();
+        InMemoryChatEventStore store = new InMemoryChatEventStore() {
+            @Override
+            public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenant, String user, String session,
+                                                             String run, long after) {
+                reads.incrementAndGet();
+                return List.of();
+            }
+        };
+        ChatLiveEventBus bus = new InMemoryLiveEventBus() {
+            @Override
+            public Subscription openSubscription(String topicId) {
+                return new Subscription(Flux.never(), ready.asMono().doOnSubscribe(ignored -> awaiting.countDown()),
+                        releases::incrementAndGet);
+            }
+        };
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        runs.save(runningRun("run1", "tenant1", "user1"));
+        ChatStreamApplicationService service = new ChatStreamApplicationService(store,
+                new LocalChatEventStreamRegistry(), bus, runs, new PermissionChecker(),
+                new FixedSessionRepository(), new com.huawei.it.ex.one.application.config.ChatWebSocketProperties());
+        Disposable request = (websocket ? service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0)
+                : service.resumeRun(user(), "run1", 0)).subscribe();
+        assertThat(awaiting.await(1, TimeUnit.SECONDS)).isTrue();
+        request.dispose();
+        ready.tryEmitEmpty();
+        assertThat(releases).hasValue(1);
+        assertThat(reads).hasValue(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void replayWaitsForChannelReadinessAndBuffersEventsAcrossDatabaseRead(boolean websocket) throws Exception {
+        Sinks.Many<ChatEvent> live = Sinks.many().multicast().onBackpressureBuffer();
+        Sinks.One<Void> ready = Sinks.one();
+        CountDownLatch attached = new CountDownLatch(1);
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger releases = new AtomicInteger();
+        ChatEvent one = stored(1, "replay");
+        ChatEvent two = stored(2, "both");
+        ChatEvent three = stored(3, "during-query");
+        InMemoryChatEventStore store = new InMemoryChatEventStore() {
+            @Override
+            public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenant, String user, String session,
+                                                             String run, long after) {
+                reads.incrementAndGet();
+                live.tryEmitNext(three);
+                return List.of(one, two);
+            }
+        };
+        ChatLiveEventBus bus = new InMemoryLiveEventBus() {
+            @Override
+            public Subscription openSubscription(String topicId) {
+                return new Subscription(live.asFlux().doOnSubscribe(ignored -> attached.countDown()),
+                        ready.asMono(), releases::incrementAndGet);
+            }
+        };
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        runs.save(runningRun("run1", "tenant1", "user1"));
+        ChatStreamApplicationService service = new ChatStreamApplicationService(store,
+                new LocalChatEventStreamRegistry(), bus, runs, new PermissionChecker(),
+                new FixedSessionRepository(), new com.huawei.it.ex.one.application.config.ChatWebSocketProperties(),
+                streamProperties(false, Duration.ZERO, 1));
+        Flux<ChatEvent> output = websocket ? service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0)
+                : service.resumeRun(user(), "run1", 0);
+        CompletableFuture<List<ChatEvent>> result = output.take(3).collectList().toFuture();
+        assertThat(attached.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(reads).hasValue(0);
+        live.tryEmitNext(two);
+        ready.tryEmitEmpty();
+        assertThat(result.get(2, TimeUnit.SECONDS)).containsExactly(one, two, three);
+        assertThat(reads).hasValue(1);
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(1))
+                .untilAsserted(() -> assertThat(releases).hasValue(1));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void failedReadinessStillReplaysHistoryBeforeExistingRecoveryBehavior(boolean websocket) {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        ChatEvent saved = store.append(MessageDeltaEvent.of("run1", "session1", "saved"));
+        AtomicInteger releases = new AtomicInteger();
+        ChatLiveEventBus bus = new InMemoryLiveEventBus() {
+            @Override
+            public Subscription openSubscription(String topicId) {
+                return new Subscription(Flux.never(), Mono.error(new IllegalStateException("no ACK")),
+                        releases::incrementAndGet);
+            }
+        };
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        runs.save(runningRun("run1", "tenant1", "user1"));
+        ChatStreamApplicationService service = new ChatStreamApplicationService(store,
+                new LocalChatEventStreamRegistry(), bus, runs, new PermissionChecker(),
+                new FixedSessionRepository(), new com.huawei.it.ex.one.application.config.ChatWebSocketProperties());
+        if (websocket) {
+            StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0))
+                    .expectNext(saved).expectError(StreamRecoveryRequiredException.class).verify();
+        } else {
+            StepVerifier.create(service.resumeRun(user(), "run1", 0)).expectNext(saved).verifyComplete();
+        }
+        assertThat(releases).hasValue(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"COMPLETED", "FAILED", "CANCELLED", "WAITING_USER", "ASYNC_WAITING"})
+    void settledRunResumeDoesNotAcquireLiveSubscription(String state) {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        AtomicInteger subscriptions = new AtomicInteger();
+        ChatLiveEventBus bus = new InMemoryLiveEventBus() {
+            @Override
+            public Flux<ChatEvent> subscribe(String topicId) {
+                subscriptions.incrementAndGet();
+                return Flux.error(new IllegalStateException("Redis unavailable"));
+            }
+        };
+        ChatRun running = runningRun("run1", "tenant1", "user1");
+        ChatRun snapshot = switch (state) {
+            case "COMPLETED" -> running.completed(1);
+            case "FAILED" -> running.failed(1);
+            case "CANCELLED" -> running.cancelled(1);
+            case "WAITING_USER" -> running.waitingUser(1);
+            default -> running.withMetadata(DomainAgentAsyncTaskMetadata.runningOverlay(
+                    "msg-assistant", Instant.now().plusSeconds(3600)));
+        };
+        runs.save(snapshot);
+        ChatEvent saved = store.append(MessageDeltaEvent.of("run1", "session1", "saved"));
+        ChatStreamApplicationService service = new ChatStreamApplicationService(store,
+                new LocalChatEventStreamRegistry(), bus, runs, new PermissionChecker(),
+                new FixedSessionRepository(), new com.huawei.it.ex.one.application.config.ChatWebSocketProperties());
+
+        StepVerifier.create(service.resumeRun(user(), "run1", 0)).expectNext(saved).verifyComplete();
+        StepVerifier.create(service.resumeRun(user(), "run1", saved.sequence())).verifyComplete();
+        assertThat(subscriptions).hasValue(0);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void runStartedUserAssociationSurvivesLivePublicationAndResume(boolean hasUserMessageId) {

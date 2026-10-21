@@ -16,6 +16,8 @@ import java.time.Duration;
 public class ChatLiveEventBusProperties {
     /** Redis Pub/Sub 逻辑 channel 前缀，必须以 fin_ex 开头；运行时会自动插入环境段。 */
     private String redisChannelPrefix = "fin_ex:chat_stream";
+    /** 本实例持有的监听实例总量，包含注册中、活动及尚未清理成功的旧监听。 */
+    private int redisLiveMaxListeners = 4096;
     /** Redis 发布后台执行器核心线程数。 */
     private int redisPublishExecutorCoreSize = 2;
     /** Redis 发布后台执行器最大线程数。 */
@@ -39,6 +41,17 @@ public class ChatLiveEventBusProperties {
 
     public void setRedisChannelPrefix(String redisChannelPrefix) {
         this.redisChannelPrefix = redisChannelPrefix;
+    }
+
+    public int getRedisLiveMaxListeners() {
+        return redisLiveMaxListeners;
+    }
+
+    public void setRedisLiveMaxListeners(int redisLiveMaxListeners) {
+        if (redisLiveMaxListeners <= 0) {
+            throw new IllegalArgumentException("financeex.websocket.redis-live-max-listeners must be positive");
+        }
+        this.redisLiveMaxListeners = redisLiveMaxListeners;
     }
 
     public int getRedisPublishExecutorCoreSize() {

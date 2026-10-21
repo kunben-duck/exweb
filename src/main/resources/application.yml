@@ -300,6 +300,8 @@ financeex:
     # 前端 WS 入口同时支持 WebFlux 与 Servlet/MVC；Servlet 模式的上下文根使用 server.servlet.context-path。
     # 逻辑 channel 前缀；实际 channel 为 fin_ex:{env}:chat_stream:...
     redis-channel-prefix: fin_ex:chat_stream
+    # 活动、注册中和待清理的 Listener 共用实例级容量；不是生产承载保证。
+    redis-live-max-listeners: ${FINANCEEX_WEBSOCKET_REDIS_LIVE_MAX_LISTENERS:4096}
     # Redis Pub/Sub 跨实例实时发布使用独立有界执行器，避免 Redis 抖动阻塞 run 主链路。
     redis-publish-executor-core-size: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_EXECUTOR_CORE_SIZE:2}
     redis-publish-executor-max-size: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_EXECUTOR_MAX_SIZE:8}

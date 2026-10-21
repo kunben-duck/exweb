@@ -72,6 +72,7 @@ class SessionListSubscriptionRecoveryTest {
         ChatRunRepository runs = mock(ChatRunRepository.class);
         ChatEventStore store = mock(ChatEventStore.class);
         ChatLiveEventBus bus = mock(ChatLiveEventBus.class);
+        when(bus.openSubscription(any())).thenCallRealMethod();
         ChatSessionFacade facade = mock(ChatSessionFacade.class);
         Map<String, ChatSessionLastRunSummary> summaries = new LinkedHashMap<>();
         Map<String, List<ChatEvent>> persisted = new LinkedHashMap<>();

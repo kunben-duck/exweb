@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.infrastructure.persistence;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -21,15 +22,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.test.StepVerifier;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.Message;
-import org.springframework.data.redis.connection.RedisClusterConnection;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.RedisSentinelConnection;
+import org.springframework.data.redis.connection.MessageListener;
+import org.springframework.data.redis.connection.SubscriptionListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.springframework.data.redis.listener.Topic;
 
 import java.lang.reflect.Constructor;
 import java.nio.charset.StandardCharsets;
@@ -50,6 +51,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 class RedisChatLiveEventBusTest {
+    private final List<RedisChatLiveEventBus> buses = new ArrayList<>();
+
+    @AfterEach
+    void closeBuses() {
+        buses.forEach(RedisChatLiveEventBus::stop);
+    }
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final FinanceExRedisKeyBuilder redisKeys = FinanceExRedisKeyBuilder.ofEnv("test");
     private final ApplicationInstanceIdProvider instanceIdProvider = () -> "instance-a";
@@ -321,9 +328,16 @@ class RedisChatLiveEventBusTest {
     private RedisChatLiveEventBus newBus(StringRedisTemplate redis, ObjectMapper mapper,
                                          ChatLiveEventBusProperties properties, Executor executor,
                                          ChatStreamProperties streamProperties) {
-        RedisChatLiveEventBus bus = new RedisChatLiveEventBus(redis, mapper, new UnsupportedRedisConnectionFactory(), redisKeys,
-                instanceIdProvider, properties, executor);
+        RedisMessageListenerContainer container = mock(RedisMessageListenerContainer.class);
+        doAnswer(call -> {
+            ((SubscriptionListener) call.getArgument(0)).onChannelSubscribed(
+                    ((Topic) call.getArgument(1)).getTopic().getBytes(StandardCharsets.UTF_8), 1);
+            return null;
+        }).when(container).addMessageListener(any(MessageListener.class), any(Topic.class));
+        RedisChatLiveEventBus bus = new RedisChatLiveEventBus(redis, mapper, redisKeys,
+                instanceIdProvider, properties, executor, container);
         bus.setChatStreamProperties(streamProperties);
+        buses.add(bus);
         return bus;
     }
 
@@ -431,30 +445,4 @@ class RedisChatLiveEventBusTest {
         }
     }
 
-    private static class UnsupportedRedisConnectionFactory implements RedisConnectionFactory {
-        @Override
-        public boolean getConvertPipelineAndTxResults() {
-            return true;
-        }
-
-        @Override
-        public RedisConnection getConnection() {
-            throw new UnsupportedOperationException("test fake does not connect to Redis");
-        }
-
-        @Override
-        public RedisClusterConnection getClusterConnection() {
-            return null;
-        }
-
-        @Override
-        public RedisSentinelConnection getSentinelConnection() {
-            return null;
-        }
-
-        @Override
-        public DataAccessException translateExceptionIfPossible(RuntimeException ex) {
-            return null;
-        }
-    }
 }

@@ -36,6 +36,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 聊天事件流应用服务。
@@ -300,9 +301,9 @@ public class ChatStreamApplicationService {
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(run -> Flux.using(
                         () -> liveBuffer(topicId, afterSeq, run.id(), run.sessionId()),
-                        liveBuffer -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
+                        liveBuffer -> liveBuffer.ready().then(Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
                                         user.tenantId(), user.ownerUserId(), run.sessionId(), run.id(), afterSeq))
-                                .subscribeOn(Schedulers.boundedElastic())
+                                .subscribeOn(Schedulers.boundedElastic()))
                                 .flatMapMany(replay -> {
                                     long liveAfterSeq = replay.stream().mapToLong(ChatEvent::sequence).max().orElse(afterSeq);
                                     return Flux.concat(
@@ -351,7 +352,8 @@ public class ChatStreamApplicationService {
         Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer(
                 Queues.<ChatEvent>get(webSocketProperties.normalizedLiveBufferCapacity()).get()
         );
-        Flux<ChatEvent> orderedLiveEvents = reorderBySeq(deduplicate(liveSource(topicId, afterSeq)
+        ChatLiveEventBus.Subscription source = liveSource(topicId, afterSeq);
+        Flux<ChatEvent> orderedLiveEvents = reorderBySeq(deduplicate(source.events()
                 /*
                  * run topic 是前端实时隔离的核心边界。这里再按 runId + sessionId 做防御性过滤：
                  * 即使 Redis Pub/Sub 或本机 live source 出现错误投递，也不会把其他会话/run 的事件推给当前订阅。
@@ -372,18 +374,32 @@ public class ChatStreamApplicationService {
                 error -> sink.tryEmitError(toRecoveryRequired(topicId, afterSeq, error)),
                 sink::tryEmitComplete
         );
-        return new RunTopicLiveBuffer(sink.asFlux(), subscription);
+        AtomicReference<Throwable> registrationFailure = new AtomicReference<>();
+        Mono<Void> ready = source.ready().onErrorResume(error -> {
+            // 注册失败仍先回放数据库，再由原 live 错误路径要求恢复。
+            // 不从就绪回调并发写入 live Sink，避免与正在入队的业务事件争用发射入口。
+            registrationFailure.set(toRecoveryRequired(topicId, afterSeq, error));
+            return Mono.empty();
+        });
+        Flux<ChatEvent> buffered = Flux.defer(() -> registrationFailure.get() == null
+                ? sink.asFlux() : Flux.error(registrationFailure.get()));
+        return new RunTopicLiveBuffer(buffered, ready, () -> {
+            subscription.dispose();
+            source.dispose();
+        });
     }
 
-    private Flux<ChatEvent> liveSource(String topicId, long afterSeq) {
-        return switch (chatStreamProperties.normalizedLiveSourceMode()) {
-            case REDIS_ONLY -> liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq);
-            case LOCAL_ONLY -> registry.subscribeRunTopic(topicId, afterSeq);
-            case MERGE -> Flux.merge(
-                    registry.subscribeRunTopic(topicId, afterSeq),
-                    liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq)
-            );
-        };
+    private ChatLiveEventBus.Subscription liveSource(String topicId, long afterSeq) {
+        if (chatStreamProperties.normalizedLiveSourceMode() == ChatStreamProperties.LiveSourceMode.LOCAL_ONLY) {
+            return new ChatLiveEventBus.Subscription(registry.subscribeRunTopic(topicId, afterSeq),
+                    Mono.empty(), () -> { });
+        }
+        ChatLiveEventBus.Subscription remote = liveEventBus.openSubscription(topicId);
+        Flux<ChatEvent> events = remote.events().filter(event -> event.sequence() > afterSeq);
+        if (chatStreamProperties.isMergeLiveSourceMode()) {
+            events = Flux.merge(registry.subscribeRunTopic(topicId, afterSeq), events);
+        }
+        return new ChatLiveEventBus.Subscription(events, remote.ready(), remote);
     }
 
     private Flux<ChatEvent> reorderBySeq(Flux<ChatEvent> events) {
@@ -427,12 +443,17 @@ public class ChatStreamApplicationService {
     }
 
     private Flux<ChatEvent> resumeRunWithLiveTail(ChatRun run, long afterSeq) {
+        if (run.status().terminal() || DomainAgentAsyncTaskMetadata.isAsyncRunning(run)) {
+            return Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
+                            run.tenantId(), run.userId(), run.sessionId(), run.id(), afterSeq))
+                    .subscribeOn(Schedulers.boundedElastic()).flatMapMany(Flux::fromIterable);
+        }
         String topicId = ChatStreamTopics.runTopic(run.id());
         return Flux.using(
                 () -> liveBuffer(topicId, afterSeq, run.id(), run.sessionId()),
-                liveBuffer -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
+                liveBuffer -> liveBuffer.ready().then(Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
                                 run.tenantId(), run.userId(), run.sessionId(), run.id(), afterSeq))
-                        .subscribeOn(Schedulers.boundedElastic())
+                        .subscribeOn(Schedulers.boundedElastic()))
                         .flatMapMany(replay -> {
                             Flux<ChatEvent> replayFlux = Flux.fromIterable(replay);
                             if (run.status().terminal()
@@ -483,9 +504,10 @@ public class ChatStreamApplicationService {
      * run topic 的实时事件缓冲。
      *
      * @param events 已经在订阅开始时接入的 live 事件流。
+     * @param ready 频道已确认或已记录恢复错误，可以开始历史查询。
      * @param subscription live 订阅句柄，WebSocket 断开或取消订阅时必须释放。
      */
-    private record RunTopicLiveBuffer(Flux<ChatEvent> events, Disposable subscription) {
+    private record RunTopicLiveBuffer(Flux<ChatEvent> events, Mono<Void> ready, Disposable subscription) {
         private void dispose() {
             if (subscription != null && !subscription.isDisposed()) {
                 subscription.dispose();

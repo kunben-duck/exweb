@@ -125,24 +125,46 @@ public final class AgentObservationRecorder {
         }
 
         private void semanticOutcome(ChatEvent event, Map<String, Object> payload) {
-            if ("agent.refusal".equals(payload.get("sourceType")) || "agent.refusal".equals(payload.get("type"))
-                    || "RELAY".equals(context.agentType()) && ("expert-rejection".equals(payload.get("sourceType"))
-                    || "expert_rejection".equals(payload.get("sourceType")))) {
-                outcome = "REJECTED";
-                rejectCode = TurnTraceCoordinator.boundedCode(text(payload.get("code")));
-                rejectReason = TurnTraceCoordinator.boundedCode(text(payload.get("reasonCode")));
-                recoverable = payload.get("recoverable") instanceof Boolean value ? value : null;
-                TurnTraceContext latest = recorder.turns.context(context.turn().runId());
-                boolean retain = latest == null ? context.turn().retainText() : latest.retainText();
-                rejectMessage = retain ? sanitized(text(payload.get("reason"))) : null;
-                if (retain && rejectMessage == null) { rejectMessage = sanitized(text(payload.get("userMessage"))); }
-                recorder.turns.sample(context.turn().runId(), true, null);
-            } else if ("approval-request".equals(payload.get("sourceType"))
-                    && "questionnaire".equalsIgnoreCase(String.valueOf(payload.get("operation_type")))) {
+            if (isRefusal(payload)) {
+                recordRefusal(payload);
+            } else if (isQuestionnaire(payload)) {
                 outcome = "WAITING_USER";
-            } else if ("run.async_running".equals(event.type()) || "agent.async_started".equals(payload.get("sourceType"))) {
+            } else if (isAsyncAccepted(event, payload)) {
                 outcome = "ASYNC_ACCEPTED";
-            } else if ("RELAY".equals(context.agentType()) && ("session-state".equals(payload.get("sourceType"))
+            } else {
+                recordTerminalOutcome(event, payload);
+            }
+        }
+
+        private boolean isRefusal(Map<String, Object> payload) {
+            return "agent.refusal".equals(payload.get("sourceType")) || "agent.refusal".equals(payload.get("type"))
+                    || "RELAY".equals(context.agentType()) && ("expert-rejection".equals(payload.get("sourceType"))
+                    || "expert_rejection".equals(payload.get("sourceType")));
+        }
+
+        private boolean isQuestionnaire(Map<String, Object> payload) {
+            return "approval-request".equals(payload.get("sourceType"))
+                    && "questionnaire".equalsIgnoreCase(String.valueOf(payload.get("operation_type")));
+        }
+
+        private boolean isAsyncAccepted(ChatEvent event, Map<String, Object> payload) {
+            return "run.async_running".equals(event.type()) || "agent.async_started".equals(payload.get("sourceType"));
+        }
+
+        private void recordRefusal(Map<String, Object> payload) {
+            outcome = "REJECTED";
+            rejectCode = TurnTraceCoordinator.boundedCode(text(payload.get("code")));
+            rejectReason = TurnTraceCoordinator.boundedCode(text(payload.get("reasonCode")));
+            recoverable = payload.get("recoverable") instanceof Boolean value ? value : null;
+            TurnTraceContext latest = recorder.turns.context(context.turn().runId());
+            boolean retain = latest == null ? context.turn().retainText() : latest.retainText();
+            rejectMessage = retain ? sanitized(text(payload.get("reason"))) : null;
+            if (retain && rejectMessage == null) { rejectMessage = sanitized(text(payload.get("userMessage"))); }
+            recorder.turns.sample(context.turn().runId(), true, null);
+        }
+
+        private void recordTerminalOutcome(ChatEvent event, Map<String, Object> payload) {
+            if ("RELAY".equals(context.agentType()) && ("session-state".equals(payload.get("sourceType"))
                     || "session_state".equals(payload.get("sourceType"))) && outcome == null) {
                 outcome = switch (String.valueOf(payload.get("state"))) {
                     case "completed" -> "COMPLETED";

@@ -4,7 +4,12 @@
 
 package com.huawei.it.ex.one.infrastructure.intent;
 
+import com.huawei.it.ex.one.application.config.IntentRecordProperties;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.DomainExpertAccessNameResolver;
@@ -14,6 +19,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Collections;
@@ -32,17 +38,28 @@ import java.util.Map;
  */
 @Component
 public class IntentServiceResponseMapper {
+    private static final AppLogger log = AppLoggerFactory.getLogger(IntentServiceResponseMapper.class);
     private static final TypeReference<Object> OBJECT_TYPE = new TypeReference<>() {
+    };
+    private static final TypeReference<Map<String, Object>> RESPONSE_TYPE = new TypeReference<>() {
     };
 
     private final ObjectMapper objectMapper;
     private final IntentServiceHttpProperties properties;
     private final DomainExpertAccessNameResolver domainExpertResolver;
     private final SensitiveInformationAccessNameResolver sensitiveInformationResolver;
+    private final IntentRecordProperties recordProperties;
 
     public IntentServiceResponseMapper(ObjectMapper objectMapper, IntentServiceHttpProperties properties) {
+        this(objectMapper, properties, new IntentRecordProperties());
+    }
+
+    @Autowired
+    public IntentServiceResponseMapper(ObjectMapper objectMapper, IntentServiceHttpProperties properties,
+                                       IntentRecordProperties recordProperties) {
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.recordProperties = recordProperties;
         this.domainExpertResolver = new DomainExpertAccessNameResolver(
                 properties == null ? null : properties.getDomainExpertAccessNamePrefix());
         this.sensitiveInformationResolver = new SensitiveInformationAccessNameResolver(
@@ -93,9 +110,11 @@ public class IntentServiceResponseMapper {
                 return IntentRecognitionResult.degraded(protocolError(root, result, null,
                         "CLARIFY domain expert accessName has no roleName"));
             }
-            return IntentRecognitionResult.waitingClarification(clarificationPayload(root, result),
+            IntentRecognitionResult clarification = IntentRecognitionResult.waitingClarification(
+                    clarificationPayload(root, result),
                     firstText(result.path("intentSessionId"), data.path("intentSessionId")),
                     firstText(result.path("intentRequestId"), data.path("intentRequestId")));
+            return captureAmbiguousResponse(root, result, clarification);
         }
         if ("ROUTE_MULTI".equalsIgnoreCase(routeAction)) {
             return IntentRecognitionResult.finalDecision(complexDecision(root, result,
@@ -115,6 +134,26 @@ public class IntentServiceResponseMapper {
         // 新意图服务以 routeAction 作为唯一裁决字段。缺失时不再按 items/confidence 猜测 DomainAgent。
         return IntentRecognitionResult.degraded(protocolError(root, result, null,
                 routeAction == null ? "routeAction missing" : "unknown routeAction: " + routeAction));
+    }
+
+    private IntentRecognitionResult captureAmbiguousResponse(JsonNode root, JsonNode result,
+                                                              IntentRecognitionResult clarification) {
+        try {
+            if (!recordProperties.isEnabled()
+                    || !"AMBIGUOUS_ROUTE".equalsIgnoreCase(text(result.path("clarification").path("type")))) {
+                return clarification;
+            }
+            // 原始响应只供旁路记录，不把规范化候选或完整响应加入公开澄清 payload。
+            return new IntentRecognitionResult(clarification.status(), clarification.decision(),
+                    clarification.clarificationPayload(), clarification.intentSessionId(),
+                    clarification.intentRequestId(), objectMapper.convertValue(root, RESPONSE_TYPE));
+        } catch (RuntimeException failure) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "Ambiguous intent audit capture failed; keeping the clarification result")
+                    .operation("intent-record.capture")
+                    .attribute("failureType", failure.getClass().getName()).build());
+            return clarification;
+        }
     }
 
     private IntentRecognitionResult singleRouteResult(JsonNode root, JsonNode result) {

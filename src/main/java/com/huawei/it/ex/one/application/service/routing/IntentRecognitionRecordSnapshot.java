@@ -6,10 +6,12 @@ package com.huawei.it.ex.one.application.service.routing;
 
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 
 import java.time.Instant;
+import java.util.Map;
 
 /**
  * 意图识别记录的不可变运行期快照。
@@ -28,6 +30,7 @@ import java.time.Instant;
  * @param confidenceThreshold 本次路由使用的置信度阈值。
  * @param latencyMs 意图服务调用耗时，单位毫秒。
  * @param createdAt 快照创建时间。
+ * @param ambiguousRawResponse 模糊识别的原始响应，仅供异步记录；普通最终结果为空。
  */
 public record IntentRecognitionRecordSnapshot(
         String tenantId,
@@ -40,9 +43,27 @@ public record IntentRecognitionRecordSnapshot(
         RouteTarget routeTarget,
         double confidenceThreshold,
         Long latencyMs,
-        Instant createdAt
+        Instant createdAt,
+        Map<String, Object> ambiguousRawResponse
 ) {
+    public IntentRecognitionRecordSnapshot {
+        ambiguousRawResponse = ChatPayloadMaps.immutableCopy(ambiguousRawResponse);
+    }
+
+    public IntentRecognitionRecordSnapshot(String tenantId, String userId, String sessionId, String runId,
+                                          String commandId, String queryText, IntentDecision intentDecision,
+                                          RouteTarget routeTarget, double confidenceThreshold, Long latencyMs,
+                                          Instant createdAt) {
+        this(tenantId, userId, sessionId, runId, commandId, queryText, intentDecision, routeTarget,
+                confidenceThreshold, latencyMs, createdAt, Map.of());
+    }
+
     public static IntentRecognitionRecordSnapshot of(IntentRecognitionRecordInput input) {
+        return of(input, Map.of());
+    }
+
+    public static IntentRecognitionRecordSnapshot of(IntentRecognitionRecordInput input,
+                                                     Map<String, Object> ambiguousRawResponse) {
         UserContext user = input == null ? null : input.user();
         ChatCommand command = input == null ? null : input.command();
         return new IntentRecognitionRecordSnapshot(
@@ -56,7 +77,8 @@ public record IntentRecognitionRecordSnapshot(
                 input == null ? null : input.routeTarget(),
                 input == null ? 0.0 : input.confidenceThreshold(),
                 input == null ? null : input.latencyMs(),
-                Instant.now()
+                Instant.now(),
+                ambiguousRawResponse
         );
     }
 

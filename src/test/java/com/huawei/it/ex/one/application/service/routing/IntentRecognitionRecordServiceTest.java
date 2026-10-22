@@ -6,10 +6,16 @@ package com.huawei.it.ex.one.application.service.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.IntentRecordProperties;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
@@ -21,6 +27,8 @@ import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -32,6 +40,146 @@ import java.util.concurrent.RejectedExecutionException;
 class IntentRecognitionRecordServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final IdGenerator idGenerator = new FixedIdGenerator();
+
+    @Test
+    void writesOriginalAmbiguousResultOnlyAfterExecutorRuns() throws Exception {
+        CapturingRepository repository = new CapturingRepository();
+        List<Runnable> tasks = new ArrayList<>();
+        IntentRecognitionRecordService service = new IntentRecognitionRecordService(
+                enabledProperties(), repository, idGenerator, objectMapper, tasks::add);
+        IntentRecognitionResult result = ambiguousResult("""
+                [{"accessName":"ex_b","score":null},{"accessName":"ex_a","nested":{"value":null}}]
+                """);
+
+        service.recordAmbiguousAsync(ambiguousInput(command(), "run1", 137L), result);
+        assertThat(repository.records).isEmpty();
+        assertThat(tasks).hasSize(1);
+        tasks.getFirst().run();
+
+        IntentRecognitionRecord record = repository.records.getFirst();
+        assertThat(record.tenantId()).isEqualTo("tenant1");
+        assertThat(record.userId()).isEqualTo("user1");
+        assertThat(record.sessionId()).isEqualTo("session1");
+        assertThat(record.runId()).isEqualTo("run1");
+        assertThat(record.commandId()).isEqualTo("cmd1");
+        assertThat(record.queryText()).isEqualTo(command().message());
+        assertThat(record.queryHash()).isEqualTo(java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(command().message().getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        assertThat(record.status()).isEqualTo("CLARIFY");
+        assertThat(record.candidateCount()).isEqualTo(2);
+        assertThat(record.accepted()).isFalse();
+        assertThat(record.intentId()).isNull();
+        assertThat(record.intentName()).isNull();
+        assertThat(record.resourceId()).isNull();
+        assertThat(record.confidence()).isNull();
+        assertThat(record.source()).isNull();
+        assertThat(record.routeType()).isNull();
+        assertThat(record.routeAgentCode()).isNull();
+        assertThat(record.routeReason()).isNull();
+        assertThat(record.errorMessage()).isNull();
+        assertThat(record.resultMessage()).isEqualTo("choose");
+        assertThat(record.latencyMs()).isEqualTo(137L);
+        assertThat(record.confidenceThreshold()).isEqualTo(0.85);
+        assertThat(record.createdAt()).isNotNull();
+        assertThat(objectMapper.readTree(record.rawResponseJson()))
+                .isEqualTo(objectMapper.valueToTree(result.auditRawResponse()));
+        assertThat(objectMapper.readTree(record.itemsJson())).isEqualTo(
+                objectMapper.valueToTree(result.auditRawResponse()).path("data").path("result")
+                        .path("clarification").path("candidateIntents"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "[]", "{}", "\"invalid\""})
+    void absentOrNonArrayCandidatesAreNotCounted(String candidates) throws Exception {
+        CapturingRepository repository = new CapturingRepository();
+        IntentRecognitionRecordService service = new IntentRecognitionRecordService(
+                enabledProperties(), repository, idGenerator, objectMapper, Runnable::run);
+        service.recordAmbiguousAsync(ambiguousInput(command(), "run1", 1L), ambiguousResult(candidates));
+        service.recordAmbiguousAsync(ambiguousInput(command(), "run2", 2L), new IntentRecognitionResult(
+                IntentRecognitionResult.Status.WAITING_CLARIFICATION, null, Map.of(), null, null,
+                Map.of("data", Map.of("result", Map.of("clarification", Map.of())))));
+        assertThat(repository.records).hasSize(2).allSatisfy(record -> {
+            assertThat(record.candidateCount()).isZero();
+            assertThat(record.status()).isEqualTo("CLARIFY");
+        });
+        assertThat(repository.records.getLast().resultMessage()).isNull();
+        assertThat(repository.records.getLast().itemsJson()).isNull();
+    }
+
+    @Test
+    void disabledAmbiguousRecordingDoesNotReadContextOrSchedule() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        CapturingRepository repository = new CapturingRepository();
+        IntentRecognitionRecordService service = new IntentRecognitionRecordService(
+                new IntentRecordProperties(), repository, idGenerator, objectMapper, executor);
+        ChatCommand invalid = mock(ChatCommand.class);
+        when(invalid.message()).thenThrow(new IllegalStateException("must not read query"));
+        service.recordAmbiguousAsync(ambiguousInput(invalid, "run1", 1L), ambiguousResult("[]"));
+        org.mockito.Mockito.verifyNoInteractions(invalid);
+        assertThat(executor.count).isZero();
+        assertThat(repository.records).isEmpty();
+    }
+
+    @Test
+    void ambiguousAuditFailuresAreIsolatedAtEveryStage() throws Exception {
+        IntentRecognitionResult result = ambiguousResult("[]");
+        CapturingRepository repository = new CapturingRepository();
+        ObjectMapper failingJson = spy(objectMapper);
+        doThrow(new com.fasterxml.jackson.core.JsonProcessingException("serialization failed") { })
+                .when(failingJson).writeValueAsString(any());
+        IntentRecognitionRecordService serializationFailure = new IntentRecognitionRecordService(
+                enabledProperties(), repository, idGenerator, failingJson, Runnable::run);
+        IntentRecognitionRecordService databaseFailure = new IntentRecognitionRecordService(
+                enabledProperties(), record -> { throw new IllegalStateException("db failed"); },
+                idGenerator, objectMapper, Runnable::run);
+        IntentRecognitionRecordService rejected = new IntentRecognitionRecordService(
+                enabledProperties(), repository, idGenerator, objectMapper,
+                task -> { throw new RejectedExecutionException("full"); });
+        for (IntentRecognitionRecordService service : List.of(serializationFailure, databaseFailure, rejected)) {
+            assertThatCode(() -> service.recordAmbiguousAsync(ambiguousInput(command(), "run1", 1L), result))
+                    .doesNotThrowAnyException();
+        }
+        CountingExecutor executor = new CountingExecutor();
+        IntentRecognitionRecordService snapshotFailure = new IntentRecognitionRecordService(
+                enabledProperties(), repository, idGenerator, objectMapper, executor);
+        ChatCommand broken = mock(ChatCommand.class);
+        when(broken.message()).thenThrow(new IllegalStateException("snapshot failed"));
+        assertThatCode(() -> snapshotFailure.recordAmbiguousAsync(ambiguousInput(broken, "run1", 1L), result))
+                .doesNotThrowAnyException();
+        assertThat(executor.count).isZero();
+        assertThat(repository.records).isEmpty();
+    }
+
+    @Test
+    void ambiguousJsonUsesExistingTruncationLimit() throws Exception {
+        IntentRecordProperties properties = enabledProperties();
+        properties.setMaxRawJsonLength(32);
+        CapturingRepository repository = new CapturingRepository();
+        IntentRecognitionRecordService service = new IntentRecognitionRecordService(
+                properties, repository, idGenerator, objectMapper, Runnable::run);
+        IntentRecognitionResult result = ambiguousResult("[{\"accessName\":\"" + "a".repeat(100) + "\"}]");
+        service.recordAmbiguousAsync(ambiguousInput(command(), "run1", 1L), result);
+        assertThat(repository.records.getFirst().rawResponseJson()).isEqualTo(
+                objectMapper.writeValueAsString(result.auditRawResponse()).substring(0, 32 - "...[TRUNCATED]".length())
+                        + "...[TRUNCATED]");
+        assertThat(repository.records.getFirst().itemsJson()).hasSize(32);
+    }
+
+    private IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput ambiguousInput(
+            ChatCommand command, String runId, long latencyMs) {
+        return new IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput(
+                user(), command, runId, null, null, 0.85, latencyMs);
+    }
+
+    private IntentRecognitionResult ambiguousResult(String candidates) throws Exception {
+        Map<String, Object> raw = objectMapper.readValue("""
+                {"code":200,"optional":null,"data":{"result":{"routeAction":"CLARIFY","message":"choose",
+                  "clarification":{"type":"AMBIGUOUS_ROUTE","candidateIntents":%s}}}}
+                """.formatted(candidates), new com.fasterxml.jackson.core.type.TypeReference<>() { });
+        return new IntentRecognitionResult(IntentRecognitionResult.Status.WAITING_CLARIFICATION,
+                null, Map.of("clarificationType", "AMBIGUOUS_ROUTE"), null, null, raw);
+    }
 
     @Test
     void doesNotSubmitTaskWhenRecordDisabled() {

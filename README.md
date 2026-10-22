@@ -509,6 +509,15 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`，若澄清由本次 DomainAgent 拒答触发，则每一轮都继续携带同一份当前拒答原因；前端顶层传 `forceReroute=true` 时由后端转成内部用户纠正触发原因；最新 Relay/no_match 路由的来源 run 正常完成时，下一轮自动使用 `routeTrigger=fallback_followup`。`ROUTE` 表示最终目标已确定且 RuntimeBinding 已成功持久化的路由决策，不要求 Runtime 任务执行成功：后端会在调用 Relay/DomainAgent 前异步写入，后续失败、取消或 DomainAgent 拒答不会删除该事实。`history` 由最近 TopK 可见 `ROUTE` 和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链组成；`routeSource=front-selected` 的前端直选仍保存为路由事实并参与最新路由判断，但在 TopK 限制前排除，不发送给 IntentAgent；`user-confirmed` 和 `intent-agent` 路由保持可见。精确 `NO_MATCH` 在意图请求中投影为 `type=NO_MATCH,intent=""`，不会伪装为命中意图；已有 binding 的普通续接和 Agent Interaction 续接没有产生新路由，因此不会写入 history。澄清得到最终目标时会在同一 best-effort 写任务中先折叠 clarify，再写 route；`DELEGATE` 的 `ROUTE_MULTI/NO_MATCH/RELAY_FALLBACK` 统一记录为 `intentName=no_match,intentId=relay,targetProvider=relay`，敏感信息 Delegate 与 Domain Expert 的 `ROUTE_SINGLE` 则保留原始 `intentId/intentName/query`。Relay 执行失败或取消时该 route 仍保留，但不会触发下一轮 `fallback_followup`；Relay Delegate正常完成后保留`RESUMABLE` session，Domain Expert保持ACTIVE；已有Binding续接不新增RouteMemory。`FAIL_RUN`、未确认候选和用户拒绝切换不写 route。RouteMemory 读写使用独立线程池，异常只降级上下文质量，不阻断 `/v1/chat/runs`。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/v1/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
+合法 `CLARIFY + AMBIGUOUS_ROUTE` 也在识别结果返回时补记一次：`status=CLARIFY`、`accepted=false`，
+保存原始完整响应、原始 `candidateIntents`（包括顺序、null 和未归一化的 accessName）及本次耗时；
+选中意图和最终路由字段为空。即使澄清轮数超限转 Relay，该识别事实仍保留，但不代表已提交 WAIT。
+手动/自动选择和历史回放不重复补记或回写此记录；OTHER 再次实际识别得到模糊结果时另记一条。
+普通澄清和重试中间尝试不在此次补记范围。`CLARIFY` 不代表识别失败，不能仅用 `accepted=false` 计算错误率。
+关闭开关时不做新增原始响应复制或记录任务；原始响应不进入公开澄清数据。沿用默认 65536 字符的 JSON
+保存限制和原截断规则，该限制不是排队对象的内存上限。开启后每个模糊结果增加一次 best-effort 异步 INSERT，
+不补写历史；字段口径见 [模糊意图记录](docs/intent/intent.md#9-模糊意图原始结果记录)。
+
 意图澄清续接时允许提交答案、附件和 metadata。附件在 Interaction claim 前按 `documentId` 校验归属、状态和真实文件名；历史 user 消息只保存用户真实回答，附件-only 时正文为 `""`，附件通过标准 `attachments[]` 返回。仅发送给 IntentAgent 的本轮 query 会追加文件名：附件-only 为 `[用户上传文档] xxx.pdf`，文本加附件为 `答案 [用户上传文档] xxx.pdf，xxx.xls`。IntentAgent 不接收文档 ID、URL 或完整业务 metadata。最终目标确定后，DomainAgent/Relay 收到 `用户:原问题；系统追问:...；用户:...` 形式的完整折叠问题，其中各轮附件以可信文件名体现，并使用最终一轮 metadata；服务端以整条澄清链累计的可信文档覆盖 `sceneParam.docList`。每轮澄清 user/assistant 消息属于消息树事实，但不会单独写 RouteMemory `ROUTE`；最终 binding 成功后才折叠澄清链并记录一次路由。
 
 同一 Run 的拒答重意图（`routeTrigger=domain_reject`）会在 TopK 之前按当前可信 `runId` 排除本轮全部

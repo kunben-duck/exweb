@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
+import com.huawei.it.ex.one.application.config.IntentRecordProperties;
 import com.huawei.it.ex.one.application.config.RouteSignalProperties;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntime;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
@@ -15,6 +16,7 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalFrame;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalRequest;
@@ -49,6 +51,7 @@ import reactor.test.StepVerifier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
@@ -62,6 +65,93 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
+    @ParameterizedTest
+    @ValueSource(strings = {"USER", "AUTO_SELECT", "OTHER"})
+    void rawAmbiguousAuditDoesNotLeakOrRepeatOnCandidateSelection(String action) throws Exception {
+        ObjectMapper json = new ObjectMapper().findAndRegisterModules();
+        IntentRecordProperties config = new IntentRecordProperties();
+        config.setEnabled(true);
+        var raw = json.readTree("""
+                {"code":200,"status":"success","auditOnly":"raw-audit-marker","optional":null,
+                 "data":{"result":{"routeAction":"CLARIFY","message":"choose",
+                  "clarification":{"type":"AMBIGUOUS_ROUTE","clarifyQuestion":"请选择处理技能",
+                   "candidateIntents":[{"intentId":"low","intentName":"Low","accessName":"skill-low",
+                                        "confidence":0.9},{"intentId":"high","intentName":"High",
+                                        "accessName":"skill-high","confidence":0.95}]}}}}
+                """);
+        var mapper = new com.huawei.it.ex.one.infrastructure.intent.IntentServiceResponseMapper(json,
+                new com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties(), config);
+        var records = new java.util.concurrent.CopyOnWriteArrayList<
+                com.huawei.it.ex.one.domain.intent.IntentRecognitionRecord>();
+        AtomicInteger calls = new AtomicInteger();
+        var recorder = new IntentRecognitionRecordService(config, records::add, new SequentialIdGenerator(),
+                json, Runnable::run);
+        var intent = new com.huawei.it.ex.one.application.integration.intent.IntentService() {
+            @Override
+            public IntentDecision recognize(ChatCommand command, com.huawei.it.ex.one.domain.memory.MemoryContext memory,
+                                             UserContext user) {
+                throw new AssertionError("must use recognition result");
+            }
+
+            @Override
+            public com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult recognizeForRouting(
+                    ChatCommand command, com.huawei.it.ex.one.domain.memory.MemoryContext memory, UserContext user) {
+                calls.incrementAndGet();
+                return mapper.toRecognitionResult(raw);
+            }
+        };
+        RouteSignalApplicationService routes = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                new com.huawei.it.ex.one.infrastructure.runtime.intentagent.BlockingIntentAgentRuntime(intent),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, true,
+                        com.huawei.it.ex.one.application.config.IntentFailureStrategy.RELAY_FALLBACK),
+                null, null, recorder);
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        AtomicReference<DomainAgentRequest> downstream = new AtomicReference<>();
+        UserContext user = new UserContext("tenant-1", "user-1", "User One");
+        sessions.save(new ChatSession("session-1", user.tenantId(), user.ownerUserId(), "title", "ACTIVE", "web",
+                Instant.now(), Instant.now()));
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(sessions, messages, runs, events,
+                routes, domainClient(downstream), noopRuntime(), new CapturingRuntimeBindingRepository(),
+                new DomainAgentProperties(), liveEventBus(), interactions);
+        List<ChatEvent> first = service.executeRun(user, new ChatCommand("first", null, null, "session-1", null,
+                        "web", "分析经营情况", List.of(), Map.of()), RuntimeForwardHeaders.empty())
+                .collectList().block(Duration.ofSeconds(5));
+        assertThat(first.getLast().type()).isEqualTo("run.waiting_user");
+        assertThat(records).hasSize(1);
+        assertThat(downstream.get()).isNull();
+        var interaction = interactions.requests.values().iterator().next();
+        String originalRecord = json.writeValueAsString(records.getFirst());
+        ChatCommand continuation = "USER".equals(action)
+                ? continueCommand(interaction.id(), "DOMAIN_AGENT", "skill-low", Map.of(), null, Map.of())
+                : continueCommand(interaction.id(), null, null,
+                        "OTHER".equals(action) ? Map.of("请选择处理技能", "其他需求") : Map.of(),
+                        "OTHER".equals(action) ? null : action, Map.of());
+        ChatRunStartResult started = service.startRun(user, continuation, RuntimeForwardHeaders.empty())
+                .block(Duration.ofSeconds(5));
+        boolean other = "OTHER".equals(action);
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(events.events)
+                .anySatisfy(event -> {
+                    assertThat(event.runId()).isEqualTo(started.runId());
+                    assertThat(event.type()).isEqualTo(other ? "run.waiting_user" : "run.completed");
+                }));
+        assertThat(calls).hasValue(other ? 2 : 1);
+        assertThat(records).hasSize(other ? 2 : 1);
+        assertThat(json.writeValueAsString(records.getFirst())).isEqualTo(originalRecord);
+        assertThat(json.writeValueAsString(interactions.requests.values())).doesNotContain("raw-audit-marker", "auditRawResponse");
+        assertThat(json.writeValueAsString(events.events)).doesNotContain("raw-audit-marker", "auditRawResponse");
+        assertThat(json.writeValueAsString(messages.messages)).doesNotContain("raw-audit-marker", "auditRawResponse");
+        if (!other) {
+            assertThat(json.writeValueAsString(downstream.get().metadata()))
+                    .doesNotContain("raw-audit-marker", "auditRawResponse");
+        }
+    }
+
     @Test
     void firstAmbiguousResultPersistsWaitCardInteractionAndDeadline() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();

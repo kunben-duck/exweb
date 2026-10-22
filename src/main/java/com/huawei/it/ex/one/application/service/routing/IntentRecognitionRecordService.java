@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.application.config.IntentRecordProperties;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionRecordRepository;
+import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -78,6 +79,52 @@ public class IntentRecognitionRecordService {
                     .operation("intent-record.schedule")
                     .build(), ex);
         }
+    }
+
+    /** 模糊结果没有可执行 IntentDecision，独立记录识别事实，不影响原最终结果的记录入口。 */
+    public void recordAmbiguousAsync(IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput input,
+                                     IntentRecognitionResult result) {
+        try {
+            if (!properties.isEnabled() || input == null || result == null || !result.waitingClarification()
+                    || result.auditRawResponse().isEmpty()) {
+                return;
+            }
+            IntentRecognitionRecordSnapshot snapshot = IntentRecognitionRecordSnapshot.of(
+                    input, result.auditRawResponse());
+            executor.execute(() -> writeAmbiguousSafely(snapshot));
+        } catch (RuntimeException failure) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "Ambiguous intent audit preparation or submission failed")
+                    .runId(input == null ? null : input.runId()).operation("intent-record.ambiguous.schedule")
+                    .attribute("failureType", failure.getClass().getName()).build());
+        }
+    }
+
+    private void writeAmbiguousSafely(IntentRecognitionRecordSnapshot snapshot) {
+        try {
+            repository.save(toAmbiguousRecord(snapshot));
+        } catch (RuntimeException failure) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                            "Ambiguous intent audit persistence failed")
+                    .runId(snapshot.runId()).operation("intent-record.ambiguous.write")
+                    .attribute("failureType", failure.getClass().getName()).build());
+        }
+    }
+
+    private IntentRecognitionRecord toAmbiguousRecord(IntentRecognitionRecordSnapshot snapshot) {
+        Map<String, Object> raw = snapshot.ambiguousRawResponse();
+        Object candidates = nested(raw, "data", "result", "clarification", "candidateIntents");
+        String id = idGenerator.newId("intentrec", IdGenerateContext.of(
+                snapshot.tenantId(), snapshot.userId(), snapshot.sessionId(), snapshot.runId()));
+        return new IntentRecognitionRecord(
+                id, snapshot.tenantId(), snapshot.userId(), snapshot.sessionId(), snapshot.runId(),
+                snapshot.commandId(), truncate(snapshot.queryText(), properties.normalizedMaxQueryLength()),
+                sha256(snapshot.queryText()), "CLARIFY", null, null, null, null, null,
+                candidateCount(candidates), snapshot.confidenceThreshold(), false, null, null, null,
+                stringValue(nested(raw, "data", "result", "message")),
+                truncate(toJson(candidates), properties.normalizedMaxRawJsonLength()),
+                truncate(toJson(raw), properties.normalizedMaxRawJsonLength()),
+                null, snapshot.latencyMs(), snapshot.createdAt());
     }
 
     private void writeSafely(IntentRecognitionRecordSnapshot snapshot) {

@@ -583,6 +583,35 @@ Ask User 回答、澄清或候选切换创建新 Run 后，之前 Run 的路由�
 
 AgentMode 的完整记录语义参见
 [AgentMode 仅记录技术设计](../architecture/agent-mode-recording.md)。
+
+## 9. 模糊意图原始结果记录
+
+`financeex.intent-record.enabled=true` 时，合法 `CLARIFY + AMBIGUOUS_ROUTE` 在识别结果返回后异步写入
+`fin_ex_intent_recognition_t`。阻塞模式保存完整响应对象；流式模式保存最终 `result` 帧的响应 JSON，
+不保存 SSE 包装或过程帧。JSON 保留原结构、合法 null、候选顺序和原始 accessName，不从展示卡片反拼，
+不附加请求头、Cookie 或鉴权信息。关闭开关不执行新增原始响应复制、快照任务或 INSERT。
+
+| 字段 | 模糊结果口径 |
+| --- | --- |
+| `status / accepted` | `CLARIFY / false`，表示尚未选定可执行目标，不是识别失败。 |
+| `raw_response_json` | 下游完整响应对象。 |
+| `items_json / candidate_count` | 原始 `data.result.clarification.candidateIntents`；有效数组长度，否则数量为 0。 |
+| `intent_id / intent_name / resource_id / confidence / source` | null，不预选候选。 |
+| `route_type / route_agent_code / route_reason` | null，不推测最终路由。 |
+| `result_message / error_message` | 原始 `data.result.message`（缺失为 null）/ null。 |
+| `latency_ms / confidence_threshold` | 本次识别实际耗时和现有阈值。 |
+| 归属、query、hash | 服务端可信关联、本次实际提交给 Intent 的 query 及其原有 hash。 |
+
+- 在澄清轮次检查前记录；达到上限后转 Relay 仍保留本次识别事实，不代表 Run 已提交 WAIT。
+- 手动选择、自动选择及回放不重复补记，不回写原记录；OTHER 或拒答重意图实际得到新模糊结果时另记一条。
+- 原成功、无匹配及失败结果的记录逻辑不变；普通澄清、重试中间尝试及历史漏记不在补记范围。
+- 原始响应仅在内部识别结果和异步快照中传递，不进入 Interaction、Event、Parts、分享、Resume 或下游请求。
+- 沿用原记录服务、专用有界执行器及 INSERT；新增捕获、快照、提交、序列化和写库失败仅告警，不导致 Intent 重试或降级。
+- JSON 沿用 `max-raw-json-length`（默认 65536）及原有 `...[TRUNCATED]` 截断规则，超限后不保证 JSON 完整，
+  也不承诺 HTTP 字节级原样保存。该保存限制不是队列对象的内存上限。
+- 开启后每个模糊结果增加一次异步 INSERT 和复制/序列化成本，仍共享数据库和有界队列资源。
+  记录为 best-effort，可能丢失；不增加重试、补偿或历史回填。`accepted=false` 不能直接用来计算错误率。
+
 ## 意图反馈与自动偏好
 
 - 新增独立 `POST/GET /v1/chat/runs/{runId}/intent-feedback`，每个Run首次反馈不可修改，相同请求幂等。

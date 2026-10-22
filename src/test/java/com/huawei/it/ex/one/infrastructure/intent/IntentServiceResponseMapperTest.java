@@ -5,20 +5,103 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
+import com.huawei.it.ex.one.application.config.IntentRecordProperties;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.Map;
 
 class IntentServiceResponseMapperTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void capturesRawAmbiguousResponseWithoutChangingPublicCandidates() throws Exception {
+        JsonNode raw = ambiguousResponse();
+        IntentRecordProperties records = new IntentRecordProperties();
+        records.setEnabled(true);
+        IntentServiceHttpProperties http = new IntentServiceHttpProperties();
+        http.setResponseAccessNamePrefix("ex_");
+
+        IntentRecognitionResult result = new IntentServiceResponseMapper(objectMapper, http, records)
+                .toRecognitionResult(raw);
+
+        assertThat(result.waitingClarification()).isTrue();
+        assertThat(objectMapper.<JsonNode>valueToTree(result.auditRawResponse())).isEqualTo(raw);
+        JsonNode publicPayload = objectMapper.valueToTree(result.clarificationPayload());
+        assertThat(publicPayload.path("candidateIntents").get(0).path("skillId").asText()).isEqualTo("skill-b");
+        assertThat(publicPayload.path("candidateIntents").get(1).path("skillId").asText()).isEqualTo("skill-a");
+        assertThat(objectMapper.writeValueAsString(result)).doesNotContain("auditRawResponse", "audit-only-marker");
+        assertThat(result.auditRawResponse()).containsEntry("optionalDetail", null);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) raw).put("auditOnly", "changed");
+        assertThat(result.auditRawResponse()).containsEntry("auditOnly", "audit-only-marker");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void doesNotCopyWholeResponseWhenDisabledOrOrdinaryClarification(boolean enabled) throws Exception {
+        JsonNode raw = ambiguousResponse();
+        if (enabled) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) raw.path("data").path("result").path("clarification"))
+                    .put("type", "MISSING_INFORMATION");
+        }
+        ObjectMapper copying = spy(objectMapper);
+        IntentRecordProperties records = new IntentRecordProperties();
+        records.setEnabled(enabled);
+        IntentRecognitionResult result = new IntentServiceResponseMapper(
+                copying, new IntentServiceHttpProperties(), records).toRecognitionResult(raw);
+
+        assertThat(result.waitingClarification()).isTrue();
+        assertThat(result.auditRawResponse()).isEmpty();
+        verify(copying, never()).convertValue(same(raw), any(TypeReference.class));
+    }
+
+    @Test
+    void auditCaptureFailureDoesNotChangeClarificationOrProtocolValidation() throws Exception {
+        JsonNode raw = ambiguousResponse();
+        ObjectMapper copying = spy(objectMapper);
+        doThrow(new IllegalArgumentException("audit copy failed"))
+                .when(copying).convertValue(same(raw), any(TypeReference.class));
+        IntentRecordProperties records = new IntentRecordProperties();
+        records.setEnabled(true);
+        IntentServiceResponseMapper mapper = new IntentServiceResponseMapper(
+                copying, new IntentServiceHttpProperties(), records);
+        IntentRecognitionResult result = mapper.toRecognitionResult(raw);
+
+        assertThat(result.waitingClarification()).isTrue();
+        assertThat(result.auditRawResponse()).isEmpty();
+        assertThat(result.clarificationPayload()).containsKey("candidateIntents");
+        assertThat(mapper.toRecognitionResult(response("invalid", null)).status())
+                .isEqualTo(IntentRecognitionResult.Status.FAILED_OR_DEGRADED);
+    }
+
+    private JsonNode ambiguousResponse() throws Exception {
+        return objectMapper.readTree("""
+                {"code":200,"status":"success","optionalDetail":null,"auditOnly":"audit-only-marker",
+                 "data":{"sessionId":"intent-session","requestId":"intent-request","result":{
+                   "routeAction":"CLARIFY","message":"choose a skill","items":[],
+                   "clarification":{"type":"AMBIGUOUS_ROUTE","clarifyQuestion":"which skill?",
+                     "candidateIntents":[
+                       {"intentId":"b","accessName":"ex_skill-b","score":null},
+                       {"intentId":"a","accessName":"ex_skill-a","detail":{"optional":null}}]}}}}
+                """);
+    }
 
     @Test
     void stripsConfiguredAccessNamePrefixAndPreservesIntentIdentity() throws Exception {

@@ -65,6 +65,7 @@ public class RouteSignalApplicationService {
     private final RouteSignalProperties properties;
     private final RouteMemoryApplicationService routeMemoryService;
     private final ShortTermMemoryContextAssembler shortTermMemoryAssembler;
+    private final IntentRecognitionRecordService intentRecordService;
 
     /**
      * 创建可选路由信号编排服务。
@@ -78,13 +79,23 @@ public class RouteSignalApplicationService {
     public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentAgentRuntime intentAgentRuntime,
                                          RoutingPolicy routingPolicy, RouteSignalProperties properties,
                                          RouteMemoryApplicationService routeMemoryService,
-                                         ShortTermMemoryContextAssembler shortTermMemoryAssembler) {
+                                         ShortTermMemoryContextAssembler shortTermMemoryAssembler,
+                                         IntentRecognitionRecordService intentRecordService) {
         this.useCaseLibraryClient = useCaseLibraryClient;
         this.intentAgentRuntime = intentAgentRuntime;
         this.routingPolicy = routingPolicy;
         this.properties = properties;
         this.routeMemoryService = routeMemoryService;
         this.shortTermMemoryAssembler = shortTermMemoryAssembler;
+        this.intentRecordService = intentRecordService;
+    }
+
+    public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentAgentRuntime intentAgentRuntime,
+                                         RoutingPolicy routingPolicy, RouteSignalProperties properties,
+                                         RouteMemoryApplicationService routeMemoryService,
+                                         ShortTermMemoryContextAssembler shortTermMemoryAssembler) {
+        this(useCaseLibraryClient, intentAgentRuntime, routingPolicy, properties, routeMemoryService,
+                shortTermMemoryAssembler, null);
     }
 
     public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentAgentRuntime intentAgentRuntime,
@@ -233,6 +244,7 @@ public class RouteSignalApplicationService {
             return intentFailureFrames(request, result.decision(), latencyMs, intentFailureReason(result.decision()));
         }
         if (result.waitingClarification()) {
+            recordAmbiguousIntent(request, result, latencyMs);
             // 澄清不是可执行路由；交由等待终态创建 Interaction，不能在这里启动候选 Runtime。
             if (clarificationRoundLimitReached(request)) {
                 RouteSignalResult routeResult = RouteSignalResult.of(RouteTarget.agentRuntime(IntentAgentRuntime.PROVIDER, 0.0,
@@ -272,6 +284,23 @@ public class RouteSignalApplicationService {
                 intent, latencyMs, routingPolicy.intentConfidenceThreshold());
         return intentResultAndRouteFrames(request, routeResult, intent, latencyMs,
                 routeAction(result, intent, route));
+    }
+
+    private void recordAmbiguousIntent(IntentRouteRequest request, IntentRecognitionResult result, long latencyMs) {
+        if (intentRecordService == null || result.auditRawResponse().isEmpty()) {
+            return;
+        }
+        try {
+            intentRecordService.recordAmbiguousAsync(
+                    new IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput(
+                            request.user(), request.command(), request.runId(), null, null,
+                            routingPolicy.intentConfidenceThreshold(), latencyMs), result);
+        } catch (RuntimeException failure) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "Ambiguous intent audit failed; continuing normal routing")
+                    .runId(request.runId()).operation("intent-record.ambiguous")
+                    .attribute("failureType", failure.getClass().getName()).build());
+        }
     }
 
     private Flux<RouteSignalFrame> intentFailureFrames(IntentRouteRequest request, IntentDecision intent,

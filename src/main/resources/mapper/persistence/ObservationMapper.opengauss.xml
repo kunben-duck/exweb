@@ -4,7 +4,7 @@
     <!-- 合并问答快照。入参：可信快照；阶段单调更新，首帧及拒答独立合并。 -->
     <insert id="saveTrace">
         INSERT INTO fin_ex_turn_trace_t (
-            trace_id, tenant_id, user_id, session_id, root_run_id, root_user_message_id, source_run_id, source_trace_id, current_run_id, origin_type, current_run_ordinal, state_version, status, is_refusal, started_at, first_business_frame_at, first_business_frame_latency_ms, finished_at, duration_ms, error_code, created_at, updated_at
+            trace_id, tenant_id, user_id, session_id, root_run_id, root_user_message_id, source_run_id, source_trace_id, current_run_id, origin_type, current_run_ordinal, state_version, status, is_refusal, started_at, first_business_frame_at, first_business_frame_latency_ms, finished_at, duration_ms, error_code, creation_date, last_update_date
         ) VALUES (
             #{traceId}, #{tenantId}, #{userId}, #{sessionId}, #{rootRunId}, #{rootUserMessageId}, #{sourceRunId}, #{sourceTraceId}, #{currentRunId}, #{originType}, #{currentRunOrdinal}, #{stateVersion}, #{status}, #{isRefusal}, #{startedAt}, #{firstBusinessFrameAt}, #{firstBusinessFrameLatencyMs}, #{finishedAt}, #{durationMs}, #{errorCode}, #{createdAt}, #{updatedAt}
         )
@@ -24,12 +24,12 @@
             finished_at = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.finished_at ELSE fin_ex_turn_trace_t.finished_at END,
             duration_ms = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.duration_ms ELSE fin_ex_turn_trace_t.duration_ms END,
             error_code = CASE WHEN (EXCLUDED.current_run_ordinal &gt; fin_ex_turn_trace_t.current_run_ordinal OR (EXCLUDED.current_run_ordinal = fin_ex_turn_trace_t.current_run_ordinal AND EXCLUDED.current_run_id = fin_ex_turn_trace_t.current_run_id AND EXCLUDED.state_version &gt; fin_ex_turn_trace_t.state_version)) THEN EXCLUDED.error_code ELSE fin_ex_turn_trace_t.error_code END,
-            updated_at = CASE WHEN EXCLUDED.updated_at > fin_ex_turn_trace_t.updated_at THEN EXCLUDED.updated_at ELSE fin_ex_turn_trace_t.updated_at END
+            last_update_date = CASE WHEN EXCLUDED.last_update_date > fin_ex_turn_trace_t.last_update_date THEN EXCLUDED.last_update_date ELSE fin_ex_turn_trace_t.last_update_date END
     </insert>
     <!-- 合并调用快照。入参：单次实际尝试快照；只允许STARTED转为FINISHED。 -->
     <insert id="saveObservation">
         INSERT INTO fin_ex_agent_observation_t (
-            observation_id, trace_id, tenant_id, user_id, session_id, run_id, user_message_id, parent_observation_id, retry_of_observation_id, attempt_no, agent_type, agent_mode, operation, skill_id, runtime_session_id, status, outcome, started_at, first_business_frame_at, first_business_frame_latency_ms, finished_at, duration_ms, reject_code, reject_reason_code, reject_message, reject_recoverable, created_at, updated_at
+            observation_id, trace_id, tenant_id, user_id, session_id, run_id, user_message_id, parent_observation_id, retry_of_observation_id, attempt_no, agent_type, agent_mode, operation, skill_id, runtime_session_id, status, outcome, started_at, first_business_frame_at, first_business_frame_latency_ms, finished_at, duration_ms, reject_code, reject_reason_code, reject_message, reject_recoverable, creation_date, last_update_date
         ) VALUES (
             #{observationId}, #{traceId}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{userMessageId}, #{parentObservationId}, #{retryOfObservationId}, #{attemptNo}, #{agentType}, #{agentMode}, #{operation}, #{skillId}, #{runtimeSessionId}, #{status}, #{outcome}, #{startedAt}, #{firstBusinessFrameAt}, #{firstBusinessFrameLatencyMs}, #{finishedAt}, #{durationMs}, #{rejectCode}, #{rejectReasonCode}, #{rejectMessage}, #{rejectRecoverable}, #{createdAt}, #{updatedAt}
         )
@@ -55,6 +55,6 @@
             reject_reason_code = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.reject_reason_code ELSE fin_ex_agent_observation_t.reject_reason_code END,
             reject_message = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.reject_message ELSE fin_ex_agent_observation_t.reject_message END,
             reject_recoverable = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.reject_recoverable ELSE fin_ex_agent_observation_t.reject_recoverable END,
-            updated_at = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.updated_at ELSE fin_ex_agent_observation_t.updated_at END
+            last_update_date = CASE WHEN fin_ex_agent_observation_t.status != 'FINISHED' AND EXCLUDED.status = 'FINISHED' THEN EXCLUDED.last_update_date ELSE fin_ex_agent_observation_t.last_update_date END
     </insert>
 </mapper>

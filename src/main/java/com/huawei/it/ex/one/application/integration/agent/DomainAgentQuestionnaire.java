@@ -8,7 +8,7 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 
 import java.util.Map;
 
-/** DomainAgent 问卷边界；同形状的 Relay 卡片不能进入 DomainAgent 续跑。 */
+/** 识别 DomainAgent 问卷；即使字段结构相同，Relay 问卷卡片也不能按 DomainAgent 问卷处理。 */
 public final class DomainAgentQuestionnaire {
     private DomainAgentQuestionnaire() {
     }

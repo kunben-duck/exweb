@@ -1,27 +1,27 @@
 -- 先部署DDL，再受控启用观测；不改变现有业务表，不建立异步记录之间的强外键。
 CREATE TABLE IF NOT EXISTS fin_ex_turn_trace_t (
-    trace_id VARCHAR(64) PRIMARY KEY,
-    tenant_id VARCHAR(64) NOT NULL,
-    user_id VARCHAR(64) NOT NULL,
-    session_id VARCHAR(64),
-    root_run_id VARCHAR(64) NOT NULL,
-    root_user_message_id VARCHAR(64),
-    source_run_id VARCHAR(64),
-    source_trace_id VARCHAR(64),
-    current_run_id VARCHAR(64),
-    origin_type VARCHAR(32) NOT NULL,
+    trace_id NVARCHAR2(64) PRIMARY KEY,
+    tenant_id NVARCHAR2(64) NOT NULL,
+    user_id NVARCHAR2(64) NOT NULL,
+    session_id NVARCHAR2(64),
+    root_run_id NVARCHAR2(64) NOT NULL,
+    root_user_message_id NVARCHAR2(64),
+    source_run_id NVARCHAR2(64),
+    source_trace_id NVARCHAR2(64),
+    current_run_id NVARCHAR2(64),
+    origin_type NVARCHAR2(32) NOT NULL,
     current_run_ordinal BIGINT NOT NULL,
     state_version INTEGER NOT NULL,
-    status VARCHAR(32) NOT NULL,
+    status NVARCHAR2(32) NOT NULL,
     is_refusal BOOLEAN NOT NULL DEFAULT false,
     started_at TIMESTAMPTZ NOT NULL,
     first_business_frame_at TIMESTAMPTZ,
     first_business_frame_latency_ms BIGINT,
     finished_at TIMESTAMPTZ,
     duration_ms BIGINT,
-    error_code VARCHAR(128),
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
+    error_code NVARCHAR2(128),
+    creation_date TIMESTAMPTZ NOT NULL,
+    last_update_date TIMESTAMPTZ NOT NULL
 );
 
 COMMENT ON TABLE fin_ex_turn_trace_t IS '完整问答观测，包含人工及异步等待；best-effort，不作为业务裁决或计费依据。';
@@ -45,38 +45,38 @@ COMMENT ON COLUMN fin_ex_turn_trace_t.first_business_frame_latency_ms IS '从本
 COMMENT ON COLUMN fin_ex_turn_trace_t.finished_at IS '最终结束UTC采样时间；Trace人工及异步等待期间为空。';
 COMMENT ON COLUMN fin_ex_turn_trace_t.duration_ms IS '完整问答非负耗时毫秒，包含准备、重试、人工及异步等待，最终结束时赋值。';
 COMMENT ON COLUMN fin_ex_turn_trace_t.error_code IS 'Trace最终失败已有可信错误码，未知为空；不保存技术错误文本。';
-COMMENT ON COLUMN fin_ex_turn_trace_t.created_at IS '快照首次创建UTC时间。';
-COMMENT ON COLUMN fin_ex_turn_trace_t.updated_at IS '快照最近业务采样UTC时间。';
+COMMENT ON COLUMN fin_ex_turn_trace_t.creation_date IS '快照首次创建UTC时间。';
+COMMENT ON COLUMN fin_ex_turn_trace_t.last_update_date IS '快照最近业务采样UTC时间。';
 
 CREATE TABLE IF NOT EXISTS fin_ex_agent_observation_t (
-    observation_id VARCHAR(64) PRIMARY KEY,
-    trace_id VARCHAR(64) NOT NULL,
-    tenant_id VARCHAR(64) NOT NULL,
-    user_id VARCHAR(64) NOT NULL,
-    session_id VARCHAR(64) NOT NULL,
-    run_id VARCHAR(64) NOT NULL,
-    user_message_id VARCHAR(64),
-    parent_observation_id VARCHAR(64),
-    retry_of_observation_id VARCHAR(64),
+    observation_id NVARCHAR2(64) PRIMARY KEY,
+    trace_id NVARCHAR2(64) NOT NULL,
+    tenant_id NVARCHAR2(64) NOT NULL,
+    user_id NVARCHAR2(64) NOT NULL,
+    session_id NVARCHAR2(64) NOT NULL,
+    run_id NVARCHAR2(64) NOT NULL,
+    user_message_id NVARCHAR2(64),
+    parent_observation_id NVARCHAR2(64),
+    retry_of_observation_id NVARCHAR2(64),
     attempt_no INTEGER NOT NULL,
-    agent_type VARCHAR(32) NOT NULL,
-    agent_mode VARCHAR(32),
-    operation VARCHAR(32) NOT NULL,
-    skill_id VARCHAR(128),
-    runtime_session_id VARCHAR(128),
-    status VARCHAR(32) NOT NULL,
-    outcome VARCHAR(32),
+    agent_type NVARCHAR2(32) NOT NULL,
+    agent_mode NVARCHAR2(32),
+    operation NVARCHAR2(32) NOT NULL,
+    skill_id NVARCHAR2(128),
+    runtime_session_id NVARCHAR2(128),
+    status NVARCHAR2(32) NOT NULL,
+    outcome NVARCHAR2(32),
     started_at TIMESTAMPTZ NOT NULL,
     first_business_frame_at TIMESTAMPTZ,
     first_business_frame_latency_ms BIGINT,
     finished_at TIMESTAMPTZ,
     duration_ms BIGINT,
-    reject_code VARCHAR(128),
-    reject_reason_code VARCHAR(128),
+    reject_code NVARCHAR2(128),
+    reject_reason_code NVARCHAR2(128),
     reject_message TEXT,
     reject_recoverable BOOLEAN,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
+    creation_date TIMESTAMPTZ NOT NULL,
+    last_update_date TIMESTAMPTZ NOT NULL
 );
 
 COMMENT ON TABLE fin_ex_agent_observation_t IS '单次实际Agent调用尝试观测；不保存技术错误文本、请求或响应正文。';
@@ -106,8 +106,8 @@ COMMENT ON COLUMN fin_ex_agent_observation_t.reject_code IS '明确拒答控制�
 COMMENT ON COLUMN fin_ex_agent_observation_t.reject_reason_code IS '明确拒答控制帧中的原因代码，可空。';
 COMMENT ON COLUMN fin_ex_agent_observation_t.reject_message IS '脱敏拒答摘要，最多1024个Unicode码点；no-store不保存文本。';
 COMMENT ON COLUMN fin_ex_agent_observation_t.reject_recoverable IS '下游明确声明的拒答是否可恢复，未声明为空。';
-COMMENT ON COLUMN fin_ex_agent_observation_t.created_at IS '快照首次创建UTC时间。';
-COMMENT ON COLUMN fin_ex_agent_observation_t.updated_at IS '快照最近业务采样UTC时间。';
+COMMENT ON COLUMN fin_ex_agent_observation_t.creation_date IS '快照首次创建UTC时间。';
+COMMENT ON COLUMN fin_ex_agent_observation_t.last_update_date IS '快照最近业务采样UTC时间。';
 
 CREATE INDEX IF NOT EXISTS idx_fin_ex_trace_owner_time ON fin_ex_turn_trace_t (tenant_id, user_id, started_at, trace_id);
 CREATE INDEX IF NOT EXISTS idx_fin_ex_obs_trace_time ON fin_ex_agent_observation_t (tenant_id, user_id, trace_id, started_at, observation_id);

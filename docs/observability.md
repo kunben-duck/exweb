@@ -101,68 +101,69 @@ WAIT和异步等待不结束Trace；最终完成、失败或取消结束Trace。
 
 ## 表定义
 
-完整DDL及中文注释：[增量脚本](../src/main/resources/db/incremental-20261018-turn-observation.sql)，同步包含于[初始化DDL](../src/main/resources/db/init-20260718.sql)。
+首次建表的完整DDL及中文注释：[观测建表脚本](../src/main/resources/db/incremental-20261018-turn-observation.sql)，同步包含于[初始化DDL](../src/main/resources/db/init-20260718.sql)。
+已部署旧版观测表使用[存量字段升级脚本](../src/main/resources/db/incremental-20261027-observation-column-standardization.sql)，不要通过重跑`CREATE TABLE IF NOT EXISTS`升级已有表。
 两表共50列，不修改既有业务表，不建立依赖异步写入顺序的强外键。下表“可空”表示尚未确定或未发生时允许NULL。
 
 ### fin_ex_turn_trace_t（22列）
 
 | 字段 | SQL类型 | 可空 | 含义 |
 | --- | --- | --- | --- |
-| trace_id | VARCHAR(64) PK | 否 | 独立问答ID |
-| tenant_id | VARCHAR(64) | 否 | 可信租户 |
-| user_id | VARCHAR(64) | 否 | 可信归属用户 |
-| session_id | VARCHAR(64) | 是 | ChatService会话，准入前可未知 |
-| root_run_id | VARCHAR(64) | 否 | 首次启动分配的Run |
-| root_user_message_id | VARCHAR(64) | 是 | 根user消息，澄清不会覆盖，准入失败可空 |
-| source_run_id | VARCHAR(64) | 是 | 派生问答/存量续跑的来源Run |
-| source_trace_id | VARCHAR(64) | 是 | 来源独立Trace，无法取得则空 |
-| current_run_id | VARCHAR(64) | 是 | 当前阶段Run；ordinal=0仅为预分配ID |
-| origin_type | VARCHAR(32) | 否 | NEXT/EDIT_USER/REGENERATE_ASSISTANT/CANDIDATE_SWITCH/LEGACY_CONTINUATION/LEGACY_STOP |
+| trace_id | NVARCHAR2(64) PK | 否 | 独立问答ID |
+| tenant_id | NVARCHAR2(64) | 否 | 可信租户 |
+| user_id | NVARCHAR2(64) | 否 | 可信归属用户 |
+| session_id | NVARCHAR2(64) | 是 | ChatService会话，准入前可未知 |
+| root_run_id | NVARCHAR2(64) | 否 | 首次启动分配的Run |
+| root_user_message_id | NVARCHAR2(64) | 是 | 根user消息，澄清不会覆盖，准入失败可空 |
+| source_run_id | NVARCHAR2(64) | 是 | 派生问答/存量续跑的来源Run |
+| source_trace_id | NVARCHAR2(64) | 是 | 来源独立Trace，无法取得则空 |
+| current_run_id | NVARCHAR2(64) | 是 | 当前阶段Run；ordinal=0仅为预分配ID |
+| origin_type | NVARCHAR2(32) | 否 | NEXT/EDIT_USER/REGENERATE_ASSISTANT/CANDIDATE_SWITCH/LEGACY_CONTINUATION/LEGACY_STOP |
 | current_run_ordinal | BIGINT | 否 | 未准入0、首Run1、成功续跑递增 |
 | state_version | INTEGER | 否 | 启动0、运行1、等待2、结束3 |
-| status | VARCHAR(32) | 否 | STARTED/RUNNING/WAITING_USER/ASYNC_WAITING/COMPLETED/FAILED/CANCELLED |
+| status | NVARCHAR2(32) | 否 | STARTED/RUNNING/WAITING_USER/ASYNC_WAITING/COMPLETED/FAILED/CANCELLED |
 | is_refusal | BOOLEAN DEFAULT false | 否 | 曾记录明确Agent拒答，累计OR |
 | started_at | TIMESTAMPTZ | 否 | 根启动采样UTC |
 | first_business_frame_at | TIMESTAMPTZ | 是 | 最早有效业务帧采样UTC |
 | first_business_frame_latency_ms | BIGINT | 是 | 从根开始至首帧的非负毫秒数 |
 | finished_at | TIMESTAMPTZ | 是 | 最终结束采样UTC，等待时不结束 |
 | duration_ms | BIGINT | 是 | 完整问答非负毫秒耗时 |
-| error_code | VARCHAR(128) | 是 | 最终失败已有可信代码，未知为空 |
-| created_at | TIMESTAMPTZ | 否 | 首次快照业务创建时间，不用入库时间补造 |
-| updated_at | TIMESTAMPTZ | 否 | 最近业务采样时间 |
+| error_code | NVARCHAR2(128) | 是 | 最终失败已有可信代码，未知为空 |
+| creation_date | TIMESTAMPTZ | 否 | 首次快照业务创建时间，不用入库时间补造 |
+| last_update_date | TIMESTAMPTZ | 否 | 最近业务采样时间 |
 
 ### fin_ex_agent_observation_t（28列）
 
 | 字段 | SQL类型 | 可空 | 含义 |
 | --- | --- | --- | --- |
-| observation_id | VARCHAR(64) PK | 否 | 单次实际尝试ID |
-| trace_id | VARCHAR(64) | 否 | 所属独立问答 |
-| tenant_id | VARCHAR(64) | 否 | 可信租户 |
-| user_id | VARCHAR(64) | 否 | 可信用户 |
-| session_id | VARCHAR(64) | 否 | ChatService会话 |
-| run_id | VARCHAR(64) | 否 | 本次调用关联Run |
-| user_message_id | VARCHAR(64) | 是 | 本Run实际user消息，不必等于根消息 |
-| parent_observation_id | VARCHAR(64) | 是 | 前序关联调用，如Intent到技能、拒答到Intent |
-| retry_of_observation_id | VARCHAR(64) | 是 | 同一逻辑调用的前次尝试 |
+| observation_id | NVARCHAR2(64) PK | 否 | 单次实际尝试ID |
+| trace_id | NVARCHAR2(64) | 否 | 所属独立问答 |
+| tenant_id | NVARCHAR2(64) | 否 | 可信租户 |
+| user_id | NVARCHAR2(64) | 否 | 可信用户 |
+| session_id | NVARCHAR2(64) | 否 | ChatService会话 |
+| run_id | NVARCHAR2(64) | 否 | 本次调用关联Run |
+| user_message_id | NVARCHAR2(64) | 是 | 本Run实际user消息，不必等于根消息 |
+| parent_observation_id | NVARCHAR2(64) | 是 | 前序关联调用，如Intent到技能、拒答到Intent |
+| retry_of_observation_id | NVARCHAR2(64) | 是 | 同一逻辑调用的前次尝试 |
 | attempt_no | INTEGER | 否 | 从1开始的实际尝试次数 |
-| agent_type | VARCHAR(32) | 否 | INTENT/DOMAIN_AGENT/RELAY |
-| agent_mode | VARCHAR(32) | 是 | Relay的DELEGATE/DOMAIN_EXPERT，其他为空 |
-| operation | VARCHAR(32) | 否 | RECOGNIZE/QUERY/INTERACTION_RESPONSE/STOP/ASYNC_CALLBACK |
-| skill_id | VARCHAR(128) | 是 | DomainAgent技能ID或Relay最终roleName；Intent/Delegate为空 |
-| runtime_session_id | VARCHAR(128) | 是 | 真实下游会话，未知为空 |
-| status | VARCHAR(32) | 否 | STARTED/FINISHED |
-| outcome | VARCHAR(32) | 是 | 下述调用结果，未结束时可空 |
+| agent_type | NVARCHAR2(32) | 否 | INTENT/DOMAIN_AGENT/RELAY |
+| agent_mode | NVARCHAR2(32) | 是 | Relay的DELEGATE/DOMAIN_EXPERT，其他为空 |
+| operation | NVARCHAR2(32) | 否 | RECOGNIZE/QUERY/INTERACTION_RESPONSE/STOP/ASYNC_CALLBACK |
+| skill_id | NVARCHAR2(128) | 是 | DomainAgent技能ID或Relay最终roleName；Intent/Delegate为空 |
+| runtime_session_id | NVARCHAR2(128) | 是 | 真实下游会话，未知为空 |
+| status | NVARCHAR2(32) | 否 | STARTED/FINISHED |
+| outcome | NVARCHAR2(32) | 是 | 下述调用结果，未结束时可空 |
 | started_at | TIMESTAMPTZ | 否 | 实际尝试开始UTC |
 | first_business_frame_at | TIMESTAMPTZ | 是 | 本尝试首帧UTC |
 | first_business_frame_latency_ms | BIGINT | 是 | 本尝试开始至首帧的非负毫秒数 |
 | finished_at | TIMESTAMPTZ | 是 | 本尝试结束UTC |
 | duration_ms | BIGINT | 是 | 本尝试非负毫秒耗时 |
-| reject_code | VARCHAR(128) | 是 | 明确拒答控制帧代码 |
-| reject_reason_code | VARCHAR(128) | 是 | 拒答原因代码 |
+| reject_code | NVARCHAR2(128) | 是 | 明确拒答控制帧代码 |
+| reject_reason_code | NVARCHAR2(128) | 是 | 拒答原因代码 |
 | reject_message | TEXT | 是 | 脱敏摘要，最多1024 Unicode码点，no-store省略 |
 | reject_recoverable | BOOLEAN | 是 | 下游明确声明的可恢复性，未声明为空 |
-| created_at | TIMESTAMPTZ | 否 | 本尝试创建采样UTC |
-| updated_at | TIMESTAMPTZ | 否 | 本尝试最近采样UTC |
+| creation_date | TIMESTAMPTZ | 否 | 本尝试创建采样UTC |
+| last_update_date | TIMESTAMPTZ | 否 | 本尝试最近采样UTC |
 
 outcome取值：COMPLETED、REJECTED、WAITING_USER、ASYNC_ACCEPTED、STREAM_ENDED、ERROR、TIMEOUT、CANCELLED、STOP_ACCEPTED、CALLBACK_APPLIED、CALLBACK_IGNORED。
 不保存Observation的error_code/error_type/error_message，不另算错误次数/错误率。
@@ -181,7 +182,17 @@ Trace按`(current_run_ordinal,state_version)`条件推进，相同ordinal还须�
 
 ## 验证与上线
 
-先执行DDL，再部署默认关闭版本，核实各实例配置一致后受控启用。停用时仅关闭开关，不删除业务或审计数据。
+首次部署先执行建表DDL，再部署默认关闭版本，核实各实例配置一致后受控启用。停用时仅关闭开关，不删除业务或审计数据。
+
+已部署旧版观测表的字段升级：
+
+- 适用起点为两表使用`VARCHAR`及`created_at/updated_at`；存量升级脚本将30个字符字段改为同长度的`NVARCHAR2`，将四个审计列改名为`creation_date/last_update_date`。时间类型仍为`TIMESTAMPTZ`，不改其他字段、约束或索引定义。
+- 先通过配置部署或重启，使所有实例关闭观测，确认旧观测写入和相关事务结束；总开关不是动态开关。之后由DBA在正确业务schema下、同一数据库连接中执行完整升级事务。
+- 提前备份并安排维护窗口。类型转换可能涉及表重写、索引处理、锁等待及额外磁盘空间，目标openGauss版本的执行兼容性和耗时需另行验证。
+- 脚本只用于一次性旧结构升级，重复执行或列名冲突会报错；已按新版定义建表的环境不执行该脚本。任一语句失败后停止执行，在同一连接执行`ROLLBACK`，不继续提交。
+- 事务提交成功后部署新版Mapper，再按需重新开启观测。旧Mapper不能继续写新列名，新Mapper不能提前写旧表；升级窗口内不承诺观测完整性。
+- 提交后不自动反向迁移，不提供截断数据、删表重建或兼容双列兜底。脚本不随应用启动执行。
+
 新头需DomainAgent HTTP服务及Relay握手链路接受；Intent不要求支持。没有前端切换或公开接口迁移。
 本地覆盖默认关闭、真实HTTP/WS适配器的头和重试、问卷续跑、异步回调、事务同步、队列拒绝/过期、分类器失败及no-store边界。
 MyBatis解析、内存仓储及本地事务模拟不等于真实openGauss的SQL执行/锁竞争，也不证明真实下游兼容性。

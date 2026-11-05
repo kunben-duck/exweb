@@ -189,7 +189,7 @@ public class ChatRunAdmissionCommitService {
                 context.emitIntentExpertSelection());
     }
 
-    /** 原子受理候选DomainAgent切换：复用source user消息并替换冲突Binding。 */
+    /** 原子受理候选技能切换：复用source user消息并按直连目标保留或替换Binding。 */
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public AdmissionResult commitCandidateSwitch(CandidateSwitchAdmissionCommand request) {
         if (request == null || request.source() == null) {
@@ -229,17 +229,23 @@ public class ChatRunAdmissionCommitService {
         } catch (ActiveRunExistsException ex) {
             throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
         }
-        interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
+        int cancelledInteractions = interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
         IntentExpertScope previousScope = IntentExpertContext.fromSessionMetadata(
                 currentSession.metadataJson()).orElse(null);
         List<AttachmentRef> requestedAttachments = request.command().attachments() == null
                 ? List.of()
                 : request.command().attachments();
-        List<AdmissionCancellation> bindingCancellations = requestedAttachments.isEmpty()
-                || previousScope != null
-                ? runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
-                        user.tenantId(), user.ownerUserId(), currentSession.id())
-                : List.of();
+        boolean domainExpert = "DOMAIN_EXPERT".equals(request.command().targetType());
+        List<AdmissionCancellation> bindingCancellations;
+        if (domainExpert && cancelledInteractions == 0) {
+            bindingCancellations = runtimeBindingService.cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                    user.tenantId(), user.ownerUserId(), currentSession.id(), request.command().targetId());
+        } else if (domainExpert || requestedAttachments.isEmpty() || previousScope != null) {
+            bindingCancellations = runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
+                    user.tenantId(), user.ownerUserId(), currentSession.id());
+        } else {
+            bindingCancellations = List.of();
+        }
         if (previousScope != null) {
             sessionService.updateMetadataWithoutTouch(currentSession,
                     IntentExpertContext.replaceSessionMetadata(currentSession.metadataJson(), null));

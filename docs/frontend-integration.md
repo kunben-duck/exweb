@@ -2118,7 +2118,7 @@ run-B 不创建新的可见 user 或 assistant 消息，最终更新原 assistan
 ### 候选技能立即切换
 
 对于`POST /v1/chat/intent-candidates`返回的其他候选，不要先分别调用stop和普通`POST /runs`。
-使用以下独立接口，由服务端保证A终态后才创建B：
+使用以下独立接口，由服务端保证A终态后才创建B。支持DomainAgent及Relay专家，URL和请求字段不变：
 
 ```http
 POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
@@ -2138,6 +2138,34 @@ POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
 }
 ```
 
+`skillId`直接使用候选查询返回值。通用响应前缀为`EX_`、专家前缀为`RE_`时，原始
+`EX_RE_national-cfo`的候选值是`RE_national-cfo`；前端原样提交，服务端在Stop前解析为专家
+`roleName=national-cfo`。只移除一次专家前缀，不再次处理通用前缀；大小写敏感，空roleName拒绝且不Stop。
+未命中专家前缀或命中敏感信息专用标识时沿用DomainAgent路径，本接口不扩展Delegate。
+
+专家切换示例：
+
+```json
+{
+  "messageId": "msg_user_xxx",
+  "skillId": "RE_national-cfo",
+  "selectedIntent": {"intentId": "national_cfo", "intentName": "国家CFO专家"},
+  "intentAccessName": "finance_pc_entry"
+}
+```
+
+切换退出原聚合专家范围，使用`routeSource=front-selected`、`relayExpertPinned=true`的手动专家绑定。
+无开放Interaction时，同名且档案、范围匹配的ACTIVE Binding可复用；匹配的RESUMABLE按原规则恢复，
+否则NEW，不恢复CANCELLED。assistant的`metadataJson.skillId`及Binding的`invocationSkillId`为最终roleName；
+切换事件`skillId`保留原候选值，`targetType=DOMAIN_EXPERT/targetId=national-cfo`表示实际目标。
+
+普通专家正常完成后Binding仍ACTIVE。下一轮只提交sessionId和问题，不再传目标，也会跳过Intent及用例库，
+以同一Binding和真实下游session发送`RESUME + chat_expert`；再次手动选择同名专家仍按现有条件复用。
+`stream-status`在完成后activeRun为空，但仍返回有效专家roleName、意图摘要和来源。non-sticky名单中的
+专家完成后转RESUMABLE，下一轮恢复路由，再次命中可恢复；问卷等待仍ACTIVE，回答完成后才执行完成策略。
+forceReroute、换专家、Stop、失败、删除及下游Session失效均保持既有规则。
+所有后端实例支持本扩展后再启用专家候选纠偏，真实Relay会话恢复需联调确认。
+
 前端在请求期间继续保留A的订阅，以接收标准`run.cancelled`。接口成功返回标准
 `ChatRunStartDto`后，清空A尚未固化的临时正文并改订阅B的`streamTopicId`；B会在自己的事件流中重新给出
 需要展示的可信路由过程，漏失事件按普通Run使用`GET /v1/chat/runs/{runB}/events/resume`恢复。页面刷新时，
@@ -2154,13 +2182,13 @@ run.started
 -> Run-A的Intent start/progress/delta/result
 -> Run-A及更早候选Run的技能选择
 -> runtime.progress(sourceType=candidate-skill-switch)
--> runtime.metadata(sourceType=selectedDomainAgent，目标为B)
+-> runtime.metadata(sourceType=selectedDomainAgent或selectedDomainExpert，目标为B)
 -> B的Runtime事件和终态
 ```
 
 继承事件使用Run-B自己的外层`runId/sessionId/sequence`，并在payload中增加
 `candidateSwitchReplay.originRunId/originSequence`供前端去重和标识来源；旧事件中的
-`runtimeSessionId/runtimeBindingId`不会复制。切换标识payload包含`sourceRunId/skillId/targetId`及可用的
+`runtimeSessionId/runtimeBindingId`不会复制。切换标识payload包含`sourceRunId/skillId/targetType/targetId`及可用的
 `intentId/intentName`。只回放Intent过程、技能选择和既有候选切换标识，不回放正文、卡片、引用、工具、
 普通Runtime过程、拒答或终态。A到B再到C时沿来源run和sequence累计去重，整体最多32条、256KiB。
 

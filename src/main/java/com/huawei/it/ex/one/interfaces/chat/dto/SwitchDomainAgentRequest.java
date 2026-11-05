@@ -11,7 +11,7 @@ import jakarta.validation.constraints.Size;
 
 import java.util.Map;
 
-/** 从Intent候选中选择DomainAgent并立即替换当前Run。 */
+/** 从Intent候选中选择DomainAgent或Relay专家并立即替换当前Run。 */
 public record SwitchDomainAgentRequest(
         @NotBlank(message = "messageId不能为空")
         @Size(max = 64, message = "messageId长度不能超过64")

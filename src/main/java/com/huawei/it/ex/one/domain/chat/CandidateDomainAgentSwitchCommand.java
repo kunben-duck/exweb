@@ -10,7 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 前端从Intent候选中选择DomainAgent后发起的立即切换命令。
+ * 前端从Intent候选中选择DomainAgent或Relay专家后发起的立即切换命令。
  *
  * <p>原始query和附件不由该命令携带，应用层会根据source run关联的可信user消息恢复。</p>
  */

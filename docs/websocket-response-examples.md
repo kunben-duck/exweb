@@ -4105,6 +4105,27 @@ REST `POST /v1/chat/runs`：
 
 先通过现有 REST 查询候选，再调用 `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent`：
 
+同时支持Relay专家候选。以通用前缀`EX_`、专家前缀`RE_`为例，候选查询返回的
+`RE_national-cfo`原样提交，后端解析为`national-cfo`。切换事件的payload示例如下（外层WS封装不变）：
+
+```json
+{
+  "source": "chatservice",
+  "sourceType": "candidate-skill-switch",
+  "sourceRunId": "run_switch_a",
+  "skillId": "RE_national-cfo",
+  "targetType": "DOMAIN_EXPERT",
+  "targetId": "national-cfo",
+  "intentId": "national_cfo",
+  "intentName": "国家CFO专家"
+}
+```
+
+该标识之后使用既有`selectedDomainExpert`及Relay事件。assistant技能标识为最终roleName。
+普通专家完成后保持ACTIVE绑定，普通下一轮和再次显式选择同名专家按原匹配条件RESUME真实下游会话；
+non-sticky完成后仍转RESUMABLE，问卷等待仍ACTIVE。切换退出聚合专家范围，不跨范围恢复旧Binding。
+下面继续展示原DomainAgent候选示例，其事件行为不变。
+
 
 ```json
 {

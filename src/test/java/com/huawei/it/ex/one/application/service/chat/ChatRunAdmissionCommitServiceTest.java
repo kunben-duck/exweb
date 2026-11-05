@@ -13,10 +13,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService.AdmissionCancellation;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
@@ -24,6 +26,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
+import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -262,6 +265,60 @@ class ChatRunAdmissionCommitServiceTest {
         assertThat(result.cancelledBindings()).containsExactly(cancellation.cancelled());
         verify(fixture.bindingService(), never())
                 .cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(any(), any(), any(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void candidateExpertPreservesReusableBindingWithOrWithoutAttachments(boolean withAttachments) {
+        Fixture fixture = fixture();
+        ChatSession current = session(null);
+        ChatCommand command = candidateExpertCommand(withAttachments);
+        CandidateSwitchRunSource source = candidateSource(fixture, current);
+        AdmissionCancellation cancellation = cancellation();
+        when(fixture.bindingService().cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                USER.tenantId(), USER.ownerUserId(), current.id(), "analysis"))
+                .thenReturn(List.of(cancellation));
+
+        var result = fixture.service().commitCandidateSwitch(
+                new ChatRunAdmissionCommitService.CandidateSwitchAdmissionCommand(USER, command, "run1", source));
+
+        verify(fixture.bindingService()).cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                USER.tenantId(), USER.ownerUserId(), current.id(), "analysis");
+        verify(fixture.bindingService(), never()).cancelActiveForAdmissionWithSnapshots(any(), any(), any());
+        assertThat(result.restorableAdmissionCancellations()).containsExactly(cancellation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void candidateExpertWithOpenInteractionCancelsAllBindingsEvenWithAttachments(boolean withAttachments) {
+        Fixture fixture = fixture();
+        ChatSession current = session(null);
+        CandidateSwitchRunSource source = candidateSource(fixture, current);
+        when(fixture.interactionService().cancelOpenBySessionAndCount(USER, current.id())).thenReturn(1);
+
+        fixture.service().commitCandidateSwitch(new ChatRunAdmissionCommitService.CandidateSwitchAdmissionCommand(
+                USER, candidateExpertCommand(withAttachments), "run1", source));
+
+        verify(fixture.bindingService()).cancelActiveForAdmissionWithSnapshots(
+                USER.tenantId(), USER.ownerUserId(), current.id());
+        verify(fixture.bindingService(), never())
+                .cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(any(), any(), any(), any());
+    }
+
+    private CandidateSwitchRunSource candidateSource(Fixture fixture, ChatSession session) {
+        ChatRunMessagePlan plan = messagePlan();
+        when(fixture.sessionService().lockAndReloadForMessageMutation(
+                USER.tenantId(), USER.ownerUserId(), session)).thenReturn(session);
+        when(fixture.sessionService().prepareCandidateSwitchPlan(
+                USER, session, "run-old", "msg1", "assistant-old", null)).thenReturn(plan);
+        return new CandidateSwitchRunSource("run-old", ChatRunStatus.COMPLETED, session, plan.userMessage(),
+                "assistant-old", null, ResolvedChatAttachments.empty(), CandidateSwitchRouteTrace.empty());
+    }
+
+    private ChatCommand candidateExpertCommand(boolean withAttachments) {
+        return new ChatCommand("candidate", USER.tenantId(), USER.ownerUserId(), "session1", null, "web", "query",
+                withAttachments ? List.of(new AttachmentRef("doc1", "a.txt", "text/plain", 1L)) : List.of(),
+                Map.of(), "DOMAIN_EXPERT", "analysis", ChatRunMode.REGENERATE_ASSISTANT, null, null, "assistant-old");
     }
 
     private Fixture fixture() {

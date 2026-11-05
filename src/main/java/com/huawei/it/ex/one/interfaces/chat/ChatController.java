@@ -133,7 +133,7 @@ public class ChatController {
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
-    /** 停止source Run并使用同一user消息直连指定候选DomainAgent。 */
+    /** 停止source Run并使用同一user消息直连指定候选DomainAgent或Relay专家。 */
     @PostMapping(value = "/runs/{sourceRunId}/switch-domain-agent")
     public Mono<ChatRunStartDto> switchDomainAgent(
             @PathVariable("sourceRunId") String sourceRunId,

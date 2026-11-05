@@ -59,7 +59,16 @@ final class CandidateSwitchRouteTraceService {
             UserContext user,
             ChatRun sourceRun,
             CandidateDomainAgentSwitchCommand command) {
-        CandidateSwitchRouteTrace.Entry marker = switchMarker(sourceRun, command);
+        return load(user, sourceRun, command,
+                new ExplicitRuntimeTarget(ExplicitRuntimeTarget.Type.DOMAIN_AGENT, command.skillId()));
+    }
+
+    CandidateSwitchRouteTrace load(
+            UserContext user,
+            ChatRun sourceRun,
+            CandidateDomainAgentSwitchCommand command,
+            ExplicitRuntimeTarget target) {
+        CandidateSwitchRouteTrace.Entry marker = switchMarker(sourceRun, command, target);
         List<ChatEvent> sourceEvents;
         try {
             long afterSeq = sourceRun.firstSeq() == null || sourceRun.firstSeq() <= 0
@@ -156,7 +165,8 @@ final class CandidateSwitchRouteTraceService {
 
     private CandidateSwitchRouteTrace.Entry switchMarker(
             ChatRun sourceRun,
-            CandidateDomainAgentSwitchCommand command) {
+            CandidateDomainAgentSwitchCommand command,
+            ExplicitRuntimeTarget target) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("source", "chatservice");
         payload.put("sourceType", "candidate-skill-switch");
@@ -164,8 +174,8 @@ final class CandidateSwitchRouteTraceService {
         payload.put("status", "COMPLETED");
         payload.put("message", "已选择候选技能重新调用");
         payload.put("sourceRunId", sourceRun.id());
-        payload.put("targetType", "DOMAIN_AGENT");
-        payload.put("targetId", command.skillId());
+        payload.put("targetType", target.type().name());
+        payload.put("targetId", target.targetId());
         payload.put("skillId", command.skillId());
         putIfPresent(payload, "intentId", SelectedIntentContext.intentId(command.metadata()));
         putIfPresent(payload, "intentName", SelectedIntentContext.intentName(command.metadata()));

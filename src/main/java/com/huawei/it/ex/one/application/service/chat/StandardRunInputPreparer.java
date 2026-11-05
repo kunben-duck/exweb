@@ -132,8 +132,9 @@ final class StandardRunInputPreparer {
         RuntimeForwardHeaders headers = normalizeForwardHeaders(request.forwardHeaders());
         ChatCommand identified = identifiedCommand(request.user(), request.command());
         ExplicitRuntimeTarget explicitRuntimeTarget = explicitRuntimeTarget(identified);
-        if (explicitRuntimeTarget == null || !explicitRuntimeTarget.domainAgent()) {
-            throw new IllegalArgumentException("候选技能切换仅支持直连DomainAgent");
+        if (explicitRuntimeTarget == null
+                || (!explicitRuntimeTarget.domainAgent() && !explicitRuntimeTarget.domainExpert())) {
+            throw new IllegalArgumentException("候选技能切换仅支持直连DomainAgent或Relay专家");
         }
         ChatSession session = source.session();
         if (!session.id().equals(identified.sessionId())

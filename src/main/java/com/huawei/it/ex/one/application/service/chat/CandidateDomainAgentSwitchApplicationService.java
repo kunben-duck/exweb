@@ -24,16 +24,18 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import reactor.core.publisher.Mono;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
-/** 串行协调候选DomainAgent切换，确保source Run终止后才复用原user消息创建新Run。 */
+/** 串行协调候选技能切换，确保source Run终止后才复用原user消息调用DomainAgent或Relay专家。 */
 @Service
 public class CandidateDomainAgentSwitchApplicationService {
     private static final String SWITCH_REASON = "CANDIDATE_SWITCH";
@@ -47,6 +49,7 @@ public class CandidateDomainAgentSwitchApplicationService {
     private final ChatRunExecutionCoordinator runExecutionCoordinator;
     private final CandidateSwitchRouteTraceService routeTraceService;
     private final ChatInteractionRequestRepository interactionRepository;
+    private final CandidateSwitchTargetResolver targetResolver;
 
     public CandidateDomainAgentSwitchApplicationService(
             ChatRunApplicationService chatRunService,
@@ -58,6 +61,23 @@ public class CandidateDomainAgentSwitchApplicationService {
             ChatRunExecutionCoordinator runExecutionCoordinator,
             CandidateSwitchRouteTraceService routeTraceService,
             ChatInteractionRequestRepository interactionRepository) {
+        this(chatRunService, sessionService, messageRepository, documentFacade, stopCoordinator,
+                runStartCoordinator, runExecutionCoordinator, routeTraceService, interactionRepository,
+                new CandidateSwitchTargetResolver("", new SensitiveInformationAccessNameResolver("")));
+    }
+
+    @Autowired
+    public CandidateDomainAgentSwitchApplicationService(
+            ChatRunApplicationService chatRunService,
+            SessionApplicationService sessionService,
+            ChatMessageRepository messageRepository,
+            DocumentFacade documentFacade,
+            ChatRunStopCoordinator stopCoordinator,
+            ChatRunStartCoordinator runStartCoordinator,
+            ChatRunExecutionCoordinator runExecutionCoordinator,
+            CandidateSwitchRouteTraceService routeTraceService,
+            ChatInteractionRequestRepository interactionRepository,
+            CandidateSwitchTargetResolver targetResolver) {
         this.chatRunService = chatRunService;
         this.sessionService = sessionService;
         this.messageRepository = messageRepository;
@@ -67,6 +87,7 @@ public class CandidateDomainAgentSwitchApplicationService {
         this.runExecutionCoordinator = runExecutionCoordinator;
         this.routeTraceService = routeTraceService;
         this.interactionRepository = interactionRepository;
+        this.targetResolver = targetResolver;
     }
 
     /** 先验证可信来源并停止旧 Run，再受理复用原 user 消息的替代 Run；两阶段不共用长事务。 */
@@ -81,6 +102,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 : forwardHeaders;
         return Mono.defer(() -> {
             CandidateSwitchRunSource source = prepareSource(user, command);
+            ResolvedSwitch selection = new ResolvedSwitch(command, targetResolver.resolve(command.skillId()));
             Mono<Void> stopped = requiresStop(source.sourceRunStatus())
                     ? stopCoordinator.stopRun(
                                     user,
@@ -91,7 +113,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                             .then()
                     : Mono.empty();
             return stopped.then(Mono.defer(() -> startReplacement(
-                    user, traceSnapshot, command, headers, source)));
+                    user, traceSnapshot, selection, headers, source)));
         });
     }
 
@@ -172,7 +194,7 @@ public class CandidateDomainAgentSwitchApplicationService {
     private Mono<ChatRunStartResult> startReplacement(
             UserContext user,
             TraceContext traceContext,
-            CandidateDomainAgentSwitchCommand command,
+            ResolvedSwitch selection,
             RuntimeForwardHeaders forwardHeaders,
             CandidateSwitchRunSource source) {
         // Stop 可与自然完成竞争；必须回读终态和当前路径，后续准入事务还会在 Session 锁内复查。
@@ -193,7 +215,8 @@ public class CandidateDomainAgentSwitchApplicationService {
                 ? new AssistantSource(source.assistantMessageId(), source.reusedAssistantSourceRunId())
                 : new AssistantSource(latestSource.assistantMessageId(), null);
         ensureCurrentSource(currentSession, latestSource.id(), source.userMessage().id(), assistant.messageId());
-        CandidateSwitchRouteTrace routeTrace = routeTraceService.load(user, latestSource, command);
+        CandidateSwitchRouteTrace routeTrace = routeTraceService.load(
+                user, latestSource, selection.command(), selection.target());
         CandidateSwitchRunSource currentSource = new CandidateSwitchRunSource(
                 source.sourceRunId(),
                 latestSource.status(),
@@ -203,7 +226,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 assistant.previousRunId(),
                 source.resolvedAttachments(),
                 routeTrace);
-        ChatCommand runCommand = replacementCommand(command, currentSource);
+        ChatCommand runCommand = replacementCommand(selection, currentSource);
         return runStartCoordinator.startStandard(
                 user,
                 traceContext,
@@ -219,8 +242,9 @@ public class CandidateDomainAgentSwitchApplicationService {
     }
 
     private ChatCommand replacementCommand(
-            CandidateDomainAgentSwitchCommand command,
+            ResolvedSwitch selection,
             CandidateSwitchRunSource source) {
+        CandidateDomainAgentSwitchCommand command = selection.command();
         ChatSession session = source.session();
         return new ChatCommand(
                 null,
@@ -232,8 +256,8 @@ public class CandidateDomainAgentSwitchApplicationService {
                 source.userMessage().content(),
                 source.resolvedAttachments().attachments(),
                 command.metadata(),
-                "DOMAIN_AGENT",
-                command.skillId(),
+                selection.target().type().name(),
+                selection.target().targetId(),
                 ChatRunMode.REGENERATE_ASSISTANT,
                 null,
                 null,
@@ -298,6 +322,8 @@ public class CandidateDomainAgentSwitchApplicationService {
                 .toList();
         return documentFacade.resolveChatAttachmentsForUser(user, requested);
     }
+
+    private record ResolvedSwitch(CandidateDomainAgentSwitchCommand command, ExplicitRuntimeTarget target) {}
 
     /** The previous Run is accepted only after validating the persisted Interaction continuation. */
     private record AssistantSource(String messageId, String previousRunId) {}

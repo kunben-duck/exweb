@@ -38,6 +38,18 @@ class CandidateSwitchRouteTraceServiceTest {
             new CandidateSwitchRouteTraceService(eventStore, objectMapper);
 
     @Test
+    void expertMarkerKeepsCandidateSkillButReportsResolvedTarget() {
+        CandidateDomainAgentSwitchCommand command = new CandidateDomainAgentSwitchCommand(
+                "run_a", "msg_user", "RE_national-cfo", Map.of(), null, "entry");
+        var target = new ExplicitRuntimeTarget(ExplicitRuntimeTarget.Type.DOMAIN_EXPERT, "national-cfo");
+        assertThat(service.load(USER, run(), command, target).eventsFor("run_b", "session1"))
+                .singleElement().satisfies(event -> assertThat(event.payload())
+                        .containsEntry("targetType", "DOMAIN_EXPERT")
+                        .containsEntry("targetId", "national-cfo")
+                        .containsEntry("skillId", "RE_national-cfo"));
+    }
+
+    @Test
     void replaysOnlyIntentAndSkillSelectionFactsBeforeCurrentSwitchMarker() {
         List<ChatEvent> events = List.of(
                 event(1L, "run.started", Map.of("status", "RUNNING")),

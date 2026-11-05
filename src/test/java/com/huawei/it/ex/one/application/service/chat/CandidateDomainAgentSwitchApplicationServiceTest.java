@@ -43,6 +43,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -83,7 +84,8 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
                     startCoordinator,
                     executionCoordinator,
                     routeTraceService,
-                    interactionRepository);
+                    interactionRepository,
+                    new CandidateSwitchTargetResolver("RE_", new SensitiveInformationAccessNameResolver("")));
 
     private UserContext user;
     private ChatSession session;
@@ -103,6 +105,35 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
                 new ChatEventStore.RunEventWindow(
                         0L, CandidateSwitchRouteTraceService.SOURCE_SCAN_LIMIT)))
                 .thenReturn(List.of());
+    }
+
+    @Test
+    void resolvesExpertBeforeStoppingSourceAndUsesRoleAsExplicitTarget() {
+        when(runService.requireOwnedRun(user, "run_a"))
+                .thenReturn(run(ChatRunStatus.RUNNING, "msg_assistant_a"));
+        CandidateDomainAgentSwitchCommand malformed = new CandidateDomainAgentSwitchCommand(
+                "run_a", "msg_user", "RE_", Map.of(), null, "finance_pc_entry");
+        assertThatThrownBy(() -> service.switchDomainAgent(
+                user, TraceContext.empty(), malformed, RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("roleName");
+        verifyNoInteractions(stopCoordinator, startCoordinator);
+
+        when(runService.requireOwnedRun(user, "run_a"))
+                .thenReturn(run(ChatRunStatus.COMPLETED, "msg_assistant_a"));
+        when(startCoordinator.startStandard(any(), any(), any(), any()))
+                .thenReturn(Mono.just(new ChatRunStartResult("run_b", "session1", 13L, NOW, "chat-run-run_b")));
+        CandidateDomainAgentSwitchCommand expert = new CandidateDomainAgentSwitchCommand(
+                "run_a", "msg_user", "RE_national-cfo", command().metadata(), null, "finance_pc_entry");
+
+        assertThat(service.switchDomainAgent(
+                user, TraceContext.empty(), expert, RuntimeForwardHeaders.empty()).block()).isNotNull();
+
+        ArgumentCaptor<ChatCommand> captured = ArgumentCaptor.forClass(ChatCommand.class);
+        verify(startCoordinator).startStandard(eq(user), any(), captured.capture(), any());
+        assertThat(captured.getValue().targetType()).isEqualTo("DOMAIN_EXPERT");
+        assertThat(captured.getValue().targetId()).isEqualTo("national-cfo");
+        assertThat(captured.getValue().metadata()).isEqualTo(command().metadata());
+        verifyNoInteractions(stopCoordinator);
     }
 
     @Test

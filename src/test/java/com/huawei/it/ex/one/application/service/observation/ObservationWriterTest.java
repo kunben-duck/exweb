@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.observation;
 import static com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.huawei.it.ex.one.application.config.ObservabilityProperties;
 import com.huawei.it.ex.one.application.integration.observation.ObservationRepository;
@@ -24,6 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 class ObservationWriterTest {
     @Test
@@ -83,11 +85,83 @@ class ObservationWriterTest {
             await(() -> writes.get() == 2);
             assertThat(registry.get("financeex.observation.dropped").tag("reason", "database")
                     .counter().count()).isEqualTo(1);
+            assertThat(registry.find("financeex.observation.dropped").tag("reason", "worker_uncaught")
+                    .counter()).isNull();
         } finally { writer.close(); }
         writer.trace(snapshot());
         assertThat(registry.get("financeex.observation.dropped").tag("reason", "queue_rejected")
                 .counter().count()).isEqualTo(1);
         registry.close();
+    }
+
+    @Test
+    void uncaughtWorkerFailureIsDiagnosedAndReplacementRunsTheNextTaskWithoutRetry() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch releaseFailure = new CountDownLatch(1);
+        AtomicInteger writes = new AtomicInteger();
+        List<Thread> workers = new CopyOnWriteArrayList<>();
+        AtomicReference<Thread.UncaughtExceptionHandler> handler = new AtomicReference<>();
+        Thread.UncaughtExceptionHandler defaultHandler = Thread.getDefaultUncaughtExceptionHandler();
+        var repository = new ObservationRepository() {
+            @Override public void saveTrace(TurnTraceSnapshot snapshot) {
+                Thread worker = Thread.currentThread();
+                workers.add(worker);
+                if (writes.incrementAndGet() == 1) {
+                    handler.set(worker.getUncaughtExceptionHandler());
+                    entered.countDown();
+                    try {
+                        if (!releaseFailure.await(5, TimeUnit.SECONDS)) {
+                            throw new AssertionError("Failure release timed out");
+                        }
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(ex);
+                    }
+                    throw new AssertionError("Controlled worker failure");
+                }
+            }
+            @Override public void saveObservation(AgentObservationSnapshot snapshot) { }
+        };
+        var registry = new SimpleMeterRegistry();
+        try (var writer = new ObservationWriter(properties(), repository,
+                new ObservationTestFixture.LocalTransactions(), new ObservationDiagnostics(registry))) {
+            try {
+                assertThatCode(() -> writer.trace(snapshot())).doesNotThrowAnyException();
+                assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+                assertThat(workers.getFirst()).isNotSameAs(Thread.currentThread());
+                assertThat(handler.get()).isNotNull().isNotInstanceOf(ThreadGroup.class);
+                assertThat(registry.find("financeex.observation.dropped").tag("reason", "worker_uncaught")
+                        .counter()).isNull();
+
+                releaseFailure.countDown();
+                await(() -> {
+                    var counter = registry.find("financeex.observation.dropped").tag("reason", "worker_uncaught")
+                            .counter();
+                    return counter != null && counter.count() == 1;
+                });
+                workers.getFirst().join(2_000);
+                assertThat(workers.getFirst().isAlive()).isFalse();
+                assertThat(writes).hasValue(1);
+
+                writer.trace(snapshot());
+                await(() -> writes.get() == 2);
+                assertThat(workers).hasSize(2);
+                assertThat(workers.getLast()).isNotSameAs(workers.getFirst());
+                assertThat(workers).allSatisfy(worker -> {
+                    assertThat(worker.getName()).startsWith("observation-writer-");
+                    assertThat(worker.isDaemon()).isTrue();
+                });
+                assertThat(Thread.getDefaultUncaughtExceptionHandler()).isSameAs(defaultHandler);
+                assertThat(registry.get("financeex.observation.dropped").tag("reason", "worker_uncaught")
+                        .counter().count()).isEqualTo(1);
+                assertThat(registry.find("financeex.observation.dropped").tag("reason", "database")
+                        .counter()).isNull();
+            } finally {
+                releaseFailure.countDown();
+            }
+        } finally {
+            registry.close();
+        }
     }
 
     private ObservabilityProperties properties() {

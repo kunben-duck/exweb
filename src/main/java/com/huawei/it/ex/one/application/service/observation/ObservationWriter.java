@@ -45,6 +45,8 @@ public final class ObservationWriter implements AutoCloseable {
                 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(config.getQueueCapacity()), task -> {
                     Thread thread = new Thread(task, "observation-writer-" + counter.incrementAndGet());
                     thread.setDaemon(true);
+                    thread.setUncaughtExceptionHandler(
+                            (worker, failure) -> diagnostics.dropped("worker_uncaught"));
                     return thread;
                 }, new ThreadPoolExecutor.AbortPolicy());
         diagnostics.queue(executor);

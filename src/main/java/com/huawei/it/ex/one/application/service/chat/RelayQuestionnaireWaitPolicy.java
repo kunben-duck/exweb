@@ -41,14 +41,14 @@ final class RelayQuestionnaireWaitPolicy {
     }
 
     ChatEvent decorate(ChatEvent event, Instant now) {
-        Duration timeout = DomainAgentQuestionnaire.isRequest(event) ? domainAgentTimeout : this.timeout;
-        if (event == null || timeout.isZero() || !"runtime.card".equals(event.type())
+        Duration effectiveTimeout = DomainAgentQuestionnaire.isRequest(event) ? domainAgentTimeout : this.timeout;
+        if (event == null || effectiveTimeout.isZero() || !"runtime.card".equals(event.type())
                 || !RuntimeQuestionnaireAnswerValidator.isQuestionnaire(event.payload())) {
             return event;
         }
         Map<String, Object> payload = new LinkedHashMap<>(event.payload());
-        payload.put("autoActionAt", now.plus(timeout).toString());
-        payload.put("autoActionTimeoutMs", timeout.toMillis());
+        payload.put("autoActionAt", now.plus(effectiveTimeout).toString());
+        payload.put("autoActionTimeoutMs", effectiveTimeout.toMillis());
         payload.put("autoActionType", AUTO_ACTION_TYPE);
         return new RuntimeEvent(
                 event.runId(),

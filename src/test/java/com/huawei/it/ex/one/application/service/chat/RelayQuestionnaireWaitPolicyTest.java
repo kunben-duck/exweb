@@ -37,6 +37,40 @@ class RelayQuestionnaireWaitPolicyTest {
                 .isInstanceOf(IllegalStateException.class);
     }
     @Test
+    void eachProviderUsesItsOwnPositiveTimeoutWithoutChangingTheOriginalPayload() {
+        RelayQuestionnaireWaitPolicy policy = new RelayQuestionnaireWaitPolicy(
+                interactionProperties(Duration.ofHours(24)), Duration.ofSeconds(30), Duration.ofSeconds(12));
+        Instant now = Instant.parse("2026-08-01T10:00:00Z");
+        ChatEvent relay = questionnaireEvent();
+        ChatEvent domainAgent = RuntimeEvent.card("r", "s", Map.of("source", "domain-agent",
+                "sourceType", "approval-request", "operation_type", "questionnaire", "approval_id", "q"));
+
+        assertThat(policy.decorate(relay, now).payload()).hasSize(relay.payload().size() + 3)
+                .containsAllEntriesOf(relay.payload())
+                .containsEntry("autoActionAt", "2026-08-01T10:00:30Z")
+                .containsEntry("autoActionTimeoutMs", 30_000L)
+                .containsEntry("autoActionType", "IGNORE_QUESTIONNAIRE");
+        assertThat(policy.decorate(domainAgent, now).payload()).hasSize(domainAgent.payload().size() + 3)
+                .containsAllEntriesOf(domainAgent.payload())
+                .containsEntry("autoActionAt", "2026-08-01T10:00:12Z")
+                .containsEntry("autoActionTimeoutMs", 12_000L)
+                .containsEntry("autoActionType", "IGNORE_QUESTIONNAIRE");
+        assertThat(relay.payload()).doesNotContainKeys("autoActionAt", "autoActionTimeoutMs", "autoActionType");
+        assertThat(domainAgent.payload()).doesNotContainKeys("autoActionAt", "autoActionTimeoutMs", "autoActionType");
+    }
+
+    @Test
+    void nullAndNonCardEventsStayUnchangedWhenBothTimeoutsAreEnabled() {
+        RelayQuestionnaireWaitPolicy policy = new RelayQuestionnaireWaitPolicy(
+                interactionProperties(Duration.ofHours(24)), Duration.ofSeconds(30), Duration.ofSeconds(12));
+        Instant now = Instant.parse("2026-08-01T10:00:00Z");
+        ChatEvent metadata = RuntimeEvent.metadata("r", "s", questionnaireEvent().payload());
+
+        assertThat(policy.decorate(null, now)).isNull();
+        assertThat(policy.decorate(metadata, now)).isSameAs(metadata);
+    }
+
+    @Test
     void zeroTimeoutLeavesQuestionnaireEventUnchanged() {
         ChatEvent event = questionnaireEvent();
         RelayQuestionnaireWaitPolicy policy = new RelayQuestionnaireWaitPolicy(

@@ -74,6 +74,21 @@
     </update>
 
     <!--
+      将已锁定的应用会话转为主站会话，仅清空应用标签，不覆盖消息树、状态及活动时间。
+      入参: tenantId/userId/sessionId 定位会话；调用方须在事务内完成归属校验和Session行锁读。
+    -->
+    <update id="promoteToMainSite">
+        UPDATE fin_ex_chat_session_t
+        SET app_id = NULL,
+            app_name = NULL
+        WHERE id = #{sessionId}
+          AND tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND app_id IS NOT NULL
+          AND status &lt;&gt; 'DELETED'
+    </update>
+
+    <!--
       按会话 ID 查询单条会话，用于内部已完成归属校验后的读取。
       入参: sessionId 为会话主键；调用方必须已完成归属校验。
     -->

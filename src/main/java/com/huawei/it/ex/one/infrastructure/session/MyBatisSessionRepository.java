@@ -268,6 +268,20 @@ public class MyBatisSessionRepository implements SessionRepository {
     }
 
     @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public ChatSession promoteToMainSite(ChatSession lockedSession) {
+        int updated = mapper.promoteToMainSite(
+                lockedSession.tenantId(), lockedSession.userId(), lockedSession.id());
+        if (updated != 1) {
+            throw new IllegalStateException("会话转主站条件不再满足: " + lockedSession.id());
+        }
+        ChatSessionRow row = toRow(lockedSession);
+        row.setAppId(null);
+        row.setAppName(null);
+        return toDomain(row);
+    }
+
+    @Override
     public ChatSession touch(ChatSession session, Instant updatedAt) {
         int updated = mapper.touch(session.tenantId(), session.userId(), session.id(), updatedAt);
         if (updated != 1) {

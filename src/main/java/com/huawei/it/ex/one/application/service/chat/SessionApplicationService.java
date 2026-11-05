@@ -406,6 +406,14 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     @Override
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public ChatSession promoteSession(UserContext user, String sessionId) {
+        checkChatUser(user);
+        ChatSession session = lockLatestOwnedSession(user, sessionId);
+        return session.appId() == null ? session : sessionRepository.promoteToMainSite(session);
+    }
+
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatSession archiveSession(UserContext user, String sessionId) {
         checkChatUser(user);
         ChatSession session = lockLatestOwnedSession(user, sessionId);

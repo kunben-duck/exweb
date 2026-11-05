@@ -32,6 +32,18 @@ public interface ChatSessionMapper {
     int update(ChatSessionRow row);
 
     /**
+     * 仅清空未删除会话的应用标签，调用方须已锁定目标Session。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 影响行数。
+     */
+    int promoteToMainSite(@Param("tenantId") String tenantId,
+                          @Param("userId") String userId,
+                          @Param("sessionId") String sessionId);
+
+    /**
      * 按会话 ID 查询会话。
      *
      * @param sessionId 会话标识。

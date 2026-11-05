@@ -259,6 +259,15 @@ public interface ChatSessionFacade {
     ChatSession renameSession(UserContext user, String sessionId, String title);
 
     /**
+     * 将当前用户的应用会话转为主站会话，仅清空应用标签；重复调用幂等。
+     *
+     * @param user 请求入口解析出的用户身份。
+     * @param sessionId 会话标识。
+     * @return 保留原状态及历史关联的会话元数据。
+     */
+    ChatSession promoteSession(UserContext user, String sessionId);
+
+    /**
      * 归档当前用户可见的会话。
      *
      * @param user 请求入口解析出的不可变用户身份快照。

@@ -81,6 +81,7 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 - `POST /v1/chat/sessions/{sessionId}/path`：持久化会话当前 active path leaf；UI 切换可先使用 `/messages?leafMessageId=...` 刷新展示。
 - `POST /v1/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
 - `POST /v1/chat/sessions/{sessionId}/archive|restore`：会话归档和恢复。
+- `POST /v1/chat/sessions/{sessionId}/promote`：将当前用户的应用会话转入主站，幂等清空appId/appName，不改状态、活动时间或历史。各系统使用自己的appId创建；主站列表传`appScope=MAIN_SITE`，跳转时显式转换，后续续聊省略原应用标签。
 - `DELETE /v1/chat/sessions/{sessionId}`：软删除会话；若存在 active run，后端会先主动取消 run。
 - `DELETE /v1/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，运行中会话会先取消 run 后删除。
 - `WS /v1/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。

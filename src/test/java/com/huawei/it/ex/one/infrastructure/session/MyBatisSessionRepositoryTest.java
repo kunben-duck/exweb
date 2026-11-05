@@ -8,7 +8,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
@@ -29,6 +31,32 @@ import java.util.List;
 import java.util.Map;
 
 class MyBatisSessionRepositoryTest {
+    @Test
+    void promotionUsesOnlyDedicatedUpdateAndPreservesLockedSnapshot() {
+        ChatSessionMapper mapper = mock(ChatSessionMapper.class);
+        ChatSession session = new ChatSession("session1", "tenant1", "user1", "latest title", "ARCHIVED", "mobile",
+                "tax-app", "Tax", "leaf", "root", "source-session", "source-message", 27L,
+                100L, 20L, "{\"scope\":\"expert\"}", Instant.EPOCH, Instant.EPOCH.plusSeconds(7));
+        when(mapper.promoteToMainSite("tenant1", "user1", "session1")).thenReturn(1);
+        ChatSession result = new MyBatisSessionRepository(mapper).promoteToMainSite(session);
+        assertThat(result.appId()).isNull();
+        assertThat(result.appName()).isNull();
+        assertThat(result).usingRecursiveComparison().ignoringFields("appId", "appName").isEqualTo(session);
+        verify(mapper).promoteToMainSite("tenant1", "user1", "session1");
+        verifyNoMoreInteractions(mapper);
+    }
+
+    @Test
+    void promotionFailedUpdateDoesNotInsertOrFallBackToWholeRowSave() {
+        ChatSessionMapper mapper = mock(ChatSessionMapper.class);
+        ChatSession session = new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                "app", "App", null, "session1", null, null, 0L, null, Instant.EPOCH, Instant.EPOCH);
+        assertThatThrownBy(() -> new MyBatisSessionRepository(mapper).promoteToMainSite(session))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("转主站条件不再满足");
+        verify(mapper).promoteToMainSite("tenant1", "user1", "session1");
+        verifyNoMoreInteractions(mapper);
+    }
+
     @Test
     void lockAndFindForMessageMutationUsesLatestLockedOwnerRow() {
         RecordingMapper mapper = new RecordingMapper();
@@ -477,6 +505,7 @@ class MyBatisSessionRepositoryTest {
 
         @Override public int insert(ChatSessionRow row) { return 1; }
         @Override public int update(ChatSessionRow row) { return 1; }
+        @Override public int promoteToMainSite(String tenantId, String userId, String sessionId) { return 1; }
         @Override public ChatSessionRow findById(String sessionId) { return null; }
         @Override public ChatSessionRow findByOwnerAndId(String tenantId, String userId, String sessionId) { return ownerRow; }
         @Override

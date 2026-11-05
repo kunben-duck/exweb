@@ -105,6 +105,36 @@ class ChatSessionControllerTest {
         verifyNoMoreInteractions(facade);
     }
 
+    @Test
+    void promoteRequiresNoBodyAndOnlyCallsItsDedicatedService() throws Exception {
+        when(facade.promoteSession(USER, "session1")).thenReturn(SESSION);
+        MvcResult started = mvc.perform(request(HttpMethod.POST, PATH + "/promote")).andReturn();
+        assertThat(((HandlerMethod) started.getHandler()).getMethod().getName()).isEqualTo("promote");
+        MvcResult completed = mvc.perform(asyncDispatch(started)).andExpect(status().isOk()).andReturn();
+        ChatSessionDto response = objectMapper.readValue(completed.getResponse().getContentAsByteArray(), ChatSessionDto.class);
+        assertThat(response.sessionId()).isEqualTo(SESSION.id());
+        assertThat(response.appId()).isNull();
+        assertThat(response.appName()).isNull();
+        assertThat(response.status()).isEqualTo(SESSION.status());
+        assertThat(response.updatedAt()).isEqualTo(SESSION.updatedAt());
+        verify(permissions).checkChatPermission(USER);
+        verify(facade).promoteSession(USER, "session1");
+        verifyNoMoreInteractions(facade);
+    }
+
+    @Test
+    void promotePermissionAndOwnershipFailuresUseExistingErrorHandling() throws Exception {
+        when(facade.promoteSession(USER, "session1")).thenThrow(new SecurityException("会话不属于当前用户"));
+        MvcResult started = mvc.perform(request(HttpMethod.POST, PATH + "/promote")).andReturn();
+        mvc.perform(asyncDispatch(started)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+        verify(facade).promoteSession(USER, "session1");
+        doThrow(new SecurityException("无权限")).when(permissions).checkChatPermission(USER);
+        mvc.perform(request(HttpMethod.POST, PATH + "/promote")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+        verifyNoMoreInteractions(facade);
+    }
+
     private static Stream<Arguments> renameRequests() {
         return Stream.of("POST", "PATCH").flatMap(method -> Stream.of(
                 Arguments.of(method, "{\"title\":\"新会话标题\"}", "新会话标题"),
@@ -134,6 +164,11 @@ class ChatSessionControllerTest {
         assertThat(post.get("parameters")).isEqualTo(patch.get("parameters"));
         assertThat(post.get("requestBody")).isEqualTo(patch.get("requestBody"));
         assertThat(post.get("responses")).isEqualTo(patch.get("responses"));
+        Map<?, ?> promote = (Map<?, ?>) ((Map<?, ?>) paths.get("/v1/chat/sessions/{sessionId}/promote")).get("post");
+        assertThat(promote.get("operationId")).isEqualTo("promoteChatSession");
+        assertThat(promote.get("parameters")).isEqualTo(post.get("parameters"));
+        assertThat(promote.containsKey("requestBody")).isFalse();
+        assertThat(promote.get("responses")).isEqualTo(post.get("responses"));
         assertThat(((Map<?, ?>) paths.get("/v1/documents/{documentId}")).get("patch")).isNotNull();
         assertThat(paths.values().stream().map(value -> (Map<?, ?>) value)
                 .flatMap(path -> path.values().stream()).filter(Map.class::isInstance)

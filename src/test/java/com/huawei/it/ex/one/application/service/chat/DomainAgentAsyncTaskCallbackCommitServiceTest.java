@@ -75,6 +75,69 @@ import java.util.function.Supplier;
 
 class DomainAgentAsyncTaskCallbackCommitServiceTest {
     @ParameterizedTest
+    @CsvSource({"true,APPEND", "true,REPLACE", "false,APPEND", "false,REPLACE"})
+    void promotionAndAsyncCallbackKeepLatestSessionAndResult(boolean promoteFirst, String mode) throws Exception {
+        StoredFixture fixture = new StoredFixture("ACTIVE", false);
+        ChatSession original = fixture.session.get();
+        fixture.session.set(new ChatSession(original.id(), original.tenantId(), original.userId(), original.title(),
+                original.status(), original.channel(), "tax-app", "Tax", original.currentLeafMessageId(),
+                original.rootSessionId(), original.branchSourceSessionId(), original.branchSourceMessageId(),
+                original.lastNodeOrder(), original.latestMessageSeq(), original.lastReadSeq(), original.metadataJson(),
+                original.createdAt(), original.updatedAt()));
+        when(fixture.base.sessionRepository.promoteToMainSite(any())).thenAnswer(invocation -> {
+            assertThat(fixture.lock.isHeldByCurrentThread()).isTrue();
+            ChatSession current = invocation.getArgument(0);
+            assertThat(current).isSameAs(fixture.session.get());
+            ChatSession promoted = new ChatSession(current.id(), current.tenantId(), current.userId(), current.title(),
+                    current.status(), current.channel(), null, null, current.currentLeafMessageId(), current.rootSessionId(),
+                    current.branchSourceSessionId(), current.branchSourceMessageId(), current.lastNodeOrder(),
+                    current.latestMessageSeq(), current.lastReadSeq(), current.metadataJson(),
+                    current.createdAt(), current.updatedAt());
+            fixture.session.set(promoted);
+            return promoted;
+        });
+        CountDownLatch firstLocked = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch secondAttempted = new CountDownLatch(1);
+        fixture.coordinateLock(firstLocked, releaseFirst, secondAttempted);
+        Supplier<Boolean> promote = () -> fixture.transaction(() -> {
+            ChatRun previousRun = fixture.run.get();
+            var previousExecution = fixture.execution.get();
+            var previousMessage = fixture.message.get();
+            assertThat(fixture.sessions.promoteSession(new UserContext("tenant1", "user1", "user1"), "session1")
+                    .appId()).isNull();
+            if (promoteFirst) {
+                assertThat(fixture.run.get()).isSameAs(previousRun);
+                assertThat(fixture.execution.get()).isEqualTo(previousExecution);
+                assertThat(fixture.message.get()).isSameAs(previousMessage);
+            }
+            return true;
+        });
+        Supplier<Boolean> callback = () -> fixture.transaction(() -> fixture.service.commit(fixture.callback(mode)).accepted());
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            try {
+                var first = executor.submit(() -> (promoteFirst ? promote : callback).get());
+                await(firstLocked);
+                var second = executor.submit(() -> (promoteFirst ? callback : promote).get());
+                await(secondAttempted);
+                assertThat(second.isDone()).isFalse();
+                releaseFirst.countDown();
+                assertThat(first.get(10, TimeUnit.SECONDS)).isTrue();
+                assertThat(second.get(10, TimeUnit.SECONDS)).isTrue();
+                assertThat(fixture.session.get().appId()).isNull();
+                assertThat(fixture.session.get().appName()).isNull();
+                assertThat(fixture.session.get().title()).isEqualTo(original.title());
+                assertThat(fixture.run.get().status()).isEqualTo(ChatRunStatus.COMPLETED);
+                assertThat(fixture.execution.get()).isEqualTo(ChatRunExecutionStatus.COMPLETED);
+                assertThat(fixture.message.get().content()).isEqualTo("APPEND".equals(mode)
+                        ? "existing answerreplacement" : "replacement");
+            } finally {
+                releaseFirst.countDown();
+            }
+        }
+    }
+
+    @ParameterizedTest
     @CsvSource({"APPEND,false", "REPLACE,false", "EMPTY,false", "FAILED,false",
             "APPEND,true", "REPLACE,true", "EMPTY,true", "FAILED,true"})
     void deletedSessionRejectsEveryCallbackWithoutChangingBusinessState(String mode, boolean noStore) {

@@ -1105,6 +1105,38 @@ keyword请求返回绑定搜索词及`appScope/appId/title/channel`的v6游标�
 游标由服务端生成，前端不自行解析或构造。响应仍为`items/nextCursor`，无总数、命中片段或高亮，列表摘要和活动topic保持不变。
 先完成全部后端实例部署，再启用前端keyword请求，避免旧实例忽略新参数或不识别v6游标。
 
+**第三方应用会话转主站（两个列表均适用）**：
+
+各系统继续使用真实appId/appName创建会话，不约定固定临时值：
+
+```json
+{
+  "message": "查询本月费用",
+  "appId": "expense-app",
+  "appName": "费用系统"
+}
+```
+
+以上是`POST /v1/chat/runs`请求。会话、消息正常持久化；“临时”仅指暂不出现在主站列表，不表示
+不留存或自动过期。主站列表必须传`appScope=MAIN_SITE`且不传appId；省略应用范围的全应用查询、
+按appId筛选及应用分类仍能返回该会话，不构成权限隔离。
+
+用户携sessionId跳转主站后，显式调用以下接口，无需请求体或应用标签：
+
+```bash
+curl -X POST http://localhost:8080/v1/chat/sessions/session_xxx/promote
+```
+
+接口返回原`ChatSessionDto`，其中appId/appName为null。仅当前租户、当前用户可操作；不存在或已删除
+会话被拒绝，已转主站重复调用幂等，归档会话不会自动恢复ACTIVE。原sessionId、历史、Run、Binding、
+未读水位及时间不变，运行中、问卷等待或异步等待也可转换。读取详情、历史和Resume不触发转换。
+
+转换成功后，加载原历史、stream-status及现有WS/Resume，清空列表cursor，从第一页刷新主站列表。
+后续Run和Interaction请求应省略旧appId/appName；显式携带旧值仍按原一致性校验被拒绝。
+原系统按旧appId查询不再命中，其他已有应用会话不会自动转换；不提供反向转换或额外广播。
+第三方和主站需解析为相同tenantId及ownerUserId，本接口不转移归属。网关放行并部署所有后端实例后，
+前端再接入新接口；本仓库不包含主站跳转及第三方前端实现。
+
 **刷新后恢复列表任务监听（两个列表均适用）**：
 
 1. 从已加载会话收集`activeRunId/activeStreamTopicId`，使用一条WebSocket按topic去重订阅；四个任务对应四个订阅，不是四条连接。列表与详情共用同一订阅，不同时建立重复HTTP Resume。

@@ -345,6 +345,7 @@ WS   /v1/chat/ws subscribe(topicId=streamTopicId)
 POST /v1/chat/runs/{runId}/stop
 POST /v1/chat/sessions/{sessionId}/archive
 POST /v1/chat/sessions/{sessionId}/restore
+POST /v1/chat/sessions/{sessionId}/promote
 DELETE /v1/chat/sessions/{sessionId}
 DELETE /v1/chat/sessions
 ```
@@ -357,6 +358,15 @@ DELETE /v1/chat/sessions
 删除会话是软删除语义。若目标会话存在 active run，删除接口会复用 run stop 编排先写入取消标记、
 发布 `run.cancelled` 并释放本服务 active run，再把会话置为 `DELETED`。前端删除会话时不需要串行调用
 stop；删除成功后应立即移除会话并取消本地订阅。
+
+## 多系统会话转主站
+
+多系统会话转主站复用应用标签，不新增临时状态：第三方以自己的appId/appName创建会话，主站列表
+使用现有`appScope=MAIN_SITE`。用户跳转后显式调用`POST /sessions/{sessionId}/promote`，在归属校验及
+Session锁后的短事务中，仅用专用UPDATE清空`app_id/app_name`，不修改时间、状态、消息树及metadata。
+已是主站时幂等返回，DELETED拒绝；运行中或等待Interaction不妨碍转换。原列表SQL、全应用查询及
+读取接口不变，GET不会隐式转换。转换后原应用筛选不再命中，后续续聊须省略旧App Tag。
+普通Run不增加查询，只有新接口竞争一次现有Session行锁；本轮没有转换通知、反向转换或过期清理。
 
 ## 消息树与只读分支
 

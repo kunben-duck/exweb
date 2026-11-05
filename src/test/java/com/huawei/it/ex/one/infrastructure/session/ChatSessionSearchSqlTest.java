@@ -18,6 +18,19 @@ import java.util.Map;
 
 class ChatSessionSearchSqlTest {
     @Test
+    void promotionOnlyClearsAppTagsWithinOwnerAndNonDeletedSession() throws Exception {
+        Configuration configuration = configuration();
+        BoundSql bound = statement(configuration, "promoteToMainSite",
+                Map.of("tenantId", "tenant1", "userId", "user1", "sessionId", "session1"));
+        assertThat(sql(bound)).isEqualTo("UPDATE fin_ex_chat_session_t SET app_id = NULL, app_name = NULL "
+                + "WHERE id = ? AND tenant_id = ? AND user_id = ? AND app_id IS NOT NULL AND status <> 'DELETED'");
+        assertThat(bound.getParameterMappings()).extracting(mapping -> mapping.getProperty())
+                .containsExactly("sessionId", "tenantId", "userId");
+        assertThat(sql(statement(configuration, "update", Map.of())))
+                .doesNotContain("app_id", "app_name");
+    }
+
+    @Test
     void cursorAndNumberPagesUseIdenticalOwnerScopedKeywordPredicates() throws Exception {
         Configuration configuration = configuration();
         Map<String, Object> parameters = parameters();

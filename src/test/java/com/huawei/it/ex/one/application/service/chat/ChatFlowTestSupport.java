@@ -1400,6 +1400,15 @@ abstract class ChatFlowTestSupport {
             return new ChatSessionPage(List.of(), null);
         }
         @Override public ChatSession save(ChatSession session) { sessions.put(session.id(), session); return session; }
+        @Override public ChatSession promoteToMainSite(ChatSession session) {
+            ChatSession promoted = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
+                    session.status(), session.channel(), null, null, session.currentLeafMessageId(), session.rootSessionId(),
+                    session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                    session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                    session.createdAt(), session.updatedAt());
+            sessions.put(promoted.id(), promoted);
+            return promoted;
+        }
     }
 
     static final class BlockingSessionRepository extends InMemorySessionRepository {

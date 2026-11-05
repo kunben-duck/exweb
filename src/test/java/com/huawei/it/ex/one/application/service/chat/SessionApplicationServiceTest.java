@@ -291,6 +291,87 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void promotionMovesDifferentApplicationsIntoMainSiteWithoutChangingOtherFields() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        SessionApplicationService service = service(sessions, new InMemoryMessageRepository());
+        SessionListFilter mainSite = new SessionListFilter(null, null, null, SessionAppScope.MAIN_SITE);
+        for (String appId : List.of("fund-app", "tax-app")) {
+            ChatSession original = service.createSession(user(), "title", "mobile", appId, "应用");
+            assertThat(service.listSessions(user(), mainSite, null, 20).items()).doesNotContain(original);
+            assertThat(service.listSessionsByPage(user(), mainSite, 1, 20).items()).doesNotContain(original);
+            assertThat(service.listSessions(user(), appId, null, 20).items()).contains(original);
+            assertThat(service.getSession(user(), original.id())).isEqualTo(original);
+
+            ChatSession promoted = service.promoteSession(user(), original.id());
+            assertThat(promoted.appId()).isNull();
+            assertThat(promoted.appName()).isNull();
+            assertThat(promoted).usingRecursiveComparison().ignoringFields("appId", "appName").isEqualTo(original);
+            assertThat(service.listSessions(user(), mainSite, null, 20).items()).contains(promoted);
+            assertThat(service.listSessionsByPage(user(), mainSite, 1, 20).items()).contains(promoted);
+            assertThat(service.listSessions(user(), appId, null, 20).items()).isEmpty();
+            assertThat(service.listSessionApps(user())).noneMatch(app -> appId.equals(app.appId()));
+            int writes = sessions.promotionCalls;
+            assertThat(service.promoteSession(user(), original.id())).isEqualTo(promoted);
+            assertThat(sessions.promotionCalls).isEqualTo(writes);
+            assertThatCode(() -> service.validateAppTag(user(), original.id(), null, null)).doesNotThrowAnyException();
+            assertThatThrownBy(() -> service.validateAppTag(user(), original.id(), appId, "应用"))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("appId 与已有会话不一致");
+        }
+        assertThat(service.listSessions(user(), null, 20).items()).hasSize(2);
+    }
+
+    @Test
+    void promotionUsesLatestLockedSnapshotAndKeepsArchivedState() {
+        ChatSession initial = lifecycleSession("old", "ACTIVE", "old-leaf", 1, "{}");
+        for (String status : List.of("ACTIVE", "ARCHIVED")) {
+            ChatSession latest = lifecycleSession("latest title", status, "new-leaf", 12,
+                    "{\"_intentExpert\":{\"expertId\":\"expert-a\"},\"_titleSummary\":{\"source\":\"USER\"}}");
+            StaleThenLockedSessionRepository repository = new StaleThenLockedSessionRepository(initial, latest);
+            ChatSession promoted = lifecycleService(repository, null).promoteSession(user(), initial.id());
+            assertThat(promoted).usingRecursiveComparison().ignoringFields("appId", "appName").isEqualTo(latest);
+            assertThat(promoted.appId()).isNull();
+            assertThat(promoted.appName()).isNull();
+            assertThat(repository.lockCalls).isEqualTo(1);
+            assertThat(repository.savedSession).isNull();
+        }
+    }
+
+    @Test
+    void promotionRejectsDeletedIncludingDeletionAfterInitialReadAndWrongOwner() {
+        ChatSession initial = lifecycleSession("title", "ACTIVE", "leaf", 1, "{}");
+        ChatSession deleted = lifecycleSession("title", "DELETED", "leaf", 1, "{}");
+        StaleThenLockedSessionRepository raced = new StaleThenLockedSessionRepository(initial, deleted);
+        assertThatThrownBy(() -> lifecycleService(raced, null).promoteSession(user(), initial.id()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("会话不存在");
+        assertThat(raced.lockCalls).isEqualTo(1);
+        assertThat(((InMemorySessionRepository) raced).promotionCalls).isZero();
+
+        InMemorySessionRepository repository = new InMemorySessionRepository();
+        repository.save(initial);
+        SessionApplicationService service = lifecycleService(repository, null);
+        for (UserContext other : List.of(new UserContext("other", "user1", "other"),
+                new UserContext("tenant1", "other", "other"))) {
+            assertThatThrownBy(() -> service.promoteSession(other, initial.id())).isInstanceOf(SecurityException.class);
+        }
+        assertThatThrownBy(() -> service.promoteSession(user(), "missing"))
+                .isInstanceOf(IllegalArgumentException.class);
+        repository.save(deleted);
+        assertThatThrownBy(() -> service.promoteSession(user(), deleted.id())).isInstanceOf(IllegalArgumentException.class);
+        assertThat(repository.promotionCalls).isZero();
+        assertThat(repository.sessions.get(deleted.id())).isEqualTo(deleted);
+    }
+
+    @Test
+    void concurrentPromotionAlreadyCommittedBeforeLockDoesNotWriteAgain() {
+        ChatSession initial = lifecycleSession("title", "ACTIVE", "leaf", 3, "{}");
+        ChatSession promoted = withoutAppTag(initial);
+        StaleThenLockedSessionRepository repository = new StaleThenLockedSessionRepository(initial, promoted);
+        assertThat(lifecycleService(repository, null).promoteSession(user(), initial.id())).isSameAs(promoted);
+        assertThat(repository.lockCalls).isEqualTo(1);
+        assertThat(((InMemorySessionRepository) repository).promotionCalls).isZero();
+    }
+
+    @Test
     void titleSearchSupportsCaseInsensitiveContainsAndAppIdCombination() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -1482,6 +1563,15 @@ class SessionApplicationServiceTest {
     private static class InMemorySessionRepository implements SessionRepository {
         private final Map<String, ChatSession> sessions = new HashMap<>();
         private final AtomicInteger ownerLookupCalls = new AtomicInteger();
+        private int promotionCalls;
+
+        @Override
+        public ChatSession promoteToMainSite(ChatSession lockedSession) {
+            promotionCalls++;
+            ChatSession promoted = withoutAppTag(lockedSession);
+            sessions.put(promoted.id(), promoted);
+            return promoted;
+        }
 
         @Override
         public Optional<ChatSession> findById(String sessionId) {
@@ -1540,6 +1630,14 @@ class SessionApplicationServiceTest {
                     session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
                     session.createdAt(), Instant.now()));
         }
+    }
+
+    private static ChatSession withoutAppTag(ChatSession session) {
+        return new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
+                session.channel(), null, null, session.currentLeafMessageId(), session.rootSessionId(),
+                session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                session.createdAt(), session.updatedAt());
     }
 
     private static final class StaleThenLockedSessionRepository extends InMemorySessionRepository {

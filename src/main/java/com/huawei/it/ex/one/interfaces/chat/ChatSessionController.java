@@ -435,6 +435,19 @@ public class ChatSessionController {
     }
 
     /**
+     * 将当前用户的应用会话转为主站会话，不改变会话状态或历史。
+     *
+     * @param sessionId 会话标识；服务端校验归属，重复转换幂等。
+     * @return 清空应用标签后的会话元数据。
+     */
+    @PostMapping("/{sessionId}/promote")
+    public Mono<ChatSessionDto> promote(@PathVariable("sessionId") String sessionId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.promoteSession(user, sessionId)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
      * 归档当前用户会话。
      *
      * @param sessionId 会话标识；服务端会校验会话归属。

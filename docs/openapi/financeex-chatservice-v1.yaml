@@ -1616,6 +1616,29 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /v1/chat/sessions/{sessionId}/promote:
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: promoteChatSession
+      summary: 将应用会话转为主站会话
+      description: |
+        无需请求体。校验当前租户及用户归属后，将任意来源应用会话的appId/appName置为null。
+        已是主站会话时幂等返回；不存在或DELETED拒绝，ARCHIVED不自动恢复ACTIVE。
+        仅更新应用标签，保留sessionId、状态、时间、消息、Run和Binding；运行中及等待输入时也可转换。
+        主站列表需传appScope=MAIN_SITE，普通全应用查询不隐藏这些会话。
+        转换后不再属于原应用分类，后续Run和Interaction请求须省略旧appId/appName。
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
   /v1/chat/sessions/{sessionId}/archive:
     post:
       tags: [Chat Sessions & Messages]

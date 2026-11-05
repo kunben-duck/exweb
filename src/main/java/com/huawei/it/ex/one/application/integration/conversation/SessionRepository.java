@@ -241,6 +241,14 @@ public interface SessionRepository {
     ChatSession save(ChatSession session);
 
     /**
+     * 清空已锁定会话的应用标签，不修改其他列；调用方须处于持有Session行锁的事务内。
+     * 未实现该能力的仓储不得回退为整行保存。
+     */
+    default ChatSession promoteToMainSite(ChatSession lockedSession) {
+        throw new UnsupportedOperationException("会话仓储不支持转主站");
+    }
+
+    /**
      * 仅推进会话活动时间，避免用调用方持有的旧快照覆盖标题或私有元数据。
      */
     default ChatSession touch(ChatSession session, Instant updatedAt) {

@@ -208,6 +208,70 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
     }
 
     @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void promotionPreservesWaitingOrRunningQuestionnaireAndObservation(boolean running, boolean observed) throws Exception {
+        initialFrames = "data: {\"content\":\"before\"}\n\n" + promptWithSession("q1", "downstream-session");
+        try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture(
+                observed, new com.huawei.it.ex.one.application.service.observation.DefaultFirstBusinessFrameClassifier())) {
+            observation.wire(service);
+            ChatRunStartResult initial = service.startRun(user, new ChatCommand(null, null, null, null, null,
+                    "web", "original question", List.of(), Map.of(), "DOMAIN_AGENT", "skill-a",
+                    ChatRunMode.NEXT, null, null, null, null, null, null, null, Map.of(), "fund-app", "Funds"),
+                    RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(10));
+            assertThat(awaitTerminal(initial).getLast().type()).isEqualTo("run.waiting_user");
+            ChatInteractionRequest waiting = interactions.requests.values().iterator().next();
+            var trace = ObservationMetadata.read(waiting.requestPayload(), user.tenantId(), user.ownerUserId());
+            ChatRunStartResult answering;
+            if (running) {
+                answer = request -> Flux.defer(() -> {
+                    request.dispatchState().markResponseDispatched();
+                    return Flux.never();
+                });
+                answering = startResponse(waiting, false, Map.of("ignore", true));
+                await().atMost(Duration.ofSeconds(5)).until(() -> submitted.get() != null
+                        && submitted.get().dispatchState().responseDispatched());
+            } else {
+                answering = null;
+            }
+            var bindingBefore = bindings.saved;
+            var historyBefore = List.copyOf(messages.messages);
+            var runsBefore = Map.copyOf(runs.runs);
+            var interactionsBefore = Map.copyOf(interactions.requests);
+            var sessionBefore = sessions.sessions.get(initial.sessionId());
+            var promoter = new SessionApplicationService(sessions, messages, new SequentialIdGenerator(), new PermissionChecker());
+            var promoted = promoter.promoteSession(user, initial.sessionId());
+            assertThat(promoted.appId()).isNull();
+            assertThat(promoted).usingRecursiveComparison().ignoringFields("appId", "appName").isEqualTo(sessionBefore);
+            assertThat(bindings.saved).isSameAs(bindingBefore);
+            assertThat(messages.messages).isEqualTo(historyBefore);
+            assertThat(runs.runs).isEqualTo(runsBefore);
+            assertThat(interactions.requests).isEqualTo(interactionsBefore);
+            if (running) {
+                service.stopRun(user, answering.runId(), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(10));
+                await().atMost(Duration.ofSeconds(5)).until(() ->
+                        runs.runs.get(answering.runId()).status() == ChatRunStatus.CANCELLED);
+            } else {
+                assertThat(respond(waiting, true, Map.of("label", Map.of("期间", "本月"))).getLast().type())
+                        .isEqualTo("run.completed");
+                assertThat(bindings.saved.id()).isEqualTo(bindingBefore.id());
+                assertThat(submitted.get().runtimeSessionId()).isEqualTo("downstream-session");
+            }
+            assertThat(sessions.sessions.get(initial.sessionId()).appId()).isNull();
+            assertThat(queries).hasValue(1);
+            assertThat(routeCalls).hasValue(0);
+            if (observed) {
+                String terminal = running ? "CANCELLED" : "COMPLETED";
+                com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(() ->
+                        observation.traces.stream().anyMatch(t -> terminal.equals(t.status())));
+                assertThat(observation.traces.stream().map(t -> t.traceId()).distinct()).containsExactly(trace.traceId());
+            } else {
+                assertThat(trace).isNull();
+                assertThat(observation.traces).isEmpty();
+            }
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void retryAndQuestionnaireShareBindingMessagesAndObservation(boolean questionnaireFirst) throws Exception {
         String refusal = "data: {\"type\":\"agent.refusal\",\"code\":\"FN-EX-CAHT-BIZ-DAG-001\","

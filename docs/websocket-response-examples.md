@@ -3610,7 +3610,8 @@ FULL追加原正文及Parts；no-store只保存占位正文和必要问卷/答�
 
 可能改走 Relay（action=ROUTE_TO_RELAY/RELAY_FALLBACK）、再次澄清或结束，不保证总有 AUTO_SWITCH。前端按拒答/切换语义刷新当前草稿，不能把旧技能已失效正文当成新技能回答继续拼接。逻辑 Intent 入口与专家范围沿本 Run 上下文处理，不由 WS payload 反推配置。
 
-新版本对 `front-selected/user-confirmed` 且关闭自动切换的绑定，先确认再识别：
+新版本对 `front-selected/user-confirmed` 且关闭自动切换的绑定，先确认再识别。
+可恢复拒答（`recoverable=true`）不论绑定来源及自动切换开关都进入确认，支持下述原技能重试：
 
 1. Run-A：拒答事实提交并ACK后，发出下列确认卡片，随后 `run.waiting_user` 携带同一
    `confirmationStage=BEFORE_INTENT`、`interactionId` 和自动动作字段。本轮此时没有新的Intent结果或候选。
@@ -3668,6 +3669,36 @@ FULL追加原正文及Parts；no-store只保存占位正文和必要问卷/答�
 
 私有授权、拒答累计和专家范围只存Interaction，不进入卡片/Parts/Resume。新流程的确认响应中
 `confirmationStage`含义与请求相同，其他字段沿用下方响应示例，但不包含`candidate*`。
+
+当该确认的 `refusalRecoverable=true` 时，前端显示“仍然使用当前技能”及“交还Supervisor重新意图”。
+前者提交 `approved=true, interactionAction=RETRY_CURRENT`，后者及倒计时仍仅提交 `approved=true`。
+原技能重试的关键事件如下（省略外层 WS 封装及可选业务 metadata）：
+
+```json
+{
+  "runId": "run_retry_b",
+  "sessionId": "session_demo",
+  "sequence": 1902,
+  "type": "runtime.card",
+  "payload": {
+    "source": "chatservice",
+    "sourceType": "route-switch-confirmation-response",
+    "confirmationStage": "BEFORE_INTENT",
+    "interactionType": "ROUTE_SWITCH_CONFIRMATION",
+    "interactionId": "interaction_retry_a",
+    "approved": true,
+    "interactionAction": "RETRY_CURRENT",
+    "currentProvider": "domain-agent",
+    "currentTargetId": "skill_a",
+    "currentRouteSource": "front-selected",
+    "metadata": {}
+  }
+}
+```
+
+顺序为 `run.started` → 上述响应提交并ACK → 校验/Gate → 当前技能输出 → 终态；不新增Intent事件或
+`route-switch-applied`。再次可恢复拒答在次数未耗尽时重新进入等待，问卷及异步受理沿用原流程。
+false、缺失、null及无阶段的存量候选卡片保持旧行为；`approved=false`不执行原技能重试。
 
 **以下等待、同意及拒绝示例仅用于存量兼容**：没有阶段标记且已经保存候选时，仍在拒答及重意图结果之后
 收到等待段，同意直接执行已保存目标，不重复调用Intent。未知阶段不得按此旧流程处理。

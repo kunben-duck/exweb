@@ -44,7 +44,8 @@ final class DomainAgentRerouteStateMapper {
                 DomainAgentRejectReason.fromRerouteState(state),
                 Set.copyOf(rejected),
                 intValue(state.get("rerouteCount"), 0),
-                firstText(state.get("confirmationInteractionId")));
+                firstText(state.get("confirmationInteractionId")),
+                Boolean.TRUE.equals(state.get("attemptCounted")));
     }
 
     private Set<String> rejectedDomainAgentIds(Object value) {

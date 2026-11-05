@@ -49,6 +49,14 @@ record DomainAgentRunContext(
         AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef,
         AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
 ) {
+    DomainAgentRunContext withRerouteCount(int count) {
+        return new DomainAgentRunContext(command, runId, userMessageId, session, memory, route, user, routeRef,
+                bindingRef, executionClaim, forwardHeaders, traceContext, intentDecision, documents,
+                rejectedDomainAgentIds, count, routeMemoryQuery, persistenceState, messageSkill,
+                pendingInteractionPayloadRef, deferredDomainAgentBindingRef, pendingRouteMemoryDecisionRef,
+                pendingRouteSwitchAppliedEventRef);
+    }
+
     DomainAgentRunContext {
         userMessageId = userMessageId == null || userMessageId.isBlank() ? null : userMessageId.trim();
         persistenceState = persistenceState == null

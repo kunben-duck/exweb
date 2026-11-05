@@ -274,6 +274,21 @@ final class RouteSwitchContinuationCoordinator {
     }
 
     private Flux<ChatEvent> confirmedRerouteBody(StartedSwitchContext context) {
+        if (!RouteSwitchRerouteContext.retryCurrent(context.request().claim().responsePayload())) {
+            return confirmedActionBody(context, null);
+        }
+        Request request = context.request();
+        Mono<AgentDataPersistenceGate.Decision> preflight = persistenceGate == null
+                ? Mono.just(AgentDataPersistenceGate.Decision.allowed(context.assistant().persistenceState()))
+                : persistenceGate.evaluate(request.user(), context.route(), context.assistant().persistenceState(),
+                        request.forwardHeaders(), request.resolvedAttachments().documents());
+        return preflight.flatMapMany(decision -> eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                        context.executionClaim(), "before-confirmed-retry-binding")
+                .thenMany(Flux.defer(() -> confirmedActionBody(context, decision))));
+    }
+
+    private Flux<ChatEvent> confirmedActionBody(StartedSwitchContext context,
+                                               AgentDataPersistenceGate.Decision retryDecision) {
         Request request = context.request();
         RouteSwitchRerouteContext saved = RouteSwitchRerouteContext.require(context.interaction());
         RuntimeBinding binding = runtimeBindingService.resumeForConfirmedReroute(
@@ -281,6 +296,12 @@ final class RouteSwitchContinuationCoordinator {
         context.bindingRef().set(binding);
         appliedRouteRecorder.bindResolvedRouteRequired(request.runId(), context.route(), binding,
                 context.executionClaim(), context.assistant().persistenceState());
+        if (retryDecision != null) {
+            context.assistant().messageSkill().replace(context.route().invocationSkillId());
+            if (retryDecision.unsupportedAttachment()) {
+                return attachmentFailureExecutor.execute(request.runId(), request.session().id(), retryDecision.payload());
+            }
+        }
         ChatCommand command = new ChatCommand(null, request.user().tenantId(), request.user().ownerUserId(),
                 request.session().id(), null, request.session().channel(), saved.originalQuery(),
                 request.resolvedAttachments().attachments(), runtimeMetadata(request), null, null,
@@ -298,7 +319,9 @@ final class RouteSwitchContinuationCoordinator {
                 context.assistant().persistenceState(), context.assistant().messageSkill(),
                 context.pendingInteractionPayloadRef(), context.deferredDomainAgentBindingRef(),
                 context.pendingRouteMemoryDecisionRef(), context.pendingRouteSwitchAppliedEventRef());
-        return refusalCoordinator.rerouteConfirmed(source, saved.state(), context.interaction().id(), request.agentMode());
+        return retryDecision == null
+                ? refusalCoordinator.rerouteConfirmed(source, saved.state(), context.interaction().id(), request.agentMode())
+                : refusalCoordinator.retryCurrent(source, saved.state());
     }
 
     private Flux<ChatEvent> executeUnsupportedAttachment(

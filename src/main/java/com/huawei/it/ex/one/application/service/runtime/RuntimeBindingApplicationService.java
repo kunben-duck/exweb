@@ -532,7 +532,7 @@ public class RuntimeBindingApplicationService {
         return touchAndMoveToLeaf(updated, runId, request.assistantMessageId());
     }
 
-    /** 确认重意图时只接管原 Binding 的执行归属，不向已拒答技能发送普通请求。 */
+    /** 拒答确认续跑时接管原 Binding 的执行归属；后续重意图或原技能重试由调用方决定。 */
     public RuntimeBinding resumeForConfirmedReroute(ChatInteractionRequest request, RunExecutionClaim claim,
                                                     String expectedSkillId) {
         RuntimeBinding binding = loadInteractionBinding(request);

@@ -22,7 +22,7 @@ final class DomainAgentBindingPolicy {
     }
 
     RuntimeBinding markRejectedAutomatic(RuntimeBinding binding, DomainAgentRefusal refusal) {
-        if (binding == null || requiresRouteSwitchConfirmation(routeSource(binding))) {
+        if (binding == null || requiresRouteSwitchConfirmation(routeSource(binding), refusal)) {
             return binding;
         }
         return markRejected(binding, refusal);
@@ -41,6 +41,11 @@ final class DomainAgentBindingPolicy {
 
     boolean requiresRouteSwitchConfirmation(String source) {
         return protectedRouteSource(source) && !domainAgentProperties.isRefusalAutoSwitchEnabled();
+    }
+
+    boolean requiresRouteSwitchConfirmation(String source, DomainAgentRefusal refusal) {
+        return refusal != null && Boolean.TRUE.equals(refusal.recoverable())
+                || requiresRouteSwitchConfirmation(source);
     }
 
     String routeSource(RuntimeBinding binding) {

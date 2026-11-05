@@ -59,6 +59,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -75,6 +76,13 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
     private final DomainAgentProperties properties = new DomainAgentProperties();
     private final AtomicInteger intents = new AtomicInteger();
     private final AtomicInteger queries = new AtomicInteger();
+    private final AtomicInteger initialRoutes = new AtomicInteger();
+    private final List<DomainAgentRequest> agentRequests = new CopyOnWriteArrayList<>();
+    private Boolean recoverable = false;
+    private boolean explicitNullRecoverable;
+    private boolean automaticSource;
+    private boolean rejectRetryAttachments;
+    private boolean failRetryGate;
     private Consumer<ChatEvent> beforeAppend = event -> { };
     private final InMemoryEventStore events = new InMemoryEventStore() {
         @Override
@@ -104,9 +112,11 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
                 new RouteSignalProperties(false, false)) {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
-                if (expert != null) {
+                initialRoutes.incrementAndGet();
+                if (expert != null || automaticSource) {
                     return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(
-                            RouteTarget.domainAgent("agent-a", "user-confirmed", 1.0, "selected expert skill"))));
+                            RouteTarget.domainAgent("agent-a", automaticSource ? "intent-agent" : "user-confirmed",
+                                    1.0, "selected expert skill"))));
                 }
                 throw new AssertionError("confirmed reroute must bypass initial routing");
             }
@@ -128,8 +138,18 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         DomainAgentClient agent = new DomainAgentClient() {
             @Override
             public Flux<ChatEvent> query(DomainAgentRequest request) {
+                agentRequests.add(request);
                 if (queries.incrementAndGet() == 1 || alwaysRefuse) {
-                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                    Map<String, Object> refusal = new LinkedHashMap<>(
+                            domainAgentRefusalEvent(request.runId(), request.sessionId()).payload());
+                    refusal.remove("recoverable");
+                    if (recoverable != null || explicitNullRecoverable) {
+                        refusal.put("recoverable", recoverable);
+                    }
+                    return Flux.just(RuntimeEvent.metadata(request.runId(), request.sessionId(),
+                                    Map.of("sourceType", "domain_agent_session", "runtimeSessionId", "downstream-session-a",
+                                            "domainAgentSessionId", "downstream-session-a")),
+                            RuntimeEvent.metadata(request.runId(), request.sessionId(), refusal));
                 }
                 return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "answer"));
             }
@@ -141,6 +161,14 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
             @Override
             public Mono<Decision> evaluate(UserContext owner, RouteTarget route, AgentDataPersistenceState state,
                                            RuntimeForwardHeaders headers, List<UploadedDocument> documents) {
+                if (queries.get() > 0 && failRetryGate) {
+                    return Mono.error(new IllegalStateException("test attachment gate failure"));
+                }
+                if (queries.get() > 0 && rejectRetryAttachments) {
+                    return Mono.just(Decision.unsupported(state, Map.of("source", "chatservice",
+                            "sourceType", "domain-agent-attachment-validation", "skillId", "agent-a",
+                            "code", "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED", "message", "too many attachments")));
+                }
                 return Mono.just(Decision.allowed(state.tighten(noStore
                         ? AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER : AgentDataPersistencePolicy.FULL)));
             }
@@ -211,6 +239,261 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         assertThat(interactions.requests.values()).noneMatch(ChatInteractionRequest::waiting);
         assertThat(events.events).anySatisfy(event ->
                 assertThat(event.payload()).containsEntry("action", "MAX_REROUTES_REACHED"));
+    }
+
+    @Test
+    void retryCurrentUsesOriginalBindingAndQueryWithoutIntent() {
+        recoverable = true;
+        ChatInteractionRequest first = start();
+        String bindingId = first.runtimeBindingId();
+        List<ChatEvent> output = execute(continuation(first, true, Map.of(), null, "RETRY_CURRENT"));
+        assertThat(output.getLast().type()).isEqualTo("run.completed");
+        assertThat(intents).hasValue(0);
+        assertThat(initialRoutes).hasValue(0);
+        assertThat(queries).hasValue(2);
+        assertThat(bindings.saved.id()).isEqualTo(bindingId);
+        assertThat(bindings.saved.runtimeSessionId()).isEqualTo("downstream-session-a");
+        DomainAgentRequest retried = agentRequests.getLast();
+        assertThat(retried.runId()).isNotEqualTo(first.sourceRunId());
+        assertThat(retried.messageId()).isEqualTo(first.userMessageId());
+        assertThat(retried.domainAgentId()).isEqualTo("agent-a");
+        assertThat(retried.runtimeSessionId()).isEqualTo("downstream-session-a").isNotEqualTo(first.sessionId());
+        assertThat(retried.query()).isEqualTo("original query");
+        Map<String, Object> wire = new com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentChatRequestMapper(
+                properties).toWireRequest(retried);
+        assertThat(wire).containsEntry("runId", retried.runId()).containsEntry("messageId", first.userMessageId())
+                .containsEntry("skillId", "agent-a").containsEntry("sessionId", "downstream-session-a")
+                .containsEntry("query", "original query")
+                .doesNotContainKeys("interactionAction", "retry", "approved", "recoverable", "sessionMode", "type");
+        assertThat(output).anySatisfy(event -> assertThat(event.payload())
+                .containsEntry("sourceType", "route-switch-confirmation-response")
+                .containsEntry("interactionAction", "RETRY_CURRENT"));
+        assertThat(messages.messages).hasSize(2);
+        assertThat(messages.messages).anySatisfy(message -> {
+            assertThat(message.id()).isEqualTo(first.assistantMessageId());
+            assertThat(message.content()).isEqualTo("answer");
+        });
+        assertNoPrivateEvents();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void recoverableAutomaticSourceWaitsEvenWhenAutomaticSwitchEnabled(boolean autoSwitch) {
+        recoverable = true;
+        automaticSource = true;
+        properties.setRefusalAutoSwitchEnabled(autoSwitch);
+        ChatInteractionRequest first = start();
+        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(first.requestPayload()).containsEntry("refusalRecoverable", true);
+        assertThat(execute(continuation(first, true, Map.of(), null, "RETRY_CURRENT")).getLast().type())
+                .isEqualTo("run.completed");
+        assertThat(initialRoutes).hasValue(1);
+        assertThat(intents).hasValue(0);
+        assertThat(queries).hasValue(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unrecoverable", "unknown", "declined", "legacy", "target", "answers", "public-false", "private-false"})
+    void invalidRetryIsRejectedBeforeClaim(String mode) {
+        recoverable = !"unrecoverable".equals(mode);
+        ChatInteractionRequest first = start();
+        if (List.of("legacy", "public-false", "private-false").contains(mode)) {
+            Map<String, Object> payload = new LinkedHashMap<>(first.requestPayload());
+            if ("legacy".equals(mode)) {
+                payload.remove("confirmationStage");
+                payload.remove(RouteSwitchRerouteContext.PRIVATE_KEY);
+            } else if ("public-false".equals(mode)) {
+                payload.put("refusalRecoverable", false);
+            } else {
+                Map<String, Object> snapshot = new LinkedHashMap<>(DomainAgentQuestionnaireContext.map(
+                        payload.get(RouteSwitchRerouteContext.PRIVATE_KEY)));
+                Map<String, Object> state = new LinkedHashMap<>(DomainAgentQuestionnaireContext.map(
+                        snapshot.get(RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA)));
+                state.put("refusalRecoverable", false);
+                snapshot.put(RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA, state);
+                payload.put(RouteSwitchRerouteContext.PRIVATE_KEY, snapshot);
+            }
+            replacePayload(first, payload);
+        }
+        ChatCommand command = continuation(first, !"declined".equals(mode),
+                "answers".equals(mode) ? Map.of("answer", "unexpected") : Map.of(),
+                "target".equals(mode) ? "agent-b" : null,
+                "unknown".equals(mode) ? "UNKNOWN" : "RETRY_CURRENT");
+        assertThatThrownBy(() -> execute(command)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(interactions.claimCalls).hasValue(0);
+        assertThat(waiting().id()).isEqualTo(first.id());
+        assertThat(intents).hasValue(0);
+        assertThat(queries).hasValue(1);
+    }
+
+    @Test
+    void recoverableRetryAndSupervisorShareBudgetAcrossRuns() {
+        recoverable = true;
+        alwaysRefuse = true;
+        properties.setMaxReroutes(2);
+        ChatInteractionRequest first = start();
+        assertThat(execute(continuation(first, true, Map.of(), null, "RETRY_CURRENT")).getLast().type())
+                .isEqualTo("run.waiting_user");
+        ChatInteractionRequest second = waiting();
+        assertThat(RouteSwitchRerouteContext.require(second).state().rerouteCount()).isEqualTo(1);
+        assertThat(execute(continuation(second, true, Map.of(), null, null)).getLast().type())
+                .isEqualTo("run.completed");
+        assertThat(intents).hasValue(1);
+        assertThat(queries).hasValue(3);
+        assertThat(interactions.requests.values()).noneMatch(ChatInteractionRequest::waiting);
+        assertThat(events.events).anyMatch(event -> "MAX_REROUTES_REACHED".equals(event.payload().get("action")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CLARIFY", "SELECT", "LEGACY_COUNT"})
+    void recoverableSupervisorCountsOnceThroughClarification(String mode) {
+        recoverable = true;
+        alwaysRefuse = true;
+        properties.setMaxReroutes(2);
+        ChatInteractionRequest first = start();
+        Map<String, Object> payload = new LinkedHashMap<>(Map.of("originalQuery", "original query",
+                "clarifyQuestion", "which period?", "routeAction", "CLARIFY"));
+        if ("SELECT".equals(mode)) {
+            payload.put("type", "AMBIGUOUS_ROUTE");
+            payload.put("clarificationType", "AMBIGUOUS_ROUTE");
+            payload.put("candidateIntents", List.of(Map.of("intentId", "intent-b", "intentName", "Agent B",
+                    "skillId", "agent-b", "confidence", 0.9)));
+        }
+        result = RouteSignalResult.waitingIntentClarification(payload, 1L, 0.85, "intent-session", "intent-request");
+        execute(continuation(first, true, Map.of(), null, null));
+        ChatInteractionRequest clarification = waiting();
+        Map<String, Object> state = new LinkedHashMap<>(DomainAgentQuestionnaireContext.map(
+                clarification.requestPayload().get(RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA)));
+        assertThat(state).containsEntry("rerouteCount", 1).containsEntry("attemptCounted", true);
+        if ("LEGACY_COUNT".equals(mode)) {
+            state.remove("attemptCounted");
+            state.put("rerouteCount", 0);
+            Map<String, Object> oldPayload = new LinkedHashMap<>(clarification.requestPayload());
+            oldPayload.put(RouteResolutionCoordinator.DOMAIN_AGENT_REROUTE_CONTEXT_METADATA, state);
+            replacePayload(clarification, oldPayload);
+        }
+        result = RouteSignalResult.of(RouteTarget.domainAgent("agent-b", "intent-agent"));
+        assertThat(execute(continuation(clarification, null,
+                "SELECT".equals(mode) ? Map.of() : Map.of("which period?", "this month"),
+                "SELECT".equals(mode) ? "agent-b" : null, null)).getLast().type()).isEqualTo("run.waiting_user");
+        ChatInteractionRequest next = waiting();
+        assertThat(RouteSwitchRerouteContext.require(next).state().rerouteCount()).isEqualTo(1);
+        assertThat(execute(continuation(next, true, Map.of(), null, "RETRY_CURRENT")).getLast().type())
+                .isEqualTo("run.completed");
+        assertThat(queries).hasValue(3);
+        assertThat(interactions.requests.values()).noneMatch(ChatInteractionRequest::waiting);
+        assertNoPrivateEvents();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"false", "missing", "null"})
+    void nonrecoverableAutomaticSourceKeepsOriginalReroute(String value) {
+        recoverable = "false".equals(value) ? false : null;
+        explicitNullRecoverable = "null".equals(value);
+        automaticSource = true;
+        List<ChatEvent> output = execute(new ChatCommand(null, null, null, null, null, "web", "original query",
+                List.of(), Map.of()));
+        assertThat(output.getLast().type()).isEqualTo("run.completed");
+        assertThat(initialRoutes).hasValue(2);
+        assertThat(queries).hasValue(2);
+        assertThat(interactions.requests).isEmpty();
+    }
+
+    @Test
+    void recoverableDeclineStillDoesNotCallDownstream() {
+        recoverable = true;
+        ChatInteractionRequest first = start();
+        assertThat(execute(continuation(first, false, Map.of(), null, null)).getLast().type()).isEqualTo("run.completed");
+        assertThat(queries).hasValue(1);
+        assertThat(intents).hasValue(0);
+        assertThat(bindings.saved.id()).isEqualTo(first.runtimeBindingId());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"REJECT", "FAIL"})
+    void retryGatePreventsRuntimeAndDoesNotCreateReplacementBinding(String mode) {
+        recoverable = true;
+        ChatInteractionRequest first = start();
+        rejectRetryAttachments = "REJECT".equals(mode);
+        failRetryGate = "FAIL".equals(mode);
+        List<ChatEvent> output = execute(continuation(first, true, Map.of(), null, "RETRY_CURRENT"));
+        assertThat(output.getLast().type()).isEqualTo("REJECT".equals(mode) ? "run.completed" : "run.failed");
+        assertThat(queries).hasValue(1);
+        assertThat(intents).hasValue(0);
+        assertThat(bindings.saved.id()).isEqualTo(first.runtimeBindingId());
+        if ("REJECT".equals(mode)) {
+            assertThat(output).anyMatch(event -> "DOMAIN_AGENT_ATTACHMENT_COUNT_EXCEEDED".equals(event.payload().get("code")));
+        }
+    }
+
+    @Test
+    void retryResponseAckMustCompleteBeforeRuntime() throws Exception {
+        recoverable = true;
+        ChatInteractionRequest first = start();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        beforeAppend = event -> {
+            if ("RETRY_CURRENT".equals(event.payload().get("interactionAction"))) {
+                entered.countDown();
+                try {
+                    if (!release.await(5, TimeUnit.SECONDS)) { throw new IllegalStateException("test timeout"); }
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(ex);
+                }
+            }
+        };
+        ChatRunStartResult started;
+        try {
+            started = service.startRun(user, continuation(first, true, Map.of(), null, "RETRY_CURRENT"),
+                    RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(queries).hasValue(1);
+            assertThat(bindings.saved.lastRunId()).isEqualTo(first.sourceRunId());
+        } finally {
+            release.countDown();
+        }
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(events.events)
+                .anyMatch(event -> started.runId().equals(event.runId()) && "run.completed".equals(event.type())));
+        assertThat(queries).hasValue(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void retryAcknowledgementFailureOrLostOwnerCannotDispatch(boolean ownerLoss) {
+        recoverable = true;
+        ChatInteractionRequest first = start();
+        beforeAppend = event -> {
+            if ("RETRY_CURRENT".equals(event.payload().get("interactionAction"))) {
+                if (ownerLoss) {
+                    executions.rejectOwnerRunningChecks = true;
+                } else {
+                    throw new ChatEventAppendRejectedException("test lost write fence");
+                }
+            }
+        };
+        ChatRunStartResult started = service.startRun(user, continuation(first, true, Map.of(), null, "RETRY_CURRENT"),
+                RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(registry.activeClaims()).noneMatch(claim -> started.runId().equals(claim.runId())));
+        assertThat(queries).hasValue(1);
+        assertThat(intents).hasValue(0);
+    }
+
+    @Test
+    void retryKeepsExpertScopeAndNoStorePolicy() {
+        recoverable = true;
+        noStore = true;
+        expert = new IntentExpertScope("expert-a", "Expert A", "expert_a_entry");
+        ChatInteractionRequest first = start();
+        noStore = false;
+        List<ChatEvent> output = execute(continuation(first, true, Map.of(), null, "RETRY_CURRENT"));
+        assertThat(output.getLast().type()).isEqualTo("run.completed");
+        assertThat(IntentExpertContext.fromMetadata(bindings.saved.metadata())).contains(expert);
+        assertThat(messages.messages).noneMatch(message -> "answer".equals(message.content()));
+        assertThat(intents).hasValue(0);
+        assertThat(initialRoutes).hasValue(1);
+        assertNoPrivateEvents();
     }
 
     @Test
@@ -343,17 +626,22 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         assertThat(queries).hasValue(2);
     }
 
-    @Test
-    void duplicateApprovalCannotRestartIntent() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void duplicateApprovalCannotRestartIntent(boolean retry) {
+        recoverable = retry;
         ChatInteractionRequest first = start();
-        ChatCommand approval = continuation(first, true, Map.of(), null, null);
+        ChatCommand approval = continuation(first, true, Map.of(), null, retry ? "RETRY_CURRENT" : null);
         execute(approval);
         assertThatThrownBy(() -> execute(approval)).isInstanceOf(IllegalStateException.class);
-        assertThat(intents).hasValue(1);
+        assertThat(intents).hasValue(retry ? 0 : 1);
+        assertThat(queries).hasValue(2);
     }
 
-    @Test
-    void stopWhileWaitingPreventsApproval() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void stopWhileWaitingPreventsApproval(boolean retry) {
+        recoverable = retry;
         ChatInteractionRequest first = start();
         ChatEvent waitingEvent = events.events.stream().filter(event -> first.sourceRunId().equals(event.runId())
                 && "run.waiting_user".equals(event.type())).findFirst().orElseThrow();
@@ -364,21 +652,23 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         assertThat(messages.messages.stream().filter(message -> message.id().equals(first.assistantMessageId()))
                 .findFirst().orElseThrow().metadataJson()).isEqualTo(waitingMetadata);
         assertThat(events.events).contains(waitingEvent);
-        assertThatThrownBy(() -> execute(continuation(first, true, Map.of(), null, null)))
+        assertThatThrownBy(() -> execute(continuation(first, true, Map.of(), null, retry ? "RETRY_CURRENT" : null)))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(intents).hasValue(0);
         assertThat(queries).hasValue(1);
     }
 
-    @Test
-    void expiredApprovalCannotCallIntent() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void expiredApprovalCannotCallIntent(boolean retry) {
+        recoverable = retry;
         ChatInteractionRequest old = start();
         interactions.requests.put(old.id(), new ChatInteractionRequest(old.id(), old.tenantId(), old.userId(),
                 old.sessionId(), old.sourceRunId(), old.continueRunId(), old.userMessageId(), old.assistantMessageId(),
                 old.runtimeProvider(), old.runtimeBindingId(), old.runtimeSessionId(), old.approvalId(),
                 old.interactionType(), old.status(), old.requestPayload(), old.responsePayload(), Instant.EPOCH,
                 old.answeredAt(), old.cancelledAt(), old.createdAt(), old.updatedAt()));
-        assertThatThrownBy(() -> execute(continuation(old, true, Map.of(), null, null)))
+        assertThatThrownBy(() -> execute(continuation(old, true, Map.of(), null, retry ? "RETRY_CURRENT" : null)))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(intents).hasValue(0);
     }
@@ -395,8 +685,10 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         assertNoPrivateEvents();
     }
 
-    @Test
-    void changedExpertScopeRejectsOldApprovalWithoutCreatingRun() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void changedExpertScopeRejectsOldApprovalWithoutCreatingRun(boolean retry) {
+        recoverable = retry;
         ChatInteractionRequest first = start();
         ChatSession old = sessions.sessions.get(first.sessionId());
         String metadata = IntentExpertContext.replaceSessionMetadata(old.metadataJson(),
@@ -405,7 +697,7 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
                 old.channel(), old.appId(), old.appName(), old.currentLeafMessageId(), old.rootSessionId(),
                 old.branchSourceSessionId(), old.branchSourceMessageId(), old.lastNodeOrder(),
                 old.latestMessageSeq(), old.lastReadSeq(), metadata, old.createdAt(), old.updatedAt()));
-        assertThatThrownBy(() -> execute(continuation(first, true, Map.of(), null, null)))
+        assertThatThrownBy(() -> execute(continuation(first, true, Map.of(), null, retry ? "RETRY_CURRENT" : null)))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(runs.runs).hasSize(1);
         assertThat(intents).hasValue(0);
@@ -469,8 +761,8 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
 
     private ChatInteractionRequest start() {
         ChatCommand command = new ChatCommand(null, null, null, null, null, "web", "original query",
-                List.of(), Map.of(), expert == null ? "DOMAIN_AGENT" : "INTENT_EXPERT",
-                expert == null ? "agent-a" : expert.expertId(), ChatRunMode.NEXT, null, null, null);
+                List.of(), Map.of(), automaticSource ? null : expert == null ? "DOMAIN_AGENT" : "INTENT_EXPERT",
+                automaticSource ? null : expert == null ? "agent-a" : expert.expertId(), ChatRunMode.NEXT, null, null, null);
         List<ChatEvent> output = execute(command.withIntentExpertScope(expert));
         assertThat(output.getLast().type()).withFailMessage("queries=%s intents=%s events=%s",
                 queries.get(), intents.get(), output).isEqualTo("run.waiting_user");

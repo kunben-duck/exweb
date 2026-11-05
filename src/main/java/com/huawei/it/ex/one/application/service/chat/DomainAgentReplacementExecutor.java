@@ -498,7 +498,8 @@ final class DomainAgentReplacementExecutor {
                 replacement.signal().intentDecision(),
                 context.documents(),
                 reroute.rejectedDomainAgentIds(),
-                context.rerouteCount() + 1,
+                // 可恢复拒答的确认已在 Intent 前计数；澄清续跑也不能重复消耗本次授权。
+                reroute.attemptCounted() ? context.rerouteCount() : context.rerouteCount() + 1,
                 context.routeMemoryQuery(),
                 context.persistenceState(),
                 context.messageSkill(),

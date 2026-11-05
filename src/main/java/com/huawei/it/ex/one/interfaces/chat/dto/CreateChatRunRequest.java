@@ -39,7 +39,7 @@ import java.util.Map;
  * @param appId 自动创建会话时保存的应用标识；已有会话中若传入必须与原值一致。
  * @param appName 自动创建会话时保存的应用名称快照；存在时必须同时提供 appId。
  * @param agentMode 可选 Agent 模式完整快照；空 selections 表示显式清除。
- * @param interactionAction Interaction 专用动作；当前仅 AMBIGUOUS_ROUTE 支持 AUTO_SELECT。
+ * @param interactionAction Interaction 专用动作；AMBIGUOUS_ROUTE 支持 AUTO_SELECT，可恢复拒答确认支持 RETRY_CURRENT。
  * @param language 会话标题总结语言；为空时使用服务端默认语言，不进入下游请求。
  * @param channel 请求来源渠道；自动创建会话时保存，为空时默认 web；跨端续聊不校验或改写原会话渠道。
  * @param intentAccessName 可选Intent入口名称；空值使用服务端默认配置。

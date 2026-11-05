@@ -2936,7 +2936,8 @@ components:
           type: string
           maxLength: 32
           nullable: true
-          enum: [AUTO_SELECT]
+          enum: [AUTO_SELECT, RETRY_CURRENT]
+          description: AUTO_SELECT仅用于模糊候选代选；RETRY_CURRENT仅用于BEFORE_INTENT且refusalRecoverable=true的拒答确认，要求approved=true。
         language:
           type: string
           maxLength: 32
@@ -2959,7 +2960,8 @@ components:
         ambiguousCandidate: targetType=DOMAIN_AGENT 且 targetId 必须精确匹配服务端候选 skillId。
         ambiguousAutoSelect: interactionAction=AUTO_SELECT，不能同时提交 target、答案或附件。
         ambiguousOther: questionnaireAnswers 或有效 attachments，重新调用 Intent。
-        routeSwitchConfirmation: approved=true/false，不提交 target、答案、附件或 interactionAction。
+        routeSwitchConfirmation: approved=true/false，不提交 target 或答案；approved=true允许本次显式附件，不传action时保持原重新意图或存量候选调用。
+        retryCurrent: BEFORE_INTENT且持久化refusalRecoverable=true时允许interactionAction=RETRY_CURRENT，要求approved=true，不传target或答案，允许本次显式附件。
         relayQuestionnaire: questionnaireAnswers.label 或 questionnaireAnswers.ignore=true，二者互斥。
 
     SwitchDomainAgentRequest:
@@ -3705,6 +3707,7 @@ components:
         refusalRecoverable:
           type: boolean
           nullable: true
+          description: BEFORE_INTENT阶段为true时展示原技能重试/交还Supervisor；false、缺失或null保持旧流程，无阶段存量候选确认不启用重试。
         refusalReason:
           type: string
           nullable: true
@@ -3722,10 +3725,10 @@ components:
           type: string
           enum: [APPROVE_ROUTE_SWITCH]
       description: |
-        front-selected/user-confirmed 来源的 DomainAgent 拒答且自动切换关闭时，在调用Intent前生成。
-        未确认或拒绝时不调用Intent、用例库或新技能。一次同意授权识别及一次目标执行，结果仍可命中原技能；
+        DomainAgent可恢复拒答（recoverable=true）在调用Intent前生成，提供原技能重试或交还Supervisor；其他拒答仍仅在front-selected/user-confirmed且自动切换关闭时生成。
+        未确认或拒绝时不调用Intent、用例库或新技能。交还Supervisor时，一次同意授权识别及一次目标执行，结果仍可命中原技能；
         需要澄清时保留授权，新技能再次拒答须重新确认，max-reroutes跨确认Run累计。
-        自动来源或开启 refusal-auto-switch-enabled 时沿用原自动流程。截止时间与 AMBIGUOUS_ROUTE 共用配置，
+        false、缺失或null时，自动来源或开启 refusal-auto-switch-enabled 沿用原自动流程。截止时间与 AMBIGUOUS_ROUTE 共用配置，
         到期后由前端提交现有 approved=true 请求，不新增服务端定时任务。
 
     RelayQuestionnaireCardPayload:

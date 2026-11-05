@@ -45,6 +45,7 @@ import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
@@ -122,12 +123,14 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
     private final AtomicReference<AgentRuntimeRequest> relayQuery = new AtomicReference<>();
     private Function<AgentRuntimeInteractionResponseRequest, Flux<ChatEvent>> answer;
     private String initialFrames;
+    private String nextQueryFrames;
     private FinanceEXChatService service;
 
     @BeforeEach
     void setUp() {
         initialFrames = "data: {\"content\":\"before\"}\n\n" + prompt("q1")
                 + "data: {\"content\":\"discarded\"}\n\n";
+        nextQueryFrames = "data: {\"content\":\"rerouted\"}\n\ndata: {\"endFlag\":true}\n\n";
         answer = request -> Flux.defer(() -> {
             request.dispatchState().markResponseDispatched();
             return Flux.fromIterable(normalizer.normalize(request.runId(), request.sessionId(),
@@ -138,8 +141,7 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
             public Flux<ChatEvent> query(DomainAgentRequest request) {
                 query.set(request);
                 if (queries.incrementAndGet() > 1) {
-                    return Flux.fromIterable(normalizer.normalize(request.runId(), request.sessionId(),
-                            "data: {\"content\":\"rerouted\"}\n\ndata: {\"endFlag\":true}\n\n"));
+                    return Flux.fromIterable(normalizer.normalize(request.runId(), request.sessionId(), nextQueryFrames));
                 }
                 return Flux.fromIterable(normalizer.normalize(request.runId(), request.sessionId(), initialFrames));
             }
@@ -203,6 +205,65 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
                 interactionService, terminal, ids, Schedulers.boundedElastic(), new DomainAgentProperties(), null);
         service.setRunAdmissionCommitService(new ChatRunAdmissionCommitService(
                 sessionService, runService, interactionService, bindingService));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void retryAndQuestionnaireShareBindingMessagesAndObservation(boolean questionnaireFirst) throws Exception {
+        String refusal = "data: {\"type\":\"agent.refusal\",\"code\":\"FN-EX-CAHT-BIZ-DAG-001\","
+                + "\"recoverable\":true,\"reason\":\"try again\"}\n\n";
+        initialFrames = questionnaireFirst ? promptWithSession("q1", "domain-retry-session")
+                : "data: {\"sessionId\":\"domain-retry-session\"}\n\n" + refusal;
+        if (!questionnaireFirst) {
+            nextQueryFrames = prompt("retry-questionnaire");
+        } else {
+            answer = request -> Flux.defer(() -> {
+                request.dispatchState().markResponseDispatched();
+                return Flux.fromIterable(normalizer.normalize(request.runId(), request.sessionId(), refusal));
+            });
+        }
+        try (var observation = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            observation.wire(service);
+            ChatRunStartResult initial = service.startRun(user, new ChatCommand(null, null, null, null, null,
+                    "web", "original question", List.of(), Map.of(), "DOMAIN_AGENT", "skill-a",
+                    ChatRunMode.NEXT, null, null, null), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(10));
+            assertThat(awaitTerminal(initial).getLast().type()).isEqualTo("run.waiting_user");
+            ChatInteractionRequest first = interactions.requests.values().iterator().next();
+            var trace = ObservationMetadata.read(first.requestPayload(), user.tenantId(), user.ownerUserId());
+            assertThat(trace).isNotNull();
+            if (questionnaireFirst) {
+                assertThat(respond(first, true, Map.of("label", Map.of("期间", "本月"))).getLast().type())
+                        .isEqualTo("run.waiting_user");
+            }
+            ChatInteractionRequest confirmation = interactions.requests.values().stream()
+                    .filter(ChatInteractionRequest::waiting).findFirst().orElseThrow();
+            assertThat(confirmation.interactionType()).isEqualTo(ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
+            assertThat(confirmation.requestPayload()).containsEntry("refusalRecoverable", true);
+            ChatCommand retry = new ChatCommand(null, null, null, first.sessionId(), null, "web", null,
+                    List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                    null, confirmation.id(), true, "once", Map.of(), null, null, null, "RETRY_CURRENT");
+            ChatRunStartResult retryRun = service.startRun(user, retry, RuntimeForwardHeaders.empty())
+                    .block(Duration.ofSeconds(10));
+            List<ChatEvent> output = awaitTerminal(retryRun);
+            assertThat(output.getLast().type()).isEqualTo(questionnaireFirst ? "run.completed" : "run.waiting_user");
+            assertThat(query.get().turnTraceContext().traceId()).isEqualTo(trace.traceId());
+            assertThat(query.get().messageId()).isEqualTo(first.userMessageId());
+            assertThat(query.get().runtimeSessionId()).isEqualTo("domain-retry-session");
+            if (!questionnaireFirst) {
+                ChatInteractionRequest question = interactions.requests.values().stream()
+                        .filter(ChatInteractionRequest::waiting).findFirst().orElseThrow();
+                assertThat(respond(question, true, Map.of("label", Map.of("期间", "本月"))).getLast().type())
+                        .isEqualTo("run.completed");
+            }
+            assertThat(bindings.saved.id()).isEqualTo(first.runtimeBindingId());
+            assertThat(messages.messages).hasSize(2);
+            assertThat(routeCalls).hasValue(0);
+            assertThat(queries).hasValue(2);
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> observation.traces.stream().anyMatch(t -> "COMPLETED".equals(t.status())));
+            assertThat(observation.traces.stream().map(t -> t.traceId()).distinct()).containsExactly(trace.traceId());
+            assertThat(events.events.toString()).doesNotContain("_routeSwitchRerouteContext", "_turnObservation");
+        }
     }
 
     @ParameterizedTest

@@ -79,7 +79,7 @@ final class DomainAgentRefusalCommitCoordinator {
                 || !RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())
                 || binding.status() != RuntimeBindingStatus.ACTIVE
                 || refusalCoordinator.requiresRouteSwitchConfirmation(
-                        refusalCoordinator.routeSource(binding))) {
+                        refusalCoordinator.routeSource(binding), refusal)) {
             return null;
         }
         return new AutomaticRefusalCommit(binding, refusal);

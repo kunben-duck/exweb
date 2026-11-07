@@ -47,6 +47,8 @@ import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import org.springframework.beans.factory.ObjectProvider;
@@ -520,33 +522,51 @@ public class SessionApplicationService implements ChatSessionFacade {
         if (stopCoordinator == null) {
             return;
         }
-        Runnable stopTask = () -> plans.forEach(plan -> {
-            try {
-                stopCoordinator.stopRunForSessionDelete(user, plan.run(), plan.session());
-            } catch (Exception ex) {
-                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
-                                "Active run stop failed after session deletion committed")
-                        .runId(plan.run().id())
-                        .sessionId(plan.session().id())
-                        .operation("chat-session.delete.stop-run")
-                        .build(), ex);
-            }
-        });
+        Runnable stopTask = () -> scheduleDeletedSessionStops(user, plans, stopCoordinator);
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             /*
              * run.cancelled 会立即发布到 WebSocket/Redis。放到删除事务提交后执行，
              * 避免前端收到一个尚未提交、暂时无法通过 Event Resume 恢复的终态事件。
-             * 这里再切到独立工作线程，避免 afterCommit 回调复用尚未解绑的事务资源去写 run/event/message。
+             * 订阅切到工作线程，避免复用 afterCommit 尚未解绑的事务资源；下游等待不阻塞工作线程。
              */
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    Schedulers.boundedElastic().schedule(stopTask);
+                    stopTask.run();
                 }
             });
         } else {
             stopTask.run();
         }
+    }
+
+    private void scheduleDeletedSessionStops(UserContext user, List<SessionDeleteRunPlan> plans,
+                                             ChatRunStopCoordinator stopCoordinator) {
+        try {
+            Flux.fromIterable(plans)
+                    .concatMap(plan -> Mono.defer(() ->
+                                    stopCoordinator.stopRunForSessionDelete(user, plan.run(), plan.session()))
+                            .onErrorResume(failure -> {
+                                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                                                "Active run stop failed after session deletion committed")
+                                        .runId(plan.run().id())
+                                        .sessionId(plan.session().id())
+                                        .operation("chat-session.delete.stop-run")
+                                        .build(), failure);
+                                return Mono.empty();
+                            }), 1)
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .subscribe(ignored -> { }, this::logDeletedSessionStopSchedulingFailure);
+        } catch (Exception failure) {
+            logDeletedSessionStopSchedulingFailure(failure);
+        }
+    }
+
+    private void logDeletedSessionStopSchedulingFailure(Throwable failure) {
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                        "Deleted session stop scheduling failed")
+                .operation("chat-session.delete.stop-run.schedule")
+                .build(), failure);
     }
 
     private record SessionDeleteRunPlan(ChatSession session, ChatRun run) {}

@@ -458,8 +458,10 @@ financeex:
     referer: ${FINANCEEX_DOMAIN_AGENT_REFERER:${FINANCEEX_DOMAIN_AGENT_BASE_URL:}}
     chat-path: ${FINANCEEX_DOMAIN_AGENT_CHAT_PATH:/api/chat}
     stop-path: ${FINANCEEX_DOMAIN_AGENT_STOP_PATH:}
-    # 兼容旧部署并继续控制 DomainAgent stop 请求；查询流使用下面两个独立超时。
+    # 兼容旧部署：未配置 stop-timeout 时作为 Stop HTTP 请求期限。
     timeout: ${FINANCEEX_DOMAIN_AGENT_TIMEOUT:120s}
+    # 仅控制 Stop HTTP 请求；空值回退到上述 timeout，不影响查询或问卷等待。
+    stop-timeout: ${FINANCEEX_DOMAIN_AGENT_STOP_TIMEOUT:}
     # 首个原始响应 chunk 及相邻 chunk 之间允许的最大无数据时间。
     stream-idle-timeout: ${FINANCEEX_DOMAIN_AGENT_STREAM_IDLE_TIMEOUT:${FINANCEEX_DOMAIN_AGENT_TIMEOUT:300s}}
     # 单次 DomainAgent 查询从 HTTP 订阅开始计算的绝对总时限。

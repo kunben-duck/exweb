@@ -12,6 +12,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -29,14 +30,22 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStopDecision;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -85,6 +94,37 @@ class ChatRunStopObservationLifecycleTest {
     }
 
     @Test
+    void failedFinalizationAfterCallerCancellationIsLoggedAndReleasesScope() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(ChatRunStopCoordinator.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.start();
+        logger.addAppender(appender);
+        try (var f = new Fixture()) {
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            doAnswer(invocation -> {
+                entered.countDown();
+                awaitUninterruptibly(release);
+                throw new IllegalStateException("commit failed");
+            }).when(f.terminal).commitExternalTerminal(any());
+            var subscription = f.coordinator.stopRun(
+                    f.user, f.run.id(), "USER_STOP", RuntimeForwardHeaders.empty()).subscribe();
+            try {
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                subscription.dispose();
+            } finally { release.countDown(); subscription.dispose(); }
+            await(() -> f.observation.turns.context(f.run.id()) == null);
+            assertThat(appender.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+                    .contains("chat-run.stop.finalize", "stop-run"));
+            assertThat(f.observation.traces).noneMatch(t -> "CANCELLED".equals(t.status()));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
     void failedStopCommitReleasesScopeWithoutInventingTerminal() {
         try (var f = new Fixture()) {
             doThrow(new IllegalStateException("commit failed")).when(f.terminal).commitExternalTerminal(any());
@@ -94,6 +134,48 @@ class ChatRunStopObservationLifecycleTest {
             assertThat(f.observation.turns.context(f.run.id())).isNull();
             assertThat(f.observation.traces).noneMatch(t -> "CANCELLED".equals(t.status())
                     || "FAILED".equals(t.status()));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void cancellingDuringAdmissionWaitsForDecisionBeforeLocalFinalization(boolean admissionFails) throws Exception {
+        try (var f = new Fixture()) {
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            CountDownLatch finished = new CountDownLatch(1);
+            when(f.runs.requestStop(f.user, f.run, "USER_STOP")).thenAnswer(invocation -> {
+                entered.countDown();
+                awaitUninterruptibly(release);
+                if (admissionFails) {
+                    f.observation.turns.finishStart(f.run.id());
+                    throw new IllegalStateException("admission failed");
+                }
+                return new ChatRunStopDecision(f.run.cancelling("USER_STOP"), true);
+            });
+            var subscription = f.coordinator.stopRun(f.user, f.run.id(), "USER_STOP", RuntimeForwardHeaders.empty())
+                    .subscribeOn(Schedulers.boundedElastic()).doFinally(ignored -> finished.countDown())
+                    .subscribe(ignored -> { }, ignored -> { });
+            try {
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                subscription.dispose();
+                assertThat(finished.await(1, TimeUnit.SECONDS)).isTrue();
+                verify(f.terminal, never()).commitExternalTerminal(any());
+                assertThat(f.observation.turns.context(f.run.id())).isNotNull();
+            } finally {
+                release.countDown();
+                subscription.dispose();
+            }
+            await(() -> f.observation.turns.context(f.run.id()) == null);
+            assertThat(f.headers.get()).isNull();
+            if (admissionFails) {
+                verify(f.runtime, never()).cancel(any());
+                verify(f.terminal, never()).commitExternalTerminal(any());
+                assertThat(f.observation.traces).noneMatch(t -> "CANCELLED".equals(t.status()));
+            } else {
+                verify(f.terminal).commitExternalTerminal(any());
+                await(() -> f.observation.traces.stream().anyMatch(t -> "CANCELLED".equals(t.status())));
+            }
         }
     }
 

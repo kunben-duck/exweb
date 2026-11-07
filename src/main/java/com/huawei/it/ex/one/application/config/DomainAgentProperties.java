@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.config;
 import jakarta.annotation.PostConstruct;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.convert.DurationStyle;
 
 import java.time.Duration;
 import java.util.Map;
@@ -38,8 +39,10 @@ public class DomainAgentProperties {
     private String chatPath = "/api/chat";
     /** DomainAgent stop 接口路径；为空表示不支持下游取消。 */
     private String stopPath = "";
-    /** DomainAgent stop 请求超时时间；保留旧配置兼容。 */
+    /** DomainAgent stop 请求超时的兼容回退配置。 */
     private Duration timeout = Duration.ofSeconds(120);
+    /** DomainAgent stop 请求独立超时；未配置时使用 timeout。 */
+    private Duration stopTimeout;
     /** DomainAgent 首个原始响应 chunk 及相邻 chunk 之间的空闲超时。 */
     private Duration streamIdleTimeout = Duration.ofSeconds(300);
     /** DomainAgent 查询从 HTTP 订阅开始计算的绝对总超时。 */
@@ -104,6 +107,12 @@ public class DomainAgentProperties {
     public void setStopPath(String stopPath) { this.stopPath = stopPath; }
     public Duration getTimeout() { return timeout; }
     public void setTimeout(Duration timeout) { this.timeout = timeout; }
+    public Duration getStopTimeout() { return stopTimeout; }
+    /** 仅对可选 Stop 配置将纯空白视为未配置，避免改变其他 Duration 的绑定规则。 */
+    public void setStopTimeout(String configured) {
+        this.stopTimeout = configured == null || configured.isBlank()
+                ? null : DurationStyle.detectAndParse(configured.trim());
+    }
     public Duration getStreamIdleTimeout() { return streamIdleTimeout; }
     public void setStreamIdleTimeout(Duration streamIdleTimeout) { this.streamIdleTimeout = streamIdleTimeout; }
     public Duration getStreamTotalTimeout() { return streamTotalTimeout; }
@@ -211,6 +220,22 @@ public class DomainAgentProperties {
         return bindingCompensationRetryBackoff.compareTo(Duration.ofSeconds(1)) > 0
                 ? Duration.ofSeconds(1)
                 : bindingCompensationRetryBackoff;
+    }
+
+    public Duration requiredStopTimeout() {
+        Duration effectiveTimeout = stopTimeout == null ? timeout : stopTimeout;
+        if (effectiveTimeout == null || effectiveTimeout.isZero() || effectiveTimeout.isNegative()) {
+            throw new IllegalStateException(
+                    "financeex.domain-agent.stop-timeout (or fallback timeout) must be positive");
+        }
+        return effectiveTimeout;
+    }
+
+    @PostConstruct
+    void validateStopConfiguration() {
+        if (stopTimeout != null || enabled && stopPath != null && !stopPath.isBlank()) {
+            requiredStopTimeout();
+        }
     }
 
     public Duration requiredAsyncTaskMaxDuration() {

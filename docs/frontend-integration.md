@@ -3389,6 +3389,29 @@ run-A 从 `WAITING_USER` 改成 `CANCELLED`；它会把 Interaction 改为 `CANC
 
 stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay WebSocket 或 DomainAgent cancel adapter，用于下游企业权限校验。Relay 优先在本机 active WS 上发送 `{"type":"stop_all_agents"}`，并在 `interrupt-ack-timeout` 内等待发送链完成或 stop 后的 `session-state=paused`；这段时间 run 保持 `CANCELLING`，同会话不能创建新 run。如果 stop 请求落到其他实例、本机连接已清理或处于 Relay 问卷等待，后端会新建临时 Relay WS，使用可信 `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后再发送 `stop_all_agents`，然后等待 `session-state=paused` 或 ack 超时后释放临时连接。确认、失败或超时后都会提交本地取消终态。固定专家的运行态 stop 不取消 Binding，下一轮继续使用同一 `runtimeSessionId` 执行 `RESUME`。DomainAgent 等待链使用 source/effective run 的真实技能标识调用现有 cancel 接口。等待态本地事务会先取消 Interaction 及其精确关联的 ACTIVE Binding；即使下游 cancel 失败，也不会恢复等待，不阻止用户提交下一条问题。无关的 `RESUMABLE` Relay Binding 不会被取消。
 
+### DomainAgent Stop 等待期限
+
+普通运行及异步任务等待中的 DomainAgent Stop 按 `CANCELLING -> 等待下游HTTP -> 取消本机订阅 -> 本地终态提交`
+处理，再返回实际状态。仅 HTTP 2xx 记为下游受理成功，不解析业务响应体；非2xx、网络错误或超时均告警后
+继续本地取消，不自动重试。Ask User 等待态仍先取消本地 Interaction，再后台发送 Stop，不等待下游；已进入
+活动续跑 Run 的则按活动 Run 规则处理。未配置 stop-path 或未启用 DomainAgent 时直接本地收尾。
+
+DomainAgent和Relay的活动Stop订阅被取消时，后端结束下游等待，继续后台本地收尾，不等待原Stop期限。
+这不代表下游已确认停止；本地取消仍需原终态CAS成功提交。HTTP断开后通过现有WS、Resume或状态查询确认结果，
+不要仅凭断开判定已完成。Ask User尚未产生有效续跑Run时保持原逻辑。候选切换请求在等待Stop期间断开，
+只收尾旧Run，不继续创建替代Run。
+
+可通过配置中心设置 `financeex.domain-agent.stop-timeout=10s`，或设置环境变量
+`FINANCEEX_DOMAIN_AGENT_STOP_TIMEOUT=10s`，实例重启后生效。缺失或空白时在 Java 中回退到旧属性
+`financeex.domain-agent.timeout`，默认120s；显式非正值或非法格式启动失败。新配置不改变查询流及问卷等待期限。
+
+该期限只覆盖下游 Stop HTTP，不包含数据库收尾。前端和网关应留出额外时间；候选切换也等待这个过程，
+删除成功响应仍不等待Stop；同一删除批次在提交后串行执行Stop，网络等待不阻塞共享工作线程。
+HTTP等待不进入数据库事务，不新增线程池。收尾任务调度或数据库失败会记录告警，不自动重试；
+进程退出或数据库持续不可用时仍可能依赖原Watchdog期限，不能保证即时完成收尾。
+Watchdog、执行权失效及其他终态竞争仍可能先行收尾，不保证所有终态都等待下游确认。
+失败或超时后的本地取消不证明下游已停止计算，HTTP 2xx 的实际停止语义也需下游保证。
+
 ## Run 故障恢复事件
 
 如果执行 run 的服务实例宕机或长时间没有心跳，后台 watchdog 会把该 run 收敛到终态，避免会话永久显示“生成中”。前端无需调用额外接口，只需要像处理普通流式事件一样处理 `run.failed`：

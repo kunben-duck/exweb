@@ -4,13 +4,17 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import static com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
@@ -42,6 +46,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
+import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
@@ -51,6 +56,8 @@ import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
@@ -58,6 +65,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
@@ -70,6 +78,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 class SessionApplicationServiceTest {
     @ParameterizedTest
@@ -1160,6 +1169,7 @@ class SessionApplicationServiceTest {
         ChatSession deleted = service.deleteSession(user(), session.id());
 
         assertThat(deleted.status()).isEqualTo("DELETED");
+        await(() -> stopCoordinator.stoppedRuns.size() == 1);
         assertThat(stopCoordinator.stoppedSessions).containsExactly("session1");
         assertThat(stopCoordinator.stoppedRuns).containsExactly("run-session1");
         assertThat(bindings.cancellations).isEqualTo(1);
@@ -1428,9 +1438,64 @@ class SessionApplicationServiceTest {
         List<ChatSession> deleted = service.deleteSessions(user(), List.of("session1", "session2"));
 
         assertThat(deleted).extracting(ChatSession::status).containsExactly("DELETED", "DELETED");
+        await(() -> stopCoordinator.stoppedRuns.size() == 2);
         assertThat(stopCoordinator.stoppedSessions).containsExactly("session1", "session2");
         assertThat(stopCoordinator.stoppedRuns).containsExactly("run-session1", "run-session2");
         assertThat(bindings.cancellations).isEqualTo(2);
+    }
+
+    @Test
+    void deletionStartsStopsOnlyAfterCommitAndContinuesSeriallyAfterFailure() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
+        sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ACTIVE", "web", now, now));
+        var coordinator = mock(ChatRunStopCoordinator.class);
+        List<String> subscribed = new CopyOnWriteArrayList<>();
+        Sinks.Empty<ChatRunStopResult> first = Sinks.empty();
+        when(coordinator.stopRunForSessionDelete(any(), any(), any())).thenAnswer(invocation -> {
+            ChatRun run = invocation.getArgument(1);
+            return Mono.defer(() -> {
+                subscribed.add(run.id());
+                return "run-session1".equals(run.id()) ? first.asMono() : Mono.empty();
+            });
+        });
+        SessionApplicationService service = service(sessions, messages, activeRunService("session1", "session2"),
+                new CountingRuntimeBindingService(), null, coordinator);
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.deleteSessions(user(), List.of("session1", "session2"));
+            verifyNoInteractions(coordinator);
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+            await(() -> subscribed.size() == 1);
+            assertThat(subscribed).containsExactly("run-session1");
+            first.tryEmitError(new IllegalStateException("first stop failed"));
+            await(() -> subscribed.size() == 2);
+            assertThat(subscribed).containsExactly("run-session1", "run-session2");
+        } finally {
+            first.tryEmitEmpty();
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void deletionRollbackDoesNotStartStops() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                Instant.now(), Instant.now()));
+        var coordinator = mock(ChatRunStopCoordinator.class);
+        SessionApplicationService service = service(sessions, new InMemoryMessageRepository(),
+                activeRunService("session1"), new CountingRuntimeBindingService(), null, coordinator);
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.deleteSession(user(), "session1");
+            TransactionSynchronizationManager.getSynchronizations().forEach(synchronization ->
+                    synchronization.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        verifyNoInteractions(coordinator);
     }
 
     @Test
@@ -1451,6 +1516,7 @@ class SessionApplicationServiceTest {
         assertThat(sessions.lockOrder).containsExactly("session1", "session2");
         assertThat(runs.lookupOrder).containsExactly("session2", "session1");
         assertThat(deleted).extracting(ChatSession::id).containsExactly("session2", "session1");
+        await(() -> stopCoordinator.stoppedRuns.size() == 1);
         assertThat(stopCoordinator.stoppedSessions).containsExactly("session2");
         assertThat(stopCoordinator.stoppedRuns).containsExactly("run-session2");
     }
@@ -1783,8 +1849,8 @@ class SessionApplicationServiceTest {
     }
 
     private static class CountingStopCoordinator extends ChatRunStopCoordinator {
-        private final List<String> stoppedSessions = new ArrayList<>();
-        private final List<String> stoppedRuns = new ArrayList<>();
+        private final List<String> stoppedSessions = new CopyOnWriteArrayList<>();
+        private final List<String> stoppedRuns = new CopyOnWriteArrayList<>();
 
         CountingStopCoordinator() {
             super(null, null, null, null, null, null,
@@ -1792,9 +1858,12 @@ class SessionApplicationServiceTest {
         }
 
         @Override
-        public void stopRunForSessionDelete(UserContext user, ChatRun run, ChatSession sessionSnapshot) {
-            stoppedSessions.add(sessionSnapshot.id());
-            stoppedRuns.add(run.id());
+        public Mono<ChatRunStopResult> stopRunForSessionDelete(UserContext user, ChatRun run,
+                                                              ChatSession sessionSnapshot) {
+            return Mono.fromRunnable(() -> {
+                stoppedSessions.add(sessionSnapshot.id());
+                stoppedRuns.add(run.id());
+            }).then(Mono.empty());
         }
     }
 

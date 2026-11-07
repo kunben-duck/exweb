@@ -7,6 +7,8 @@ package com.huawei.it.ex.one.application.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -37,6 +39,8 @@ class DomainAgentPropertiesTest {
             assertThat(properties.isHistoryMobileCardFallbackEnabled()).isFalse();
             assertThat(properties.getHistoryMobileCardUrls()).isEmpty();
             assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(120));
+            assertThat(properties.getStopTimeout()).isNull();
+            assertThat(properties.requiredStopTimeout()).isEqualTo(Duration.ofSeconds(120));
             assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
             assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofMinutes(15));
             assertThat(properties.getQuestionnaireWaitTimeout()).isEqualTo(Duration.ZERO);
@@ -48,6 +52,70 @@ class DomainAgentPropertiesTest {
             assertThat(properties.getAsyncTaskCallbackMaxEvents()).isEqualTo(128);
             assertThat(properties.getAsyncTaskCallbackMaxEventBytes()).isEqualTo(1024 * 1024);
         });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", " ", "10s"})
+    void stopTimeoutUsesJavaFallbackForFullPropertyNames(String configured) {
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.enabled=true",
+                        "financeex.domain-agent.stop-path=/stop",
+                        "financeex.domain-agent.timeout=180s",
+                        "financeex.domain-agent.stop-timeout=" + configured)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    DomainAgentProperties properties = context.getBean(DomainAgentProperties.class);
+                    assertThat(properties.requiredStopTimeout())
+                            .isEqualTo(Duration.ofSeconds(configured.isBlank() ? 180 : 10));
+                    assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(180));
+                    assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
+                    assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofMinutes(15));
+                    assertThat(properties.getQuestionnaireWaitTimeout()).isZero();
+                });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0s", "-1s", "invalid"})
+    void rejectsExplicitInvalidStopTimeoutAtStartupEvenWhenDisabled(String configured) {
+        contextRunner.withPropertyValues("financeex.domain-agent.stop-timeout=" + configured)
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void validatesLegacyTimeoutOnlyWhenDownstreamStopIsEnabled() {
+        contextRunner.withPropertyValues("financeex.domain-agent.timeout=0s")
+                .run(context -> assertThat(context).hasNotFailed());
+        contextRunner.withPropertyValues("financeex.domain-agent.enabled=true",
+                        "financeex.domain-agent.timeout=0s")
+                .run(context -> assertThat(context).hasNotFailed());
+        contextRunner.withPropertyValues("financeex.domain-agent.enabled=true",
+                        "financeex.domain-agent.stop-path=/stop", "financeex.domain-agent.timeout=0s")
+                .run(context -> assertThat(context).hasFailed());
+        contextRunner.withPropertyValues("financeex.domain-agent.enabled=true",
+                        "financeex.domain-agent.stop-path=/stop", "financeex.domain-agent.timeout=0s",
+                        "financeex.domain-agent.stop-timeout=10s")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", " ", "10s"})
+    void applicationYamlBindsStopTimeoutWithoutChangingOtherTimeouts(String configured) throws IOException {
+        DomainAgentProperties properties = bindApplicationYaml(Map.of(
+                "FINANCEEX_DOMAIN_AGENT_STOP_TIMEOUT", configured));
+        assertThat(properties.requiredStopTimeout())
+                .isEqualTo(Duration.ofSeconds(configured.isBlank() ? 120 : 10));
+        assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(120));
+        assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
+        assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofMinutes(15));
+        assertThat(properties.getQuestionnaireWaitTimeout()).isZero();
+
+        DomainAgentProperties legacy = bindApplicationYaml(Map.of(
+                "FINANCEEX_DOMAIN_AGENT_TIMEOUT", "180s",
+                "FINANCEEX_DOMAIN_AGENT_STOP_TIMEOUT", configured));
+        assertThat(legacy.requiredStopTimeout())
+                .isEqualTo(Duration.ofSeconds(configured.isBlank() ? 180 : 10));
+        assertThat(legacy.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(180));
+        assertThat(legacy.getStreamTotalTimeout()).isEqualTo(Duration.ofSeconds(180));
     }
 
     @Test

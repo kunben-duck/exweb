@@ -507,7 +507,18 @@ POST /v1/internal/domain-agent/async-tasks/callback
 - 原始请求体默认最多5MiB；单帧最多256KiB，最多128帧、128个标准业务事件和1MiB标准事件数据；
   可选`error`仅接受文本，trim后为空则省略，超过1024个Unicode码点时安全截断。单实例默认最多并发处理4个回调，
   容量满返回429，请求体、帧或事件容量超限返回413。
-- DomainAgent stop接口继续使用同一个`runId`停止后台任务。
+- DomainAgent stop接口继续使用同一个`runId`停止后台任务。普通活动Run和异步任务等待中的Stop先置为
+  `CANCELLING`，等待下游HTTP结束后再完成本次本地收尾；仅HTTP 2xx记录为下游受理成功，不解析业务响应体。
+  非2xx、网络错误和超时会告警，但仍继续本地取消，不自动重试。Ask User等待态保留先取消本地Interaction、
+  再后台调用Stop的原顺序。
+- 活动Stop订阅被调用方取消时，不再等待下游响应或Stop超时：取消该HTTP等待，继续在后台调度本地收尾。
+  下游请求取消不记为受理成功；只有取得Stop控制权后才提交取消终态，仍受原终态CAS保护。
+  本地收尾受调度及数据库可用性影响，不保证即时完成，也不保证下游停止计算。
+- Stop HTTP使用`financeex.domain-agent.stop-timeout`（`FINANCEEX_DOMAIN_AGENT_STOP_TIMEOUT`），未配置或空白
+  在Java配置类中回退到`financeex.domain-agent.timeout`，默认120s；显式零值、负值或非法格式启动失败。
+  配置中心可直接设置`financeex.domain-agent.stop-timeout=10s`，按实例启动配置生效。
+  新期限不改变查询空闲/总超时和问卷等待时间，也不包含数据库收尾时间；前端、网关需预留额外时间。
+  未启用DomainAgent或未配置stop-path不请求下游。2xx的停止语义由下游保证，本地取消不保证下游已停止计算。
 - 有结果时ChatService按`run.async_result_started -> 业务标准事件 -> run.async_finished -> message.completed -> run终态`
   提交；无结果时保持原三事件顺序。FULL模式下Event、assistant正文、Parts和终态同事务提交；no-store只实时推送业务结果。
   数据库提交后再发布实时Event，发布失败不回滚终态，前端可通过Run Resume和历史消息恢复。

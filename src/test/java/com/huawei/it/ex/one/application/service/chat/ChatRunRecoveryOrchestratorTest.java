@@ -4,6 +4,8 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import static com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -196,6 +198,8 @@ class ChatRunRecoveryOrchestratorTest {
 
         assertThat(sessionService.deleteSession(user(), run.sessionId()).status()).isEqualTo("DELETED");
 
+        await(() -> fixture.executions.findByRunId(run.id()).orElseThrow().executionStatus()
+                == ChatRunExecutionStatus.CANCELLED);
         assertThat(fixture.runs.findById(run.id()).orElseThrow().status()).isEqualTo(ChatRunStatus.CANCELLED);
         assertThat(fixture.executions.findByRunId(run.id()).orElseThrow().executionStatus())
                 .isEqualTo(ChatRunExecutionStatus.CANCELLED);

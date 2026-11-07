@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelReque
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
+import com.huawei.it.ex.one.application.service.observation.ObservationTestFixture;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 
@@ -22,6 +23,8 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpHeaders;
@@ -41,10 +44,40 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 class ConfiguredDomainAgentClientTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @ParameterizedTest
+    @ValueSource(ints = {200, 204, 302, 400, 500})
+    void onlySuccessfulHttpStatusRecordsStopAccepted(int status) {
+        try (var f = new com.huawei.it.ex.one.application.service.observation.ObservationTestFixture()) {
+            f.start("run-a");
+            AtomicInteger requests = new AtomicInteger();
+            WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+                requests.incrementAndGet();
+                return Mono.just(ClientResponse.create(HttpStatus.valueOf(status))
+                        .body("{\"status\":\"not-interpreted\"}").build());
+            });
+            DomainAgentProperties properties = properties();
+            properties.setStopPath("/stop");
+            ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(builder, properties,
+                    new DomainAgentChatRequestMapper(properties), new DomainAgentResponseNormalizer(objectMapper));
+            client.setObservationSupport(f.recorder);
+
+            StepVerifier.create(client.cancel(new DomainAgentCancelRequest(
+                            new UserContext("t", "u", "u"), "session", "run-a", "skill-a", "USER_STOP",
+                            Map.of(), RuntimeForwardHeaders.empty()).withTurnTraceContext(f.turns.context("run-a"))))
+                    .verifyComplete();
+
+            com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
+                    () -> f.calls.stream().anyMatch(call -> "FINISHED".equals(call.status())));
+            assertThat(f.calls.getLast().outcome()).isEqualTo(status < 300 ? "STOP_ACCEPTED" : "ERROR");
+            assertThat(requests).hasValue(1);
+        }
+    }
 
     @Test
     void observationsPropagateOnlyTrustedHeadersForQueryAnswerAndStop() throws Exception {
@@ -560,8 +593,9 @@ class ConfiguredDomainAgentClientTest {
                 .verify();
     }
 
-    @Test
-    void cancelContinuesToUseLegacyTimeout() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void cancelUsesDedicatedTimeoutOrLegacyFallback(boolean dedicated) {
         AtomicBoolean cancelled = new AtomicBoolean(false);
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> Mono.<ClientResponse>never()
@@ -569,6 +603,10 @@ class ConfiguredDomainAgentClientTest {
         DomainAgentProperties properties = properties();
         properties.setStopPath("/api/stop");
         properties.setTimeout(Duration.ofSeconds(2));
+        if (dedicated) {
+            properties.setTimeout(Duration.ofSeconds(120));
+            properties.setStopTimeout("2s");
+        }
         properties.setStreamIdleTimeout(Duration.ofMillis(10));
         properties.setStreamTotalTimeout(Duration.ofMillis(10));
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
@@ -591,6 +629,76 @@ class ConfiguredDomainAgentClientTest {
                 .verifyComplete();
 
         assertThat(cancelled).isTrue();
+    }
+
+    @Test
+    void longerDedicatedTimeoutAllowsDelayedSuccessBeyondLegacyTimeout() {
+        DomainAgentProperties properties = properties();
+        properties.setStopPath("/stop");
+        properties.setTimeout(Duration.ofMillis(10));
+        properties.setStopTimeout("2s");
+        AtomicBoolean responseDelivered = new AtomicBoolean();
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                WebClient.builder().exchangeFunction(request -> Mono.delay(Duration.ofSeconds(1))
+                        .map(ignored -> ClientResponse.create(HttpStatus.OK).build())
+                        .doOnNext(ignored -> responseDelivered.set(true))), properties,
+                new DomainAgentChatRequestMapper(properties), new DomainAgentResponseNormalizer(objectMapper));
+
+        StepVerifier.withVirtualTime(() -> client.cancel(new DomainAgentCancelRequest(user(), "session1", "run1",
+                        "skill-a", "USER_STOP", Map.of(), RuntimeForwardHeaders.empty())))
+                .expectSubscription().expectNoEvent(Duration.ofMillis(500))
+                .thenAwait(Duration.ofMillis(500)).verifyComplete();
+        assertThat(responseDelivered).isTrue();
+    }
+
+    @Test
+    void cancellingStopSubscriptionCancelsHttpWithoutRecordingSuccess() {
+        try (ObservationTestFixture observations = new ObservationTestFixture()) {
+            observations.start("run1");
+            AtomicBoolean cancelled = new AtomicBoolean();
+            DomainAgentProperties properties = properties();
+            properties.setStopPath("/stop");
+            ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                    WebClient.builder().exchangeFunction(request -> Mono.<ClientResponse>never()
+                            .doOnCancel(() -> cancelled.set(true))), properties,
+                    new DomainAgentChatRequestMapper(properties),
+                    new DomainAgentResponseNormalizer(objectMapper, properties));
+            client.setObservationSupport(observations.recorder);
+
+            StepVerifier.create(client.cancel(new DomainAgentCancelRequest(user(), "session1", "run1",
+                            "skill-a", "USER_STOP", Map.of(), RuntimeForwardHeaders.empty())
+                            .withTurnTraceContext(observations.turns.context("run1"))))
+                    .thenCancel().verify();
+
+            assertThat(cancelled).isTrue();
+            ObservationTestFixture.await(() -> observations.calls.stream()
+                    .anyMatch(call -> "FINISHED".equals(call.status())));
+            assertThat(observations.calls.getLast().outcome()).isEqualTo("CANCELLED");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void stopFailureIsObservedBeforeBestEffortFallback(boolean timeout) {
+        try (ObservationTestFixture observations = new ObservationTestFixture()) {
+            observations.start("run1");
+            DomainAgentProperties properties = properties();
+            properties.setStopPath("/stop");
+            properties.setStopTimeout("2s");
+            ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                    WebClient.builder().exchangeFunction(request -> timeout ? Mono.never()
+                            : Mono.error(new java.io.IOException("connection reset"))), properties,
+                    new DomainAgentChatRequestMapper(properties),
+                    new DomainAgentResponseNormalizer(objectMapper, properties));
+            client.setObservationSupport(observations.recorder);
+            StepVerifier.withVirtualTime(() -> client.cancel(new DomainAgentCancelRequest(user(),
+                            "session1", "run1", "skill-a", "USER_STOP", Map.of(), RuntimeForwardHeaders.empty())
+                            .withTurnTraceContext(observations.turns.context("run1"))))
+                    .thenAwait(Duration.ofSeconds(2)).verifyComplete();
+            ObservationTestFixture.await(() -> observations.calls.stream()
+                    .anyMatch(call -> "FINISHED".equals(call.status())));
+            assertThat(observations.calls.getLast().outcome()).isEqualTo(timeout ? "TIMEOUT" : "ERROR");
+        }
     }
 
     private DomainAgentRequest queryRequest(RuntimeForwardHeaders forwardHeaders) {

@@ -29,13 +29,13 @@ import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Function;
 
 /**
@@ -43,8 +43,9 @@ import java.util.function.Function;
  *
  * <p>stop 接口和删除会话都会经过这里收敛运行态：写 cancel flag、尽力取消下游 Runtime、
  * 取消本机订阅、固化用户可见 partial assistant，并发布标准 {@code run.cancelled}。
- * Relay 活动连接会在既有中断确认时限内等待控制帧发送完成或 paused 确认；其他 Runtime
- * 仍保持异步 best-effort。</p>
+ * 活动 Run 的 Relay 取消等待控制帧发送完成或 paused 确认，DomainAgent 取消等待 Stop HTTP
+ * 响应；两者均在各自期限内 best-effort 等待，调用方取消则结束等待并继续后台本地收尾。
+ * 问卷等待态仍异步取消下游。</p>
  */
 @Service
 public class ChatRunStopCoordinator {
@@ -142,8 +143,7 @@ public class ChatRunStopCoordinator {
 
     public Mono<ChatRunStopResult> stopRun(UserContext user, TraceContext traceContext, String runId, String reason,
                                            RuntimeForwardHeaders forwardHeaders) {
-        return Mono.defer(() -> stopRunReactive(user, runId, reason,
-                new StopRunContext(traceContext, forwardHeaders, null)));
+        return stopExecution(user, runId, reason, new StopRunContext(traceContext, forwardHeaders, null));
     }
 
     public ChatRunStopResult stopRunNow(UserContext user, String runId, String reason,
@@ -153,8 +153,21 @@ public class ChatRunStopCoordinator {
 
     public ChatRunStopResult stopRunNow(UserContext user, TraceContext traceContext, String runId, String reason,
                                         RuntimeForwardHeaders forwardHeaders) {
-        return requireStopResult(stopRunReactive(user, runId, reason,
-                new StopRunContext(traceContext, forwardHeaders, null)).block());
+        return requireStopResult(stopRun(user, traceContext, runId, reason, forwardHeaders).block());
+    }
+
+    private Mono<ChatRunStopResult> stopExecution(UserContext user, String runId, String reason,
+                                                  StopRunContext stopContext) {
+        return Mono.defer(() -> {
+            Sinks.Empty<Void> callerCancelled = Sinks.empty();
+            StopRunContext context = new StopRunContext(
+                    stopContext.traceContext(), stopContext.forwardHeaders(), stopContext.sessionSnapshot(),
+                    callerCancelled.asMono());
+            // 每次订阅独立执行；调用方取消只中止下游等待，不取消准入后的本地收尾及观测作用域。
+            return Mono.defer(() -> stopRunReactive(user, runId, reason, context))
+                    .cache()
+                    .doOnCancel(() -> callerCancelled.tryEmitEmpty());
+        });
     }
 
     private Mono<ChatRunStopResult> stopRunReactive(UserContext user, String runId, String reason,
@@ -193,17 +206,24 @@ public class ChatRunStopCoordinator {
             return Mono.just(chatRunService.toStopResult(run));
         }
         /*
-         * requestStop 已将 run 置为 CANCELLING，因此等待 Relay 控制帧确认期间同会话不能准入新 run。
-         * 确认、失败或超时后再 dispose 本机订阅并提交本地终态。
+         * requestStop 已将 run 置为 CANCELLING，因此等待下游取消响应期间同会话不能准入新 run。
+         * 确认、失败、超时或调用方取消等待后，再 dispose 本机订阅并提交本地终态。
          */
         return cancelDownstreamBeforeFinalization(
                         run, user, stopContext.traceContext(), headerSnapshot)
+                .takeUntilOther(stopContext.callerCancelled())
                 .publishOn(Schedulers.boundedElastic())
                 .then(Mono.fromCallable(() -> {
                     try (var processing = scope.retain()) {
                         return finalizeActiveStop(user, run, effectiveReason, stopContext);
                     }
-                }));
+                }))
+                .doOnError(failure -> log.warn(SystemErrorLogEntry.builder(
+                                SystemErrorCode.INTERNAL_EXECUTION_FAILED, "Active run stop finalization failed")
+                        .runId(run.id())
+                        .sessionId(run.sessionId())
+                        .operation("chat-run.stop.finalize")
+                        .build(), failure));
     }
 
     private ChatRunStopResult finalizeActiveStop(UserContext user, ChatRun run, String effectiveReason,
@@ -388,7 +408,8 @@ public class ChatRunStopCoordinator {
             UserContext user,
             TraceContext traceContext,
             RuntimeForwardHeaders headerSnapshot) {
-        if (run == null || !"relay".equalsIgnoreCase(run.runtimeProvider())) {
+        if (run == null || !("relay".equalsIgnoreCase(run.runtimeProvider())
+                || "domain-agent".equalsIgnoreCase(run.runtimeProvider()))) {
             cancelDownstreamAsyncBestEffort(run, user, traceContext, headerSnapshot);
             return Mono.empty();
         }
@@ -422,17 +443,19 @@ public class ChatRunStopCoordinator {
                 .build(), failure);
     }
 
-    public void stopActiveRunForSessionDelete(UserContext user, String sessionId) {
-        Optional<ChatRun> active = chatRunService.findActiveRun(user, sessionId);
-        active.ifPresent(run -> stopRunForSessionDelete(user, run, null));
+    public Mono<ChatRunStopResult> stopActiveRunForSessionDelete(UserContext user, String sessionId) {
+        return Mono.defer(() -> chatRunService.findActiveRun(user, sessionId)
+                .map(run -> stopRunForSessionDelete(user, run, null))
+                .orElseGet(Mono::empty));
     }
 
-    public void stopRunForSessionDelete(UserContext user, ChatRun run, ChatSession sessionSnapshot) {
+    public Mono<ChatRunStopResult> stopRunForSessionDelete(UserContext user, ChatRun run,
+                                                          ChatSession sessionSnapshot) {
         if (run == null) {
-            return;
+            return Mono.empty();
         }
-        requireStopResult(stopRunReactive(user, run.id(), "SESSION_DELETE",
-                new StopRunContext(TraceContext.empty(), RuntimeForwardHeaders.empty(), sessionSnapshot)).block());
+        return stopExecution(user, run.id(), "SESSION_DELETE",
+                new StopRunContext(TraceContext.empty(), RuntimeForwardHeaders.empty(), sessionSnapshot));
     }
 
     private StopMessageTarget preparePartialAssistant(UserContext user, ChatRun run, String reason,
@@ -644,7 +667,12 @@ public class ChatRunStopCoordinator {
     }
 
     private record StopRunContext(TraceContext traceContext, RuntimeForwardHeaders forwardHeaders,
-                                  ChatSession sessionSnapshot) {
+                                  ChatSession sessionSnapshot, Mono<Void> callerCancelled) {
+        private StopRunContext(TraceContext traceContext, RuntimeForwardHeaders forwardHeaders,
+                               ChatSession sessionSnapshot) {
+            this(traceContext, forwardHeaders, sessionSnapshot, Mono.never());
+        }
+
         private StopRunContext {
             traceContext = traceContext == null ? TraceContext.empty() : traceContext;
             forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;

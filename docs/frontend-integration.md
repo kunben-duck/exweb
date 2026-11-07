@@ -1283,6 +1283,13 @@ GET /v1/chat/sessions/session_xxx/messages/operations?cursor=opaque_cursor&limit
 - 相比原messages多一次Session主键查询，其余分页与批量装配复用，不新增COUNT或逐消息查询。
   网关授权和目标库性能仍需部署环境验收，不作为普通聊天页替代入口。
 
+上述历史分页（含运营入口）、tree和variants的消息顶层均提供可空`channel`，表示首次创建消息的请求端侧。
+与Session创建来源、Part展示channel不同；旧数据未知时为null，不由前端推测为web。
+新提问、编辑及普通Intent澄清的新user/assistant记录当前请求值；重新生成和候选纠偏只标记新assistant。
+问卷、候选确认、拒答重试及异步更新复用消息时保留原来源，即使本次从另一端发起。
+候选切换接口增加可选channel，未传或空白默认web；其余Run入口继续使用原顶层channel。
+不改变WS、Resume或分享格式，详见[消息来源口径](message-channel.md)。
+
 响应示例：
 
 ```json
@@ -1296,6 +1303,7 @@ GET /v1/chat/sessions/session_xxx/messages/operations?cursor=opaque_cursor&limit
       "treeDepth": 0,
       "siblingIndex": 1,
       "role": "user",
+      "channel": "mobile",
       "content": "帮我分析一下这个费用趋势",
       "tokenCount": null,
       "runId": "run_xxx",
@@ -1331,6 +1339,7 @@ GET /v1/chat/sessions/session_xxx/messages/operations?cursor=opaque_cursor&limit
       "siblingIndex": 1,
       "role": "assistant",
       "content": "从趋势看，差旅费在三月出现明显上升...",
+      "channel": "mobile",
       "tokenCount": null,
       "runId": "run_xxx",
       "originType": "NORMAL",

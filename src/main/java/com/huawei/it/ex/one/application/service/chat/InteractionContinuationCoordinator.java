@@ -93,6 +93,7 @@ final class InteractionContinuationCoordinator {
                 user,
                 traceContext,
                 command.interactionId(),
+                command.channel(),
                 (runId, startAttempt) -> executeClaimedContinuation(context, runId, startAttempt));
     }
 

@@ -385,6 +385,8 @@ MODEL通过现有WebClient发送`model/messages/stream=false`，使用静态Bear
 
 会话表以显式 `app_id/app_name` 保存产品分组标签：`appId` 是大小写敏感的稳定查询键，`appName` 是创建时展示快照；`app_id IS NULL`定义为主站会话。两者不参与身份隔离，所有读取仍必须带 `tenantId + userId`；`/sessions/apps` 使用单条轻量窗口查询返回非删除会话中的去重分类，仍排除主站会话。列表可按 `appId` 精确过滤，或使用互斥的`appScope=MAIN_SITE`查询主站，并与精确`channel`组合。游标接口继续使用大小写不敏感的`title`包含搜索并绑定全部过滤条件，主站查询使用v5，既有v2/v3/v4继续兼容；页码接口改用`keyword`统一搜索标题及已持久化user/assistant正文，count与items在同一个默认2秒只读事务中完成，超时返回`SESSION_SEARCH_TIMEOUT`。`%/_/!`在应用层转义为普通字符，SQL使用参数化`ILIKE ... ESCAPE '!'`，不拼接用户输入。Ustore下不增加GIN或其他DDL，现有索引仅用于归属和单会话范围收敛。已有会话仍校验显式App Tag与原值一致；channel仅记录创建来源，普通Run与Interaction允许同租户、同用户跨端续聊，不比较或改写原channel。双端列表默认省略channel，显式来源筛选和游标条件绑定仍保留，移除筛选须清空cursor重新加载。分支继承源字段；这些字段不进入run metadata、RouteMemory或Agent请求。
 
+消息通过独立可空列`channel`记录首次创建消息的请求端侧，与上述Session创建来源及Part展示分类分开。新Run仅在私有metadata中保存本次可信请求来源`_messageChannel`，不复制Session标签，也不向Agent透传；消息复用、异步更新保留原值，分支快照复制源值，旧消息未知时保持NULL。字段随原INSERT和历史SELECT处理，不增加查询、独立UPDATE或常驻状态。迁移及各入口规则见[消息请求来源](../message-channel.md)。
+
 会话未读状态采用服务端水位：`latest_message_seq` 是最新已保存、需要用户查看的 assistant 消息终态事件 sequence，`last_read_seq` 是前端确认展示到的位置，`latest > last_read` 即未读。两个水位由专用 SQL 单调更新，通用 session save 不覆盖；`run.completed(messageReady=true)` 和 `run.waiting_user` 在保存 assistant 的同一短事务内推进最新水位。`POST /sessions/{sessionId}/read` 原子执行 `max(lastRead,min(readThrough,latest))` 且不修改 `updated_at`，因此多页签不会回退或越过水位，也不会因阅读操作改变列表顺序。
 
 `current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。`/messages` 会在有多个 sibling 版本的消息上返回 `versionInfo`，包含当前版本序号、版本总数和候选版本的 `switchLeafMessageId`。前端切换版本时可以先用 `GET /messages?leafMessageId={switchLeafMessageId}` 刷新聊天区，再用 `POST /path` 持久化当前选择；`/variants` 保留为查询完整候选内容和调试的接口。

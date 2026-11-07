@@ -26,6 +26,7 @@ import java.util.Map;
  * @param runMode 消息树运行模式。
  * @param parentMessageId 本轮消息树挂接父节点。
  * @param userMessageId 本轮用户消息节点 ID。
+ * @param channel 本次请求端侧来源；兼容入口无可信来源时为空，仅写入Run私有metadata。
  */
 public record CreateChatRunContext(
         String runId,
@@ -36,8 +37,15 @@ public record CreateChatRunContext(
         Map<String, Object> metadata,
         ChatRunMode runMode,
         String parentMessageId,
-        String userMessageId
+        String userMessageId,
+        String channel
 ) {
+    public CreateChatRunContext(String runId, UserContext user, String sessionId, RouteTarget route,
+                                RuntimeBinding binding, Map<String, Object> metadata, ChatRunMode runMode,
+                                String parentMessageId, String userMessageId) {
+        this(runId, user, sessionId, route, binding, metadata, runMode, parentMessageId, userMessageId, null);
+    }
+
     public Map<String, Object> safeMetadata() {
         return metadata == null ? Map.of() : metadata;
     }

@@ -67,15 +67,17 @@ class DomainAgentAsyncTaskApplicationServiceTest {
                 "run1", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
                 "DOMAIN_AGENT", "skill1", "domain-agent", null, ChatRunMode.NEXT,
                 null, userMessage.id(), null, 1L, 3L, null, now, null,
-                Map.of(), now, now);
+                Map.of("_messageChannel", "mobile"), now, now);
         RunExecutionClaim claim = new RunExecutionClaim("run1", "instance1", 7L);
         AssistantAssembly assembly = new AssistantAssembly();
         assembly.observe(MessageDeltaEvent.of("run1", "session1", "partial"));
+        RunStartAttempt attempt = new RunStartAttempt(user, running.id(), null, "mobile");
+        attempt.recordRun(running);
         RunEventPipelineContext context = new RunEventPipelineContext(
                 user, session,
                 new ChatRunMessagePlan(ChatRunMode.NEXT, userMessage.id(), userMessage, null),
                 new AtomicReference<>(), new AtomicReference<>(), assembly,
-                running.id(), claim, new AtomicReference<>(Map.of()), null, null, List.of());
+                running.id(), claim, new AtomicReference<>(Map.of()), null, attempt, List.of());
         when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
         when(idGenerator.newId(eq("msg"), any())).thenReturn("msg-assistant");
         when(streamService.appendWithExecutionGuard(any(RunAsyncRunningEvent.class), eq(claim)))
@@ -99,7 +101,10 @@ class DomainAgentAsyncTaskApplicationServiceTest {
                 .containsEntry("messageReady", true);
         assertThat(result.run().assistantMessageId()).isEqualTo("msg-assistant");
         assertThat(DomainAgentAsyncTaskMetadata.isAsyncRunning(result.run())).isTrue();
-        verify(sessionService).saveAssistantMessage(any(AssistantMessageSaveCommand.class));
+        ArgumentCaptor<AssistantMessageSaveCommand> command = ArgumentCaptor.forClass(AssistantMessageSaveCommand.class);
+        verify(sessionService).saveAssistantMessage(command.capture());
+        assertThat(command.getValue().channel()).isEqualTo("mobile");
+        assertThat(result.run().metadata()).containsEntry("_messageChannel", "mobile");
         verify(executionRepository).markAsyncWaiting(eq(claim), eq(result.expiresAt()));
     }
 }

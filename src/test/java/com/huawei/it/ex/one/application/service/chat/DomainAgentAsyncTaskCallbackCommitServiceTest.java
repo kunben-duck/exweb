@@ -219,6 +219,7 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
             "ARCHIVED,APPEND", "ARCHIVED,REPLACE", "ARCHIVED,EMPTY", "ARCHIVED,FAILED"})
     void nonDeletedCallbacksUseLockedSnapshotAndKeepOriginalResults(String status, String mode) {
         StoredFixture fixture = new StoredFixture(status, false);
+        fixture.message.set(fixture.message.get().withChannel("mobile"));
         when(fixture.base.sessionRepository.findByTenantIdAndUserIdAndId("tenant1", "user1", "session1"))
                 .thenReturn(Optional.of(fixture.base.session));
 
@@ -233,6 +234,7 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
             default -> "existing answer";
         };
         assertThat(fixture.message.get().content()).isEqualTo(expected);
+        assertThat(fixture.message.get().channel()).isEqualTo("mobile");
         verify(fixture.sessions).requireAssistantForInternalUpdate(fixture.session.get(), "msg-assistant");
         verify(fixture.sessions).advanceLatestMessageSeq(any(), eq(fixture.session.get()), any(Long.class));
         assertThat(fixture.session.get().status()).isEqualTo(status);

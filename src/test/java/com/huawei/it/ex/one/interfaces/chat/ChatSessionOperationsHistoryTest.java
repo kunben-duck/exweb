@@ -144,6 +144,7 @@ class ChatSessionOperationsHistoryTest {
 
         assertThat(result).isEqualTo(original);
         JsonNode assistant = result.path("items").get(0);
+        assertThat(assistant.path("channel").asText()).isEqualTo("mobile");
         assertThat(assistant.path("parts").get(0).path("payload").path("mobileCardUrl").asText()).isEqualTo(MOBILE);
         assertThat(assistant.path("assistantSource").asText()).isEqualTo("domain-agent");
         assertThat(assistant.path("feedback").path("commentText").asText()).isEqualTo("owner feedback");
@@ -275,7 +276,7 @@ class ChatSessionOperationsHistoryTest {
                 1, Instant.EPOCH);
         message = new ChatMessage("assistant", tenant, user, "session", null, 2L, 1, 0, "assistant",
                 "owner answer", 2, "run-a", "NORMAL", false, null, null, null, null,
-                "{\"skillId\":\"skill-a\"}", List.of(card), Instant.EPOCH)
+                "{\"skillId\":\"skill-a\"}", List.of(card), Instant.EPOCH).withChannel("mobile")
                 .withAttachments(List.of(new ChatMessageAttachment("attachment", tenant, user, "session",
                         "assistant", "doc", 1, "file.pdf", "application/pdf", 10L, null, Instant.EPOCH)));
     }

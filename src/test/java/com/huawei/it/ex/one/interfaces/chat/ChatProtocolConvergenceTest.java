@@ -198,9 +198,9 @@ class ChatProtocolConvergenceTest {
                 " msg_user ",
                 " skill_b ",
                 new ChatSelectedIntentDto("intent_b", "候选技能B"),
-                Map.of("bizKey", "current-only", MessageSkillContext.RUN_METADATA_KEY, "forged"),
+                Map.of("bizKey", "current-only", MessageSkillContext.RUN_METADATA_KEY, "forged", "_messageChannel", "forged"),
                 null,
-                " finance_pc_entry ");
+                " finance_pc_entry ", " mobile ");
 
         CandidateDomainAgentSwitchCommand command =
                 translator.toCandidateSwitchCommand(" run_a ", request);
@@ -209,6 +209,8 @@ class ChatProtocolConvergenceTest {
         assertThat(command.messageId()).isEqualTo("msg_user");
         assertThat(command.skillId()).isEqualTo("skill_b");
         assertThat(command.intentAccessName()).isEqualTo("finance_pc_entry");
+        assertThat(command.channel()).isEqualTo("mobile");
+        assertThat(command.metadata()).doesNotContainKey("_messageChannel");
         assertThat(command.metadata()).containsEntry("bizKey", "current-only");
         assertThat(command.metadata()).doesNotContainKey(MessageSkillContext.RUN_METADATA_KEY);
         assertThat(SelectedIntentContext.intentId(command.metadata())).isEqualTo("intent_b");

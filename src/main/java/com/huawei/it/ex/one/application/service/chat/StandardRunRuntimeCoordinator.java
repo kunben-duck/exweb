@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.IntentExpertSelectionPayload;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -12,6 +13,7 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
@@ -206,8 +208,12 @@ final class StandardRunRuntimeCoordinator {
                 null,
                 prepared.startAttempt(),
                 documentIds(prepared.documents()),
+                RuntimeInteractionDispatchState.untracked(),
+                null,
                 plan.deferredDomainAgentBindingRef(),
-                plan.pendingRouteMemoryDecisionRef());
+                plan.pendingRouteMemoryDecisionRef(),
+                null,
+                MessageChannel.fromRun(plan.admission().run()));
     }
 
     private ChatCommand commandForExecution(

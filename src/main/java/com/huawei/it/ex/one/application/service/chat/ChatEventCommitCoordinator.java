@@ -184,7 +184,7 @@ final class ChatEventCommitCoordinator {
                         context.assistant().parts(),
                         context.assistant().assistantMetadata(null),
                         target.assistantMessageId(),
-                        context.assistant().appendAnswerPart()))
+                        context.assistant().appendAnswerPart(), context.messageChannel()))
                 : sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
                         context.user().tenantId(),
                         context.user().ownerUserId(),
@@ -224,7 +224,8 @@ final class ChatEventCommitCoordinator {
                 context.assistant().assistantMetadata("{\"finishReason\":\"WAITING_USER\"}"),
                 target.assistantMessageId(),
                 context.assistant().appendAnswerPart()
-                        && waitingRequest.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION));
+                        && waitingRequest.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION,
+                context.messageChannel()));
         sessionService.advanceLatestMessageSeq(context.user(), context.session(), stored.sequence());
         chatRunService.bindAssistantMessage(context.runId(), savedAssistant.id());
         context.bindingRef().set(runtimeBindingService.touchAndMoveToLeaf(

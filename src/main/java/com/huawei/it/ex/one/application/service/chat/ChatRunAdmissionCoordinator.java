@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 
 import java.util.List;
 import java.util.Map;
@@ -92,7 +93,7 @@ final class ChatRunAdmissionCoordinator {
                             request.messageText(),
                             request.attachments(),
                             request.runMetadata(),
-                            request.messageMetadata()));
+                            request.messageMetadata(), request.channel()));
         }
         return service.commitIntentClarification(
                 new ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand(
@@ -103,7 +104,7 @@ final class ChatRunAdmissionCoordinator {
                         request.messageText(),
                         request.attachments(),
                         request.runMetadata(),
-                        request.messageMetadata()));
+                        request.messageMetadata(), request.channel()));
     }
 
     ChatRunAdmissionCommitService.AdmissionResult admitCandidateSwitch(
@@ -137,7 +138,8 @@ final class ChatRunAdmissionCoordinator {
                 SelectedIntentContext.removeReserved(request.command().metadata()),
                 messagePlan.runMode(),
                 messagePlan.parentMessageId(),
-                messagePlan.userMessage().id()));
+                messagePlan.userMessage().id(),
+                MessageChannel.fromRequest(request.command().channel())));
         return new ChatRunAdmissionCommitService.AdmissionResult(messagePlan, run);
     }
 
@@ -163,7 +165,7 @@ final class ChatRunAdmissionCoordinator {
                     request.runMetadata(),
                     com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
                     messagePlan.parentMessageId(),
-                    messagePlan.userMessage().id()), request.interaction().id());
+                    messagePlan.userMessage().id(), request.channel()), request.interaction().id());
             return new ChatRunAdmissionCommitService.AdmissionResult(messagePlan, run);
         }
         ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
@@ -173,7 +175,7 @@ final class ChatRunAdmissionCoordinator {
                 request.interaction().assistantMessageId(),
                 request.messageText(),
                 request.attachments(),
-                request.messageMetadata());
+                request.messageMetadata(), request.channel());
         ChatRun run = chatRunService.createInteractionRunning(new CreateChatRunContext(
                 request.runId(),
                 request.user(),
@@ -183,7 +185,7 @@ final class ChatRunAdmissionCoordinator {
                 request.runMetadata(),
                 com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
                 messagePlan.parentMessageId(),
-                messagePlan.userMessage().id()), request.interaction().id());
+                messagePlan.userMessage().id(), request.channel()), request.interaction().id());
         if (interactionService.markAnsweredForRun(request.interaction(), request.runId()) != 1) {
             throw new IllegalStateException(
                     "意图澄清 Interaction 已不再由当前 continuation run 持有");
@@ -218,8 +220,16 @@ final class ChatRunAdmissionCoordinator {
             String messageText,
             List<AttachmentRef> attachments,
             Map<String, Object> runMetadata,
-            Map<String, Object> messageMetadata
+            Map<String, Object> messageMetadata,
+            String channel
     ) {
+        IntentClarificationAdmission(UserContext user, ChatSession session, String runId,
+                                      ChatInteractionRequest interaction, String messageText,
+                                      List<AttachmentRef> attachments, Map<String, Object> runMetadata,
+                                      Map<String, Object> messageMetadata) {
+            this(user, session, runId, interaction, messageText, attachments, runMetadata, messageMetadata, null);
+        }
+
         IntentClarificationAdmission(
                 UserContext user,
                 ChatSession session,

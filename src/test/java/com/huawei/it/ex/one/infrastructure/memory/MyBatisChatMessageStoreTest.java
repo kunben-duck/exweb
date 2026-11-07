@@ -37,6 +37,23 @@ import java.util.Map;
 import java.util.stream.IntStream;
 
 class MyBatisChatMessageStoreTest {
+    @Test
+    void channelSurvivesInsertAndDatabaseReadWithoutAdditionalQueries() {
+        ChatMessageMapper mapper = successfulMapper();
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+        ChatMessage source = message(List.of()).withChannel("mobile");
+        store.save(source);
+        ArgumentCaptor<ChatMessageRow> row = ArgumentCaptor.forClass(ChatMessageRow.class);
+        verify(mapper).insert(row.capture());
+        assertThat(row.getValue().getChannel()).isEqualTo("mobile");
+        when(mapper.findByOwnerAndId("tenant-1", "user-1", source.id()))
+                .thenReturn(java.util.Optional.of(row.getValue()));
+        assertThat(store.findByOwnerAndId("tenant-1", "user-1", source.id()).orElseThrow().channel())
+                .isEqualTo("mobile");
+        row.getValue().setChannel(null);
+        assertThat(store.findByOwnerAndId("tenant-1", "user-1", source.id()).orElseThrow().channel()).isNull();
+    }
+
     private static final String MEMORY_QUERY_TIMEOUT_PROPERTY =
             "${financeex.memory.short-term.storage.database-query-timeout-seconds:2}";
 
@@ -70,12 +87,13 @@ class MyBatisChatMessageStoreTest {
         ChatMessageMapper mapper = mock(ChatMessageMapper.class);
         when(mapper.updateAssistantMetadata(any())).thenReturn(1);
         MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
-        ChatMessage existing = message(List.of(part("part-1", 1, "existing")));
+        ChatMessage existing = message(List.of(part("part-1", 1, "existing"))).withChannel("mobile");
 
         ChatMessage updated = store.updateAssistantMetadata(
                 existing, "{\"domainAgentAsyncTask\":{\"status\":\"COMPLETED\"}}");
 
         assertThat(updated.content()).isEqualTo(existing.content());
+        assertThat(updated.channel()).isEqualTo("mobile");
         assertThat(updated.runId()).isEqualTo(existing.runId());
         assertThat(updated.createdAt()).isEqualTo(existing.createdAt());
         assertThat(updated.parts()).containsExactlyElementsOf(existing.parts());

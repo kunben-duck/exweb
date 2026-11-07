@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_message_t (
     edited_from_message_id VARCHAR(64),
     regenerated_from_message_id VARCHAR(64),
     metadata_json TEXT,
-    created_at TIMESTAMPTZ NOT NULL
+    created_at TIMESTAMPTZ NOT NULL,
+    channel NVARCHAR2(64)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_chat_message_owner_session_node_order
@@ -551,6 +552,7 @@ COMMENT ON COLUMN fin_ex_chat_message_t.edited_from_message_id IS '编辑历史 
 COMMENT ON COLUMN fin_ex_chat_message_t.regenerated_from_message_id IS '重新生成 assistant 回复时，新 assistant 消息对应的原 assistant 消息 ID。';
 COMMENT ON COLUMN fin_ex_chat_message_t.metadata_json IS '消息扩展元数据 JSON，保存前端展示或诊断扩展信息。';
 COMMENT ON COLUMN fin_ex_chat_message_t.created_at IS '消息创建时间。';
+COMMENT ON COLUMN fin_ex_chat_message_t.channel IS '首次创建消息的请求端侧来源；旧消息未知时为空，复用消息不覆盖，分支快照保留来源。';
 
 COMMENT ON TABLE fin_ex_chat_message_part_t IS '聊天消息结构化过程表，保存 assistant 正文快照、思考、工具调用、进度、agent 调用等历史回显信息。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.id IS '消息 part 主键，业务生成的 partId。';

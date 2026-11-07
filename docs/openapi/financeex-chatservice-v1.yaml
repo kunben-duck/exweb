@@ -2977,6 +2977,8 @@ components:
             请求来源渠道，trim后使用。自动创建会话时保存该值，未传或空白默认web。
             同一租户、同一用户可跨端继续原会话：PC/mobile可分别传web/mobile，
             已有会话及CONTINUE_INTERACTION均不比较或改写原channel。
+            本次新建的user/assistant消息分别记录该来源；复用已有消息时不覆盖其channel。
+            重新生成只为新assistant记录本次来源，原user保持不变。旧消息来源未知时返回null。
             归属、App Tag、Session状态、消息关联及活动Run/Interaction并发限制不变。
       x-interaction-rules:
         ordinaryIntentClarification: questionnaireAnswers 或有效 attachments；不得提交 message。
@@ -2991,6 +2993,11 @@ components:
       type: object
       required: [messageId, skillId, selectedIntent]
       properties:
+        channel:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: 本次候选切换的请求端侧来源，trim后使用，未传或空白默认web；只写入新assistant，复用的user及原Session来源不变。
         messageId:
           type: string
           minLength: 1
@@ -4122,6 +4129,11 @@ components:
         - attachments
         - createdAt
       properties:
+        channel:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: 首次创建该消息的请求端侧来源，例如web/mobile；不是最近修改端。旧数据未知时为null，不推测Session来源；分支快照继承源消息值。与parts中的展示channel无关。
         messageId:
           type: string
         sessionId:

@@ -20,11 +20,20 @@ public record CandidateDomainAgentSwitchCommand(
         String skillId,
         Map<String, Object> metadata,
         AgentModeProfile agentMode,
-        String intentAccessName
+        String intentAccessName,
+        String channel
 ) {
+    public CandidateDomainAgentSwitchCommand(String sourceRunId, String messageId, String skillId,
+                                             Map<String, Object> metadata, AgentModeProfile agentMode,
+                                             String intentAccessName) {
+        this(sourceRunId, messageId, skillId, metadata, agentMode, intentAccessName, null);
+    }
+
     public CandidateDomainAgentSwitchCommand {
         metadata = metadata == null || metadata.isEmpty()
                 ? Map.of()
                 : Map.copyOf(new LinkedHashMap<>(metadata));
+        metadata = MessageChannel.removeReserved(metadata);
+        channel = MessageChannel.fromRequest(channel);
     }
 }

@@ -27,6 +27,13 @@ public record SwitchDomainAgentRequest(
         @Valid
         ChatAgentModeDto agentMode,
         @Size(max = 128, message = "intentAccessName长度不能超过128")
-        String intentAccessName
+        String intentAccessName,
+        @Size(max = 64, message = "channel长度不能超过64")
+        String channel
 ) {
+    public SwitchDomainAgentRequest(String messageId, String skillId, ChatSelectedIntentDto selectedIntent,
+                                     Map<String, Object> metadata, ChatAgentModeDto agentMode,
+                                     String intentAccessName) {
+        this(messageId, skillId, selectedIntent, metadata, agentMode, intentAccessName, null);
+    }
 }

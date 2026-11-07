@@ -20,6 +20,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -183,7 +184,8 @@ public class ChatRunAdmissionCommitService {
                         SelectedIntentContext.removeReserved(command.metadata()), context.intentExpertScope()),
                 messagePlan.runMode(),
                 messagePlan.parentMessageId(),
-                messagePlan.userMessage().id()
+                messagePlan.userMessage().id(),
+                MessageChannel.fromRequest(command.channel())
         ));
         return new AdmissionResult(messagePlan, run, List.of(), List.of(), context.intentExpertScope(),
                 context.emitIntentExpertSelection());
@@ -225,7 +227,8 @@ public class ChatRunAdmissionCommitService {
                             SelectedIntentContext.removeReserved(request.command().metadata())),
                     messagePlan.runMode(),
                     messagePlan.parentMessageId(),
-                    messagePlan.userMessage().id()));
+                    messagePlan.userMessage().id(),
+                    MessageChannel.fromRequest(request.command().channel())));
         } catch (ActiveRunExistsException ex) {
             throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
         }
@@ -276,7 +279,7 @@ public class ChatRunAdmissionCommitService {
         RouteSwitchRerouteContext.validateContinuationScope(interaction, intentExpertScope);
         ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
                 user, currentSession, runId, interaction.assistantMessageId(),
-                command.answerText(), command.attachments(), command.messageMetadata());
+                command.answerText(), command.attachments(), command.messageMetadata(), command.channel());
         ChatRun run = chatRunService.insertInteractionRunning(new CreateChatRunContext(
                 runId,
                 user,
@@ -286,7 +289,7 @@ public class ChatRunAdmissionCommitService {
                 IntentExpertContext.withScope(command.runMetadata(), intentExpertScope),
                 ChatRunMode.NEXT,
                 messagePlan.parentMessageId(),
-                messagePlan.userMessage().id()
+                messagePlan.userMessage().id(), command.channel()
         ), interaction.id());
         int answered = interactionService.markAnsweredForRun(interaction, runId);
         if (answered != 1) {
@@ -328,7 +331,7 @@ public class ChatRunAdmissionCommitService {
                 IntentExpertContext.withScope(command.runMetadata(), intentExpertScope),
                 ChatRunMode.NEXT,
                 messagePlan.parentMessageId(),
-                messagePlan.userMessage().id()
+                messagePlan.userMessage().id(), command.channel()
         ), interaction.id());
         return new AdmissionResult(messagePlan, run, List.of(), List.of(), intentExpertScope, false);
     }
@@ -341,8 +344,17 @@ public class ChatRunAdmissionCommitService {
             String answerText,
             List<AttachmentRef> attachments,
             java.util.Map<String, Object> runMetadata,
-            java.util.Map<String, Object> messageMetadata
+            java.util.Map<String, Object> messageMetadata,
+            String channel
     ) {
+        public IntentClarificationAdmissionCommand(UserContext user, ChatSession session, String runId,
+                                                   ChatInteractionRequest interaction, String answerText,
+                                                   List<AttachmentRef> attachments,
+                                                   java.util.Map<String, Object> runMetadata,
+                                                   java.util.Map<String, Object> messageMetadata) {
+            this(user, session, runId, interaction, answerText, attachments, runMetadata, messageMetadata, null);
+        }
+
         public IntentClarificationAdmissionCommand {
             attachments = attachments == null ? List.of() : List.copyOf(attachments);
             runMetadata = runMetadata == null ? java.util.Map.of() : java.util.Map.copyOf(runMetadata);

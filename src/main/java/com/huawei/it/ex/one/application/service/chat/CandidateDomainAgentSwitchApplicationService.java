@@ -252,7 +252,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 session.userId(),
                 session.id(),
                 session.id(),
-                session.channel(),
+                command.channel(),
                 source.userMessage().content(),
                 source.resolvedAttachments().attachments(),
                 command.metadata(),

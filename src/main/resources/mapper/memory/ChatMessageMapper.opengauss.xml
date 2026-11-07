@@ -19,6 +19,7 @@
         <result column="edited_from_message_id" property="editedFromMessageId"/>
         <result column="regenerated_from_message_id" property="regeneratedFromMessageId"/>
         <result column="metadata_json" property="metadataJson"/>
+        <result column="channel" property="channel"/>
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
@@ -72,14 +73,14 @@
         id, tenant_id, user_id, session_id, parent_message_id, node_order, tree_depth,
         sibling_index, role, content, token_count, run_id, origin_type, locked,
         source_session_id, source_message_id, edited_from_message_id,
-        regenerated_from_message_id, metadata_json, created_at
+        regenerated_from_message_id, metadata_json, created_at, channel
     </sql>
 
     <sql id="chatMessageColumnsWithAlias">
         m.id, m.tenant_id, m.user_id, m.session_id, m.parent_message_id, m.node_order, m.tree_depth,
         m.sibling_index, m.role, m.content, m.token_count, m.run_id, m.origin_type, m.locked,
         m.source_session_id, m.source_message_id, m.edited_from_message_id,
-        m.regenerated_from_message_id, m.metadata_json, m.created_at
+        m.regenerated_from_message_id, m.metadata_json, m.created_at, m.channel
     </sql>
 
     <sql id="chatMessageAttachmentColumns">
@@ -103,13 +104,13 @@
             id, tenant_id, user_id, session_id, parent_message_id, node_order, tree_depth,
             sibling_index, role, content, token_count, run_id, origin_type, locked,
             source_session_id, source_message_id, edited_from_message_id,
-            regenerated_from_message_id, metadata_json, created_at
+            regenerated_from_message_id, metadata_json, created_at, channel
         )
         VALUES (
             #{id}, #{tenantId}, #{userId}, #{sessionId}, #{parentMessageId}, #{nodeOrder}, #{treeDepth},
             #{siblingIndex}, #{role}, #{content}, #{tokenCount}, #{runId}, #{originType}, #{locked},
             #{sourceSessionId}, #{sourceMessageId}, #{editedFromMessageId},
-            #{regeneratedFromMessageId}, #{metadataJson}, #{createdAt}
+            #{regeneratedFromMessageId}, #{metadataJson}, #{createdAt}, #{channel}
         )
     </insert>
 

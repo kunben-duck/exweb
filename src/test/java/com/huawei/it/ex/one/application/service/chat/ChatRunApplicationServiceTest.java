@@ -859,6 +859,7 @@ class ChatRunApplicationServiceTest {
         InMemoryRunCache cache = new InMemoryRunCache();
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("businessKey", "businessValue");
+        metadata.put("_messageChannel", "forged");
         metadata.put(AgentDataPersistenceMetadata.RUN_METADATA_KEY,
                 Map.of("policy", "ASSISTANT_PLACEHOLDER"));
 
@@ -875,7 +876,18 @@ class ChatRunApplicationServiceTest {
         ));
 
         assertThat(created.metadata()).containsEntry("businessKey", "businessValue")
-                .doesNotContainKey(AgentDataPersistenceMetadata.RUN_METADATA_KEY);
+                .doesNotContainKeys(AgentDataPersistenceMetadata.RUN_METADATA_KEY, "_messageChannel");
+    }
+
+    @Test
+    void runCreationPersistsTrustedChannelAndNotClientMetadataValue() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        ChatRun created = service(repository, new InMemoryRunCache()).createRunning(new CreateChatRunContext(
+                "run2", user(), "session1", null, null,
+                Map.of("_messageChannel", "forged", "business", "value"),
+                com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT, null, "user-message", "mobile"));
+        assertThat(created.metadata()).containsEntry("_messageChannel", "mobile").containsEntry("business", "value");
+        assertThat(repository.findById(created.id()).orElseThrow().metadata()).containsEntry("_messageChannel", "mobile");
     }
 
     @Test

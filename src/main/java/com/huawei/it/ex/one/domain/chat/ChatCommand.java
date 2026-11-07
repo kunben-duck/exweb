@@ -204,7 +204,7 @@ public record ChatCommand(
 
     public ChatCommand {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
-        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        metadata = MessageChannel.removeReserved(metadata == null ? Map.of() : Map.copyOf(metadata));
         targetType = normalizeTag(targetType);
         targetId = normalizeTag(targetId);
         runMode = runMode == null ? ChatRunMode.NEXT : runMode;

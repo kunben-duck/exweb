@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -37,8 +38,28 @@ record RunEventPipelineContext(
         AtomicBoolean asyncRunningObserved,
         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
         AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef,
-        AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
+        AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef,
+        String messageChannel
 ) {
+    RunEventPipelineContext(
+            UserContext user, ChatSession session, ChatRunMessagePlan messagePlan,
+            AtomicReference<RouteTarget> routeRef, AtomicReference<RuntimeBinding> bindingRef,
+            AssistantAssembly assistant, String runId, RunExecutionClaim executionClaim,
+            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
+            ChatInteractionRequest continuationInteractionRequest, RunStartAttempt startAttempt,
+            List<String> intentClarificationDocumentIds, RuntimeInteractionDispatchState interactionDispatchState,
+            AtomicBoolean asyncRunningObserved,
+            AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+            AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef,
+            AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef) {
+        this(user, session, messagePlan, routeRef, bindingRef, assistant, runId, executionClaim,
+                pendingInteractionPayloadRef, continuationInteractionRequest, startAttempt,
+                intentClarificationDocumentIds, interactionDispatchState, asyncRunningObserved,
+                deferredDomainAgentBindingRef, pendingRouteMemoryDecisionRef, pendingRouteSwitchAppliedEventRef,
+                MessageChannel.fromRun(
+                        startAttempt == null ? null : startAttempt.run()));
+    }
+
     RunEventPipelineContext {
         intentClarificationDocumentIds = intentClarificationDocumentIds == null
                 ? List.of()

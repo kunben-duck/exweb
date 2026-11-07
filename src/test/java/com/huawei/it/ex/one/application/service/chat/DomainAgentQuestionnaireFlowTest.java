@@ -858,6 +858,9 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
                 .block(Duration.ofSeconds(10));
         assertThat(started.userMessageId()).isEqualTo(waiting.userMessageId());
         assertThat(sessions.sessions.get(waiting.sessionId()).channel()).isEqualTo("web");
+        assertThat(runs.runs.get(started.runId()).metadata()).containsEntry("_messageChannel", "mobile");
+        assertThat(messages.findByOwnerAndId(user.tenantId(), user.ownerUserId(), waiting.assistantMessageId())
+                .orElseThrow().channel()).isEqualTo("web");
         return started;
     }
 

@@ -182,7 +182,8 @@ final class RouteSwitchContinuationCoordinator {
                         lifecycle.metadata(interaction), reroute.expertScope()) : lifecycle.metadata(interaction),
                 ChatRunMode.NEXT,
                 interaction.userMessageId(),
-                interaction.userMessageId());
+                interaction.userMessageId(),
+                request.startAttempt() == null ? null : request.startAttempt().channel());
         ChatRun run = beforeIntent
                 ? lifecycle.createConfirmedReroute(createContext, interaction, reroute.expertScope())
                 : lifecycle.create(createContext, interaction);

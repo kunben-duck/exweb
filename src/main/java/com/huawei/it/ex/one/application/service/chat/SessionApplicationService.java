@@ -42,6 +42,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -629,6 +630,14 @@ public class SessionApplicationService implements ChatSessionFacade {
                                                         String parentAssistantMessageId, String answerText,
                                                         List<AttachmentRef> attachments,
                                                         Map<String, Object> metadata) {
+        return prepareIntentClarificationAnswer(user, session, runId, parentAssistantMessageId,
+                answerText, attachments, metadata, null);
+    }
+
+    ChatRunMessagePlan prepareIntentClarificationAnswer(UserContext user, ChatSession session, String runId,
+                                                        String parentAssistantMessageId, String answerText,
+                                                        List<AttachmentRef> attachments,
+                                                        Map<String, Object> metadata, String channel) {
         if (user == null || session == null) {
             throw new IllegalArgumentException("意图澄清回答缺少用户或会话上下文");
         }
@@ -638,7 +647,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         }
         ChatMessage answer = createUserMessage(new UserMessageCreateCommand(
                 user.tenantId(), user.ownerUserId(), session, answerText, parent.id(), ChatRunMode.NEXT,
-                runId, null, null, metadata, attachments == null ? List.of() : attachments));
+                runId, null, null, metadata, attachments == null ? List.of() : attachments, channel));
         return new ChatRunMessagePlan(ChatRunMode.NEXT, parent.id(), answer, null);
     }
 
@@ -717,7 +726,8 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
         return createUserMessage(new UserMessageCreateCommand(command.tenantId(), command.userId(), session,
-                command.message(), null, command.runMode(), null, null, null, command.metadata(), List.of()));
+                command.message(), null, command.runMode(), null, null, null, command.metadata(), List.of(),
+                MessageChannel.fromRequest(command.channel())));
     }
 
     public ChatMessage saveAssistantMessage(String tenantId, String userId, String sessionId, String content) {
@@ -772,7 +782,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 projection.metadataJson(),
                 parts,
                 now
-        );
+        ).withChannel(command.channel());
         ChatMessage saved = messageRepository.save(message);
         sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
         return saved;
@@ -820,7 +830,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 projection.metadataJson(),
                 parts,
                 now
-        );
+        ).withChannel(existing.channel());
         ChatMessage saved = messageRepository.updateAssistantMessage(updated);
         sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
         return saved;
@@ -939,7 +949,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                     source.metadataJson(),
                     copyMessageParts(user, branch.id(), newMessageId, source.parts(), now),
                     now
-            );
+            ).withChannel(source.channel());
             lastCopied = messageRepository.save(copy);
             copyAttachments(user, source, lastCopied);
             previousNewMessageId = lastCopied.id();
@@ -1173,7 +1183,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                 : command.parentMessageId();
         ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.ownerUserId(), session,
                 command.message(), parentMessageId, ChatRunMode.NEXT, runId, null, null,
-                command.metadata(), attachments));
+                command.metadata(), attachments,
+                MessageChannel.fromRequest(command.channel())));
         return new ChatRunMessagePlan(ChatRunMode.NEXT, parentMessageId, message, null);
     }
 
@@ -1184,7 +1195,8 @@ public class SessionApplicationService implements ChatSessionFacade {
         turns.source(runId, edited.runId(), null, "EDIT_USER");
         ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.ownerUserId(), session,
                 command.message(), edited.parentMessageId(), ChatRunMode.EDIT_USER, runId, edited.id(), null,
-                command.metadata(), attachments));
+                command.metadata(), attachments,
+                MessageChannel.fromRequest(command.channel())));
         return new ChatRunMessagePlan(ChatRunMode.EDIT_USER, edited.parentMessageId(), message, null);
     }
 
@@ -1283,7 +1295,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 command.regeneratedFromMessageId(),
                 requestMetadataJson(command.safeMetadata()),
                 Instant.now()
-        );
+        ).withChannel(command.channel());
         ChatMessage saved = messageRepository.save(message);
         saveAttachments(saved, attachments);
         sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
@@ -1371,7 +1383,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 existing.role(), projection.content(), existing.tokenCount(), command.runId(), existing.originType(),
                 existing.locked(), existing.sourceSessionId(), existing.sourceMessageId(),
                 existing.editedFromMessageId(), existing.regeneratedFromMessageId(), projection.metadataJson(),
-                parts, existing.attachments(), existing.createdAt());
+                parts, existing.attachments(), existing.createdAt(), existing.channel());
         return messageRepository.updateAssistantAsyncResult(existing, updated, replaceParts);
     }
 

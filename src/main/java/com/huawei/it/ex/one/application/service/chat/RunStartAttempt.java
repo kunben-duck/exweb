@@ -17,6 +17,7 @@ final class RunStartAttempt {
     private final UserContext user;
     private final String runId;
     private final String interactionId;
+    private final String channel;
     private final AtomicReference<HandoffState> handoffState = new AtomicReference<>(HandoffState.PENDING);
     private final AtomicReference<ChatRun> run = new AtomicReference<>();
     private final AtomicReference<RunExecutionClaim> executionClaim = new AtomicReference<>();
@@ -26,9 +27,18 @@ final class RunStartAttempt {
     private final AtomicBoolean compensationRetryRequested = new AtomicBoolean(false);
 
     RunStartAttempt(UserContext user, String runId, String interactionId) {
+        this(user, runId, interactionId, null);
+    }
+
+    RunStartAttempt(UserContext user, String runId, String interactionId, String channel) {
         this.user = user;
         this.runId = runId;
         this.interactionId = interactionId;
+        this.channel = channel;
+    }
+
+    String channel() {
+        return channel;
     }
 
     boolean beginFirstEventHandoff() {

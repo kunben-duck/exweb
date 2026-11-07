@@ -54,6 +54,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -69,6 +72,43 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 class SessionApplicationServiceTest {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"web", "mobile"})
+    void reusedAssistantAsyncResultsAndBranchSnapshotsPreserveOriginalChannel(String channel) {
+        TestFixture fixture = fixture();
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(),
+                command("question", ChatRunMode.NEXT, null, null, null), fixture.session, "run1", List.of());
+        ChatMessage assistant = fixture.service.saveAssistantMessage(new AssistantMessageSaveCommand(
+                "tenant1", "user1", fixture.session, "answer", "run1", plan.userMessage().id(), null,
+                List.of(), null).withChannel(channel));
+        ChatMessage continued = fixture.service.updateAssistantMessage(new AssistantMessageUpdateCommand(
+                "tenant1", "user1", fixture.session, assistant.id(), "continued", "run2", List.of(), "{}"));
+        assertThat(continued.channel()).isEqualTo(channel);
+        for (boolean replace : List.of(false, true)) {
+            ChatMessage result = fixture.service.updateAssistantAsyncResult(new AsyncAssistantResultUpdateCommand(
+                    "tenant1", "user1", fixture.session, continued, "async answer", "answer", "run2",
+                    List.of(), "{}", true, replace));
+            assertThat(result.channel()).isEqualTo(channel);
+        }
+        ChatSession branch = fixture.service.createBranch(user(), fixture.session.id(), assistant.id(), "branch");
+        assertThat(fixture.service.listMessages(user(), branch.id(), null, 50).items())
+                .filteredOn(message -> "assistant".equals(message.role()))
+                .singleElement().satisfies(message -> assertThat(message.channel()).isEqualTo(channel));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {" ", " mobile ", "Custom"})
+    void userMessageUsesRequestSourceNotSessionSource(String channel) {
+        TestFixture fixture = fixture();
+        ChatCommand request = new ChatCommand("cmd", "tenant1", "user1", fixture.session.id(), null, channel,
+                "question", List.of(), Map.of());
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), request, fixture.session, "run1", List.of());
+        assertThat(plan.userMessage().channel()).isEqualTo(channel == null || channel.isBlank() ? "web" : channel.trim());
+        assertThat(fixture.session.channel()).isEqualTo("web");
+    }
+
     @Test
     void newAndRenamedSessionsPersistProtectedTitleSourcesWhenFeatureIsEnabled() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();

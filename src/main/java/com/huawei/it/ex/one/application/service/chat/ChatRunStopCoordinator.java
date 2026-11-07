@@ -25,6 +25,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopDecision;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 
 import reactor.core.publisher.Mono;
@@ -495,7 +496,7 @@ public class ChatRunStopCoordinator {
                     assistant.assistantMetadata(partialMetadata(reason)),
                     assistantMessageId,
                     assistant.appendAnswerPart()
-            );
+            ).withChannel(MessageChannel.fromRun(run));
             return StopMessageTarget.ready(assistantMessageId, partialAssistant);
         } catch (Exception ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,

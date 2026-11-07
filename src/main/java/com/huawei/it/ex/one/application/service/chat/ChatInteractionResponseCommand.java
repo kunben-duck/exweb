@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 
 import java.util.List;
@@ -90,7 +91,7 @@ public record ChatInteractionResponseCommand(
 
     public ChatInteractionResponseCommand {
         questionnaireAnswers = questionnaireAnswers == null ? Map.of() : Map.copyOf(questionnaireAnswers);
-        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        metadata = MessageChannel.removeReserved(metadata == null ? Map.of() : Map.copyOf(metadata));
         sessionId = normalize(sessionId);
         appId = normalize(appId);
         appName = normalize(appName);

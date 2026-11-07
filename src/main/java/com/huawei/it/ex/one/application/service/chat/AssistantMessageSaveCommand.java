@@ -26,6 +26,7 @@ import java.util.List;
  * @param metadataJson 消息级元数据 JSON，例如用户 stop 固化 partial assistant 标记。
  * @param messageId 可选的预分配 assistant 消息 ID；用于在 run.completed 事件入库前确定反馈目标。
  * @param appendAnswerPart 是否追加合成 ANSWER part；等待路由切换确认时为 false。
+ * @param channel 首次创建助手消息的请求端侧来源；更新已有消息时不使用本命令。
  */
 public record AssistantMessageSaveCommand(
         String tenantId,
@@ -38,8 +39,22 @@ public record AssistantMessageSaveCommand(
         List<ChatMessagePartDraft> partDrafts,
         String metadataJson,
         String messageId,
-        boolean appendAnswerPart
+        boolean appendAnswerPart,
+        String channel
 ) {
+    public AssistantMessageSaveCommand(String tenantId, String userId, ChatSession session, String content,
+                                       String runId, String parentMessageId, String regeneratedFromMessageId,
+                                       List<ChatMessagePartDraft> partDrafts, String metadataJson, String messageId,
+                                       boolean appendAnswerPart) {
+        this(tenantId, userId, session, content, runId, parentMessageId, regeneratedFromMessageId,
+                partDrafts, metadataJson, messageId, appendAnswerPart, null);
+    }
+
+    public AssistantMessageSaveCommand withChannel(String value) {
+        return new AssistantMessageSaveCommand(tenantId, userId, session, content, runId, parentMessageId,
+                regeneratedFromMessageId, partDrafts, metadataJson, messageId, appendAnswerPart, value);
+    }
+
     public AssistantMessageSaveCommand(String tenantId, String userId, ChatSession session, String content,
                                        String runId, String parentMessageId, String regeneratedFromMessageId,
                                        List<ChatMessagePartDraft> partDrafts, String metadataJson, String messageId) {

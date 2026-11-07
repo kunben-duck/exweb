@@ -39,6 +39,7 @@ import java.util.List;
  * @param versionInfo 同父同角色候选版本摘要；没有可切换版本时为空。
  * @param createdAt 消息创建时间。
  * @param intentFeedback 当前assistant Run的意图评价，只在历史响应装配时关联。
+ * @param channel 首次创建消息的请求端侧来源；旧消息未知时为空，不代表最近修改端。
  */
 public record ChatMessageDto(
         String messageId,
@@ -64,8 +65,21 @@ public record ChatMessageDto(
         MessageFeedbackDto feedback,
         ChatMessageVersionInfoDto versionInfo,
         Instant createdAt,
-        @JsonInclude(JsonInclude.Include.NON_NULL) IntentFeedbackDto intentFeedback
+        @JsonInclude(JsonInclude.Include.NON_NULL) IntentFeedbackDto intentFeedback,
+        String channel
 ) {
+    public ChatMessageDto(String messageId, String sessionId, String parentMessageId, Long nodeOrder,
+            Integer treeDepth, Integer siblingIndex, String role, String content, Integer tokenCount,
+            String runId, String assistantSource, String originType, boolean locked, String sourceSessionId,
+            String sourceMessageId, String editedFromMessageId, String regeneratedFromMessageId, String metadataJson,
+            List<ChatMessagePartDto> parts, List<ChatMessageAttachmentDto> attachments, MessageFeedbackDto feedback,
+            ChatMessageVersionInfoDto versionInfo, Instant createdAt, IntentFeedbackDto intentFeedback) {
+        this(messageId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex, role, content, tokenCount,
+                runId, assistantSource, originType, locked, sourceSessionId, sourceMessageId, editedFromMessageId,
+                regeneratedFromMessageId, metadataJson, parts, attachments, feedback, versionInfo, createdAt,
+                intentFeedback, null);
+    }
+
     public ChatMessageDto(String messageId, String sessionId, String parentMessageId, Long nodeOrder,
             Integer treeDepth, Integer siblingIndex, String role, String content, Integer tokenCount,
             String runId, String assistantSource, String originType, boolean locked, String sourceSessionId,
@@ -81,6 +95,6 @@ public record ChatMessageDto(
         return new ChatMessageDto(messageId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex,
                 role, content, tokenCount, runId, assistantSource, originType, locked, sourceSessionId, sourceMessageId,
                 editedFromMessageId, regeneratedFromMessageId, metadataJson, parts, attachments, feedback,
-                versionInfo, createdAt, intentFeedback);
+                versionInfo, createdAt, intentFeedback, channel);
     }
 }

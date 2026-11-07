@@ -136,7 +136,8 @@ final class RuntimeInteractionContinuationCoordinator {
                         IntentExpertContext.fromMetadata(domainSnapshot).orElse(null)) : lifecycle.metadata(interaction),
                 ChatRunMode.NEXT,
                 interaction.userMessageId(),
-                interaction.userMessageId()), interaction);
+                interaction.userMessageId(),
+                request.startAttempt() == null ? null : request.startAttempt().channel()), interaction);
         lifecycle.trackRun(
                 request.startAttempt(), run, "after-interaction-run-create");
         RunExecutionClaim executionClaim;

@@ -33,6 +33,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatStreamStatus;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
@@ -212,9 +213,9 @@ public class ChatRunApplicationService {
                 null,
                 now,
                 null,
-                MessageSkillContext.removeReserved(
+                MessageChannel.forRun(MessageSkillContext.removeReserved(
                         RelayOutputModeMetadata.removePrivateRunMetadata(
-                                AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata()))),
+                                AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata()))), context.channel()),
                 now,
                 now
         ));

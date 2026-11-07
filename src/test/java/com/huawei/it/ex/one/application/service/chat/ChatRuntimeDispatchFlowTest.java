@@ -825,7 +825,7 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         assertThat(run.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(run.agentCode()).isEqualTo("skill-tax");
         assertThat(run.runtimeProvider()).isEqualTo("domain-agent");
-        assertThat(run.metadata()).containsExactlyEntriesOf(Map.of("skillId", "skill-other"));
+        assertThat(run.metadata()).containsExactlyEntriesOf(Map.of("skillId", "skill-other", "_messageChannel", "web"));
         ChatSession taggedSession = sessions.findById(run.sessionId()).orElseThrow();
         assertThat(taggedSession.appId()).isEqualTo("fund-app");
         assertThat(taggedSession.appName()).isEqualTo("资金助手");

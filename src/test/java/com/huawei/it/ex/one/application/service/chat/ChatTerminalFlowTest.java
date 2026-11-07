@@ -191,6 +191,7 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
         InMemoryEventStore events = new InMemoryEventStore();
         UserContext user = new UserContext("tenant1", "user1", "User One");
         seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        runs.save(runs.findById("run1").orElseThrow().withMetadata(Map.of("_messageChannel", "mobile")));
         events.append(RuntimeEvent.tool("run1", "session1", Map.of(
                 "sourceType", "tool_call_streaming",
                 "toolName", "search",
@@ -208,6 +209,7 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
                 .findFirst()
                 .orElseThrow();
         assertThat(assistant.content()).isEqualTo("已输出的部分回答");
+        assertThat(assistant.channel()).isEqualTo("mobile");
         assertThat(assistant.metadataJson()).contains("\"partial\":true").contains("USER_STOP");
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
                 .containsExactly("TOOL", "ANSWER");
@@ -246,6 +248,7 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
                 .findFirst()
                 .orElseThrow();
         assertThat(assistant.content()).isEmpty();
+        assertThat(assistant.channel()).isNull();
         assertThat(assistant.metadataJson()).contains("\"partial\":true").contains("USER_STOP");
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
                 .containsExactly("PROGRESS", "ANSWER");

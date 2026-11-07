@@ -233,7 +233,8 @@ final class ChatRunCompletionCoordinator {
                 context.deferredDomainAgentBindingRef(),
                 context.pendingRouteSwitchAppliedEventRef(),
                 context.startAttempt() == null || context.startAttempt().run() == null
-                        ? null : context.startAttempt().run().startedAt()
+                        ? null : context.startAttempt().run().startedAt(),
+                context.messageChannel()
         );
     }
 

@@ -112,6 +112,10 @@ class CandidateRelayExpertSwitchFlowTest extends ChatFlowTestSupport {
 
         ChatRun switched = switchCandidate(service, source, "RE_analysis");
         RuntimeBinding binding = relayBinding();
+        assertThat(messages.findByOwnerAndId("tenant1", "user1", switched.assistantMessageId()).orElseThrow().channel())
+                .isEqualTo("mobile");
+        assertThat(messages.findByOwnerAndId("tenant1", "user1", switched.userMessageId()).orElseThrow().channel())
+                .isEqualTo("web");
         assertExpert(binding, switched);
         assertThat(requests.getLast().runtimeSessionMode()).isEqualTo(
                 "DOMAIN_EXPERT".equals(sourceType) ? RuntimeSessionMode.RESUME : RuntimeSessionMode.NEW);
@@ -335,7 +339,7 @@ class CandidateRelayExpertSwitchFlowTest extends ChatFlowTestSupport {
                 new CandidateSwitchTargetResolver("RE_", new SensitiveInformationAccessNameResolver("")));
         var started = switcher.switchDomainAgent(user, TraceContext.empty(), new CandidateDomainAgentSwitchCommand(
                 source.id(), source.userMessageId(), skill, SelectedIntentContext.attach(Map.of(), "finance", "Finance"),
-                null, "finance_pc_entry"), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
+                null, "finance_pc_entry", "mobile"), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
         assertThat(started).isNotNull();
         awaitTerminal(started.runId());
         return runs.findById(started.runId()).orElseThrow();

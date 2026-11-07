@@ -29,6 +29,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.notification.UserNotification;
 import com.huawei.it.ex.one.domain.notification.UserNotificationRecipient;
@@ -389,7 +390,7 @@ public class ChatRunTerminalCommitService {
             ));
         } else {
             saved = sessionService.saveAssistantMessage(withMetadata(
-                    partialAssistant,
+                    partialAssistant.withChannel(MessageChannel.fromRun(latestRun)),
                     duration.mergeMetadata(objectMapper, assistantMetadata(partialAssistant.metadataJson(), skillId))));
         }
         if (expectedId == null || !expectedId.equals(saved.id())) {
@@ -531,7 +532,7 @@ public class ChatRunTerminalCommitService {
                     duration.mergeMetadata(objectMapper,
                             assistantMetadata(context.assistant().assistantMetadata(null), skillId)),
                     command.target().assistantMessageId(),
-                    context.assistant().appendAnswerPart()
+                    context.assistant().appendAnswerPart(), context.channel()
             ));
         }
         return sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
@@ -571,7 +572,7 @@ public class ChatRunTerminalCommitService {
                             context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA), skillId)),
                     command.target().assistantMessageId(),
                     context.assistant().appendAnswerPart()
-                            && appendWaitingAnswer(command.waitingRequest())
+                            && appendWaitingAnswer(command.waitingRequest()), context.channel()
             ));
         }
         String existingAssistantId = continuation.assistantMessageId();
@@ -628,7 +629,7 @@ public class ChatRunTerminalCommitService {
                 command.safePartDrafts(),
                 metadataJson,
                 command.messageId(),
-                command.appendAnswerPart());
+                command.appendAnswerPart(), command.channel());
     }
 
     private void validateNewTurnWaitingRequest(TerminalCommitContext context, WaitingUserCommitCommand command) {
@@ -986,8 +987,22 @@ public class ChatRunTerminalCommitService {
             RuntimeInteractionDispatchState interactionDispatchState,
             AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
             AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef,
-            java.time.Instant runStartedAt
+            java.time.Instant runStartedAt,
+            String channel
     ) {
+        public TerminalCommitContext(
+                UserContext user, ChatSession session, ChatRunMessagePlan messagePlan,
+                AtomicReference<RuntimeBinding> bindingRef, AssistantAssembly assistant, String runId,
+                RunExecutionClaim executionClaim, ChatInteractionRequest continuationInteractionRequest,
+                RuntimeInteractionDispatchState interactionDispatchState,
+                AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+                AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef,
+                java.time.Instant runStartedAt) {
+            this(user, session, messagePlan, bindingRef, assistant, runId, executionClaim,
+                    continuationInteractionRequest, interactionDispatchState, deferredDomainAgentBindingRef,
+                    pendingRouteSwitchAppliedEventRef, runStartedAt, null);
+        }
+
         public TerminalCommitContext {
             deferredDomainAgentBindingRef = deferredDomainAgentBindingRef == null
                     ? new AtomicReference<>()

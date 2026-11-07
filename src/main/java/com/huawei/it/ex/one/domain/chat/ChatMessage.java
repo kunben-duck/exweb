@@ -35,6 +35,7 @@ import java.util.List;
  * @param parts assistant 消息的结构化过程信息；user 消息通常为空。
  * @param attachments 用户消息关联的文档附件展示快照；assistant 消息通常为空。
  * @param createdAt 消息创建时间。
+ * @param channel 消息首次创建时的请求渠道；旧消息未知时为空，复用消息不改写。
  */
 public record ChatMessage(
         String id,
@@ -58,8 +59,20 @@ public record ChatMessage(
         String metadataJson,
         List<ChatMessagePart> parts,
         List<ChatMessageAttachment> attachments,
-        Instant createdAt
+        Instant createdAt,
+        String channel
 ) {
+    public ChatMessage(String id, String tenantId, String userId, String sessionId, String parentMessageId,
+                       Long nodeOrder, Integer treeDepth, Integer siblingIndex, String role, String content,
+                       Integer tokenCount, String runId, String originType, boolean locked, String sourceSessionId,
+                       String sourceMessageId, String editedFromMessageId, String regeneratedFromMessageId,
+                       String metadataJson, List<ChatMessagePart> parts, List<ChatMessageAttachment> attachments,
+                       Instant createdAt) {
+        this(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex, role, content,
+                tokenCount, runId, originType, locked, sourceSessionId, sourceMessageId, editedFromMessageId,
+                regeneratedFromMessageId, metadataJson, parts, attachments, createdAt, null);
+    }
+
     public ChatMessage(String id, String tenantId, String userId, String sessionId, String parentMessageId,
                        Long nodeOrder, Integer treeDepth, Integer siblingIndex, String role, String content,
                        Integer tokenCount, String runId, String originType, boolean locked, String sourceSessionId,
@@ -114,7 +127,7 @@ public record ChatMessage(
         return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
                 siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
                 sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, nextParts,
-                attachments, createdAt);
+                attachments, createdAt, channel);
     }
 
     /**
@@ -127,7 +140,7 @@ public record ChatMessage(
         return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
                 siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
                 sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, parts,
-                nextAttachments, createdAt);
+                nextAttachments, createdAt, channel);
     }
 
     /** Returns a copy whose only changed field is {@code metadataJson}. */
@@ -135,6 +148,13 @@ public record ChatMessage(
         return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
                 siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
                 sourceMessageId, editedFromMessageId, regeneratedFromMessageId, nextMetadataJson, parts,
-                attachments, createdAt);
+                attachments, createdAt, channel);
+    }
+
+    public ChatMessage withChannel(String channel) {
+        return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
+                siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
+                sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, parts,
+                attachments, createdAt, channel);
     }
 }

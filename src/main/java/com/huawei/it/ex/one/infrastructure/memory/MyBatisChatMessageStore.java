@@ -189,6 +189,7 @@ public class MyBatisChatMessageStore {
         row.setEditedFromMessageId(message.editedFromMessageId());
         row.setRegeneratedFromMessageId(message.regeneratedFromMessageId());
         row.setMetadataJson(message.metadataJson());
+        row.setChannel(message.channel());
         row.setCreatedAt(message.createdAt());
         return row;
     }
@@ -515,7 +516,7 @@ public class MyBatisChatMessageStore {
                 row.getRegeneratedFromMessageId(),
                 row.getMetadataJson(),
                 row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt()
-        );
+        ).withChannel(row.getChannel());
     }
 
     private ChatMessageAttachment toAttachmentDomain(ChatMessageAttachmentRow row) {

@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 
 import reactor.core.Disposable;
@@ -68,10 +69,11 @@ final class ChatRunStartCoordinator {
                                            ChatCommand command,
                                            StandardRunFactory runFactory) {
         return Mono.defer(() -> {
+            String messageChannel = MessageChannel.fromRequest(command.channel());
             String runId = idGenerator.newId("run",
                     IdGenerateContext.of(user.tenantId(), user.ownerUserId(), command.sessionId()));
             turns.begin(user, runId, command.runMode().name(), command.sessionId());
-            RunStartAttempt attempt = new RunStartAttempt(user, runId, null);
+            RunStartAttempt attempt = new RunStartAttempt(user, runId, null, messageChannel);
             BackgroundStartState state;
             try {
                 state = newState(user, attempt);
@@ -99,11 +101,20 @@ final class ChatRunStartCoordinator {
                                               TraceContext traceContext,
                                               String interactionId,
                                               InteractionRunFactory runFactory) {
+        return startInteraction(user, traceContext, interactionId, null, runFactory);
+    }
+
+    Mono<ChatRunStartResult> startInteraction(UserContext user,
+                                              TraceContext traceContext,
+                                              String interactionId,
+                                              String channel,
+                                              InteractionRunFactory runFactory) {
         return Mono.defer(() -> {
+            String messageChannel = MessageChannel.fromRequest(channel);
             String runId = idGenerator.newId("run",
                     IdGenerateContext.of(user.tenantId(), user.ownerUserId(), interactionId));
             turns.prepareContinuation(runId);
-            RunStartAttempt attempt = new RunStartAttempt(user, runId, interactionId);
+            RunStartAttempt attempt = new RunStartAttempt(user, runId, interactionId, messageChannel);
             BackgroundStartState state;
             try {
                 state = newState(user, attempt);

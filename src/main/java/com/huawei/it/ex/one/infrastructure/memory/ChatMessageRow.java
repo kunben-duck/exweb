@@ -32,6 +32,10 @@ public class ChatMessageRow {
     private String regeneratedFromMessageId;
     private String metadataJson;
     private Instant createdAt;
+    private String channel;
+
+    public String getChannel() { return channel; }
+    public void setChannel(String channel) { this.channel = channel; }
 
     public String getId() {
         return id;

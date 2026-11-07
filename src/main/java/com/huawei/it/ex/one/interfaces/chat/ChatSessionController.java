@@ -625,7 +625,7 @@ public class ChatSessionController {
                 toAttachmentDtos(message.attachments()),
                 feedback == null ? null : toFeedbackDto(feedback),
                 versionInfo,
-                message.createdAt()
+                message.createdAt(), null, message.channel()
         );
     }
 

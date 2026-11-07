@@ -124,6 +124,8 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 同一 `tenantId + userId` 下，PC 与移动端可互相查看并继续会话。创建或续聊请求可分别传 `channel=web/mobile`；新建会话将 trim 后的值保存为创建来源，未传或空白默认 `web`，长度上限仍为64字符。跨端续聊不比较或改写原会话 `channel`，继续复用原消息路径、Binding 和专家范围；App Tag、归属、Session状态、同会话单活动Run及Interaction claim保护不变。
 
+消息独立记录首次创建时的请求来源 `channel`：新user和assistant使用当前请求值，重新生成及候选切换只标记新assistant；问卷、候选确认和拒答重试复用原消息时不覆盖来源。历史messages（含运营读取）、tree、variants返回该可空字段；旧记录不回填、不从Session推测，分支快照保留源值。该字段与Part的展示channel无关，不改变WS、Resume或分享格式。候选切换接口也支持可选channel，未传或空白默认web。部署须先执行[消息来源增量DDL](src/main/resources/db/incremental-20261107-message-channel.sql)，详见[消息来源与部署说明](docs/message-channel.md)。
+
 两端默认查询 `/sessions`、`/sessions/page` 和 `/sessions/apps` 时均省略 `channel`，查看满足其他条件的全部渠道会话；需要按创建来源筛选时仍可显式传入，精确匹配且区分大小写。从 `channel=mobile` 改为全渠道查询时必须清空旧 `cursor`，从第一页重新加载。原有游标过滤条件绑定及兼容规则不变。跨端继续使用原 `sessionId`，通过历史、`stream-status` 和既有WS/Resume恢复；本次不新增跨端操作广播，前端查询参数需同步调整。
 
 启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题任务独立订阅，Run不等待标题生成或保存。标题提交后向已订阅连接尽力发送用户级提示，前端查询单会话详情读取结果，不产生Run事件。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。

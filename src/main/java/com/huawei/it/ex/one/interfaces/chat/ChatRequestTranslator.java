@@ -114,7 +114,7 @@ public class ChatRequestTranslator {
                 normalizedSkillId,
                 metadata,
                 toAgentMode(request.agentMode()),
-                normalizeText(request.intentAccessName()));
+                normalizeText(request.intentAccessName()), request.channel());
     }
 
     private Map<String, Object> sanitizeClientMetadata(Map<String, Object> metadata) {

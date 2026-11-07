@@ -601,6 +601,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 .orElseThrow();
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
                 .contains("AGENT_CLARIFICATION_REQUEST");
+        assertThat(assistant.channel()).isEqualTo("web");
         assertThat(interactionRequests.requests.values()).singleElement()
                 .satisfies(request -> {
                     assertThat(request.status()).isEqualTo(ChatInteractionStatus.WAITING);
@@ -649,6 +650,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         assertThat(answerRequest.get().runtimeSessionId()).isEqualTo(originalRuntimeSessionId);
         assertThat(bindings.saved.id()).isEqualTo(originalBindingId);
         assertThat(sessions.sessions.get(run.sessionId()).channel()).isEqualTo("web");
+        assertThat(messages.messages).allSatisfy(message -> assertThat(message.channel()).isEqualTo("web"));
         assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
         assertThat(messages.messages).filteredOn(message -> message.id().equals(assistant.id()))
                 .singleElement().satisfies(message -> assertThat(message.content()).isEqualTo("问卷回答完成"));
@@ -825,6 +827,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 .findFirst()
                 .orElseThrow();
         assertThat(answer.parentMessageId()).isEqualTo(waiting.assistantMessageId());
+        assertThat(answer.channel()).isEqualTo("mobile");
         assertThat(messages.attachments).singleElement().satisfies(attachment -> {
             assertThat(attachment.messageId()).isEqualTo(answer.id());
             assertThat(attachment.documentId()).isEqualTo("doc1");
@@ -836,6 +839,8 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 .findFirst()
                 .orElseThrow();
         assertThat(finalAssistant.id()).isNotEqualTo(waiting.assistantMessageId());
+        assertThat(finalAssistant.channel()).isEqualTo("mobile");
+        assertThat(runtimeMetadata.get()).doesNotContainKey("_messageChannel");
         assertThat(finalAssistant.parts()).extracting(ChatMessagePart::partType)
                 .doesNotContain("INTENT_CLARIFICATION_RESPONSE");
         assertThat(runtimeQuery).hasValue(

@@ -529,7 +529,7 @@ class ChatRunTerminalCommitServiceTest {
                 null, "msg-user", null, null, null, "USER_STOP", now, null,
                 Map.of(MessageSkillContext.RUN_METADATA_KEY, "skill-stale"), now, now);
         ChatRun latestRun = staleRun.withMetadata(Map.of(
-                MessageSkillContext.RUN_METADATA_KEY, "skill-latest"));
+                MessageSkillContext.RUN_METADATA_KEY, "skill-latest", "_messageChannel", "mobile"));
         ChatSession session = new ChatSession(
                 "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
         AssistantMessageSaveCommand partial = new AssistantMessageSaveCommand(
@@ -565,6 +565,7 @@ class ChatRunTerminalCommitServiceTest {
                 .contains("\"skillId\":\"skill-latest\"")
                 .doesNotContain("skill-stale")
                 .doesNotContain("skill-old");
+        assertThat(commandCaptor.getValue().channel()).isEqualTo("mobile");
         assertThat(result.committed()).isTrue();
         verifyNoInteractions(notifications);
     }

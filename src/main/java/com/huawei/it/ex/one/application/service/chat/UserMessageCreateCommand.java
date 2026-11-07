@@ -25,6 +25,7 @@ import java.util.Map;
  * @param regeneratedFromMessageId 重新生成 assistant 来源节点。
  * @param metadata 经过请求边界清理的用户消息元数据。
  * @param attachments 本轮用户消息展示用附件引用。
+ * @param channel 首次创建用户消息的请求端侧来源。
  */
 record UserMessageCreateCommand(
         String tenantId,
@@ -37,8 +38,17 @@ record UserMessageCreateCommand(
         String editedFromMessageId,
         String regeneratedFromMessageId,
         Map<String, Object> metadata,
-        List<AttachmentRef> attachments
+        List<AttachmentRef> attachments,
+        String channel
 ) {
+    UserMessageCreateCommand(String tenantId, String userId, ChatSession session, String content,
+                             String parentMessageId, ChatRunMode mode, String runId, String editedFromMessageId,
+                             String regeneratedFromMessageId, Map<String, Object> metadata,
+                             List<AttachmentRef> attachments) {
+        this(tenantId, userId, session, content, parentMessageId, mode, runId, editedFromMessageId,
+                regeneratedFromMessageId, metadata, attachments, null);
+    }
+
     Map<String, Object> safeMetadata() {
         return metadata == null ? Map.of() : metadata;
     }

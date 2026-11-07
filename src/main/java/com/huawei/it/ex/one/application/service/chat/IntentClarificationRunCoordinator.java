@@ -95,7 +95,8 @@ final class IntentClarificationRunCoordinator {
                                 request.input().messageText(),
                                 request.input().currentAttachments(),
                                 lifecycle.metadata(interaction),
-                                request.input().runtimeMetadata()));
+                                request.input().runtimeMetadata(),
+                                request.startAttempt() == null ? null : request.startAttempt().channel()));
         ChatRunMessagePlan messagePlan = admission.messagePlan();
         ChatRun run = admission.run();
         ChatCommand routedCommand = command.withIntentExpertScope(admission.intentExpertScope());

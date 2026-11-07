@@ -133,7 +133,7 @@ public class DomainAgentAsyncTaskApplicationService {
                     context.assistant().parts(),
                     metadata,
                     assistantMessageId,
-                    context.assistant().appendAnswerPart()));
+                    context.assistant().appendAnswerPart(), context.messageChannel()));
         }
         return sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
                 context.user().tenantId(),

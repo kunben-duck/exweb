@@ -25,6 +25,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.MessageChannel;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunStartedEvent;
 
@@ -69,14 +70,15 @@ class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
                 "original-user", "original-assistant", null, null, 2L, null, now, now));
         messages.save(new ChatMessage("original-user", "tenant1", "user1", "session1",
                 null, 1L, 0, 1, "user", "原问题", null, "original-run",
-                "NORMAL", false, null, null, null, null, null, now));
+                "NORMAL", false, null, null, null, null, null, now).withChannel(sourceChannel));
         messages.save(new ChatMessage("original-assistant", "tenant1", "user1", "session1",
                 "original-user", 2L, 1, 1, "assistant", "原答案", null, "original-run",
-                "NORMAL", false, null, null, null, null, null, now));
+                "NORMAL", false, null, null, null, null, null, now).withChannel(sourceChannel));
         Sinks.Empty<Void> release = Sinks.empty();
         AgentRuntime runtime = new AgentRuntime() {
             @Override
             public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                assertThat(request.metadata()).doesNotContainKey(MessageChannel.RUN_METADATA_KEY);
                 return release.asMono().thenMany(Flux.just(
                         MessageDeltaEvent.of(request.runId(), request.sessionId(), "新答案")));
             }
@@ -91,7 +93,7 @@ class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
         ChatCommand command = new ChatCommand("cmd1", null, null, "session1", null, requestChannel,
                 attachmentOnly || mode == ChatRunMode.REGENERATE_ASSISTANT ? null : "新问题",
                 attachmentOnly ? List.of(new AttachmentRef("doc1", null, null, null)) : List.of(),
-                Map.of("userMessageId", "forged"), null, null, mode, null,
+                Map.of("userMessageId", "forged", MessageChannel.RUN_METADATA_KEY, "forged"), null, null, mode, null,
                 mode == ChatRunMode.EDIT_USER ? "original-user" : null,
                 mode == ChatRunMode.REGENERATE_ASSISTANT ? "original-assistant" : null);
 
@@ -102,6 +104,7 @@ class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
             assertThat(result).isNotNull();
             ChatRun run = runs.findById(result.runId()).orElseThrow();
             assertThat(run.status()).isEqualTo(ChatRunStatus.RUNNING);
+            assertThat(MessageChannel.fromRun(run)).isEqualTo(requestChannel);
             assertThat(result.userMessageId()).isNotBlank().isNotEqualTo("forged")
                     .isEqualTo(run.userMessageId());
             assertThat(events.events).singleElement().satisfies(event -> {
@@ -116,9 +119,12 @@ class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
                         if (mode == ChatRunMode.REGENERATE_ASSISTANT) {
                             assertThat(message.id()).isEqualTo("original-user");
                             assertThat(message.runId()).isEqualTo("original-run");
+                            assertThat(message.channel()).isEqualTo(sourceChannel);
                         } else {
                             assertThat(message.id()).isNotEqualTo("original-user");
                             assertThat(message.runId()).isEqualTo(result.runId());
+                            assertThat(message.channel()).isEqualTo(requestChannel);
+                            assertThat(message.metadataJson()).doesNotContain(MessageChannel.RUN_METADATA_KEY);
                         }
                     });
             assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
@@ -131,6 +137,9 @@ class ChatRunUserMessageIdFlowTest extends ChatFlowTestSupport {
         }
         awaitEvent(events, "run.completed");
         assertThat(sessions.findById("session1").orElseThrow().channel()).isEqualTo(sourceChannel);
+        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role())
+                        && !"original-assistant".equals(message.id()))
+                .singleElement().satisfies(message -> assertThat(message.channel()).isEqualTo(requestChannel));
     }
 
     @Test

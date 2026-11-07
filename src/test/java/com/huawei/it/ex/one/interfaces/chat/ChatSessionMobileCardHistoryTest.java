@@ -73,7 +73,7 @@ class ChatSessionMobileCardHistoryTest {
                 "run-a", "CARD", "cardUrl", "card summary", payload, 1, Instant.EPOCH);
         message = new ChatMessage("assistant", "tenant", "user", "session", null, 2L, 1, 0,
                 "assistant", "original answer", 2, "run-a", "NORMAL", false,
-                null, null, null, null, METADATA, List.of(part), Instant.EPOCH);
+                null, null, null, null, METADATA, List.of(part), Instant.EPOCH).withChannel("mobile");
         ChatSession session = new ChatSession("session", "tenant", "user", "original title", "ACTIVE",
                 "web", Instant.EPOCH, Instant.EPOCH);
         when(auth.resolve()).thenReturn(USER);
@@ -94,6 +94,7 @@ class ChatSessionMobileCardHistoryTest {
     @ValueSource(strings = {"page", "tree", "variants"})
     void eachHistoryEntryAddsOnlyTheMobileFieldWithoutChangingQueriesOrStoredMessage(String entry) throws Exception {
         JsonNode original = request(entry, null);
+        assertThat(messageNode(entry, original).path("channel").asText()).isEqualTo("mobile");
         properties.setHistoryMobileCardFallbackEnabled(true);
         JsonNode enriched = request(entry, new HistoryMobileCardViewAssembler(properties, mapper));
         JsonNode payload = messageNode(entry, enriched).path("parts").get(0).path("payload");

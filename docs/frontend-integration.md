@@ -10,6 +10,23 @@
 覆盖普通请求、全部 Interaction WAIT、前端触发超时动作、页面恢复和等待态 stop；本联调文档继续说明
 前端状态组织与调用顺序。
 
+后端到 Relay/DomainAgent 的出站参数及请求头统一见
+[Agent 后端转发接口说明](agent-runtime-forwarding.md)。前端无需也不能自行组装下游 config 或 approval-response。
+
+### 最近六项变更联调索引
+
+| 变更 | Swagger示例 / 接口 | 前端处理与兼容要点 |
+| --- | --- | --- |
+| Relay专家候选切换 | switch-domain-agent 的 relayExpert / replacement | skillId原样提交；新Run订阅；普通专家完成后Binding直连，non-sticky除外 |
+| 可恢复拒答重试 | runs 的 refusalRetryCurrent / refusalSwitchApprove | 只在BEFORE_INTENT且refusalRecoverable严格为true时展示重试；Supervisor不传action |
+| 会话转主站 | promote；响应mainSiteSession | 无body；appId/appName变null；清空cursor重查MAIN_SITE，续聊省略旧应用标签 |
+| 消息channel | CreateChatRunRequest / SwitchDomainAgentRequest / ChatMessage | 每次提交当前端来源；仅新消息写入，复用消息不覆盖；旧值可空 |
+| Stop有界等待 | stop 的 runningStopped / waitingCancelled | 活动Stop等待下游；断连转后台本地收尾；纯WAIT仍取消Interaction，重连校准 |
+| 逐题忽略原因 | runs 的 questionnaireIgnoreUser/Timeout/Mixed、questionnairePartialAnswer/IgnoreOnly | reason逐题USER/TIMEOUT；期限来自持久化卡片，旧label/ignore请求仍兼容 |
+
+六项均沿用原身份与错误处理；不要因收到HTTP 200就忽略 `ACCESS_DENIED` 提示体。
+新动作和新字段须全部后端实例及对应下游支持后再启用；历史存量卡片仍按原字段解析。
+
 完整 WebSocket Envelope、逐层字段字典及各场景的流式消息顺序，见
 [WebSocket 响应示例与字段说明](websocket-response-examples.md)。手册覆盖 DomainAgent/Relay、专家与
 Binding、澄清/问卷、拒答/候选切换、附件拒绝、异步回填、Stop 和刷新恢复；示例为虚构协议数据。
@@ -48,6 +65,7 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 | 会话列表（游标） | `GET` | `/v1/chat/sessions?limit=20&cursor=...` | 当前用户会话游标分页 |
 | 会话列表（页码） | `GET` | `/v1/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
 | 会话详情 | `GET` | `/v1/chat/sessions/{sessionId}` | 查询单个会话元数据 |
+| 应用会话转主站 | `POST` | `/v1/chat/sessions/{sessionId}/promote` | 无请求体，幂等清空appId/appName；不改变消息、Run或Binding |
 | 标记会话已读 | `POST` | `/v1/chat/sessions/{sessionId}/read` | 提交已经实际展示到的 `readThroughSeq`，返回最新会话水位 |
 | 历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path 的最近一页；使用 `nextCursor`向前翻页并 prepend，消息带轻量 `versionInfo` 和附件快照 |
 | 运营历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages/operations` | 仅限Jalor独立授权；跨租户、跨用户读取未删除会话，分页及响应复用messages；不开放其他接口权限 |
@@ -58,8 +76,9 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 | 重命名会话 | `POST`（兼容`PATCH`） | `/v1/chat/sessions/{sessionId}` | 更新会话标题 |
 | 归档/恢复会话 | `POST` | `/v1/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
 | 删除会话 | `DELETE` | `/v1/chat/sessions/{sessionId}` | 软删除单个会话，历史事实数据保留 |
-| 批量删除会话 | `DELETE` | `/v1/chat/sessions` | 批量软删除会话，运行中的会话会先取消 run |
+| 批量删除会话 | `DELETE` | `/v1/chat/sessions` | 提交软删除后后台串行Stop，不等待下游停止响应 |
 | 创建 run | `POST` | `/v1/chat/runs` | 唯一提问入口，返回 `streamTopicId` |
+| 候选立即切换 | `POST` | `/v1/chat/runs/{sourceRunId}/switch-domain-agent` | 停旧Run后调用DomainAgent或Relay专家，返回替代Run及topic |
 | WebSocket | `WS` | `/v1/chat/ws` | 用户级长连接，按 run topic 订阅实时事件 |
 | 会话事件恢复 | `GET` | `/v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}` | 有限补发整个会话缺失事件 |
 | Run 事件恢复 | `GET` | `/v1/chat/runs/{runId}/events/resume?afterSeq={seq}` | 跨页签、跨浏览器或跨电脑续接正在输出的当前回答 |
@@ -1004,7 +1023,7 @@ curl -X POST http://localhost:8080/v1/chat/sessions \
 }
 ```
 
-前端展示可以使用 `sessionId` 作为会话路由参数，并按 `appId` 分组、用 `appName` 展示分组名称。tag 创建后不可变；分支会话自动继承。移动端创建会话时传 `channel=mobile`，PC端省略后默认创建 `web` 会话。租户和用户字段只用于调试展示，不应回传给聊天接口。
+前端展示可以使用 `sessionId` 作为会话路由参数，并按 `appId` 分组、用 `appName` 展示分组名称。普通请求不能改写tag；分支会话自动继承，专用promote接口可以清空标签转主站。移动端创建会话时传 `channel=mobile`，PC端省略后默认创建 `web` 会话。租户和用户字段只用于调试展示，不应回传给聊天接口。
 
 同一租户、同一用户的PC与移动端可互相查看并继续会话。已有会话请求仍可分别传`channel=web/mobile`，包括`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`及各类`CONTINUE_INTERACTION`；原`sessionId/channel`、消息路径、Binding和专家范围不会因渠道不同而更换。会话channel只表示创建来源。App Tag、消息与Interaction归属、Session状态和并发保护仍有效，不能同时创建两个活动Run或重复回答同一问卷。
 
@@ -1130,6 +1149,12 @@ curl -X POST http://localhost:8080/v1/chat/sessions/session_xxx/promote
 接口返回原`ChatSessionDto`，其中appId/appName为null。仅当前租户、当前用户可操作；不存在或已删除
 会话被拒绝，已转主站重复调用幂等，归档会话不会自动恢复ACTIVE。原sessionId、历史、Run、Binding、
 未读水位及时间不变，运行中、问卷等待或异步等待也可转换。读取详情、历史和Resume不触发转换。
+
+返回关键字段片段如下（完整结构见Swagger的mainSiteSession；不会新增promoted字段）：
+
+```json
+{"sessionId":"session_xxx","status":"ACTIVE","channel":"mobile","appId":null,"appName":null}
+```
 
 转换成功后，加载原历史、stream-status及现有WS/Resume，清空列表cursor，从第一页刷新主站列表。
 后续Run和Interaction请求应省略旧appId/appName；显式携带旧值仍按原一致性校验被拒绝。
@@ -2015,6 +2040,34 @@ Relay 返回 `approval-request(operation_type=questionnaire)` 时，run-A 保存
 | 部分回答、部分人工忽略 | `approved=true + label + ignoredQuestions`，不传 `ignore` |
 | 仅逐题忽略 | `approved=true + ignoredQuestions`，可省略 `label` 或传空对象 |
 
+以下是四个可独立提交的完整请求示例；以问卷仅包含“请选择分析期间”和“请选择部署环境”两题为前提，
+第二题为多选。两种Provider的前端请求相同，interactionId使用实际等待对象，不由前端指定Provider。
+混合USER/TIMEOUT示例见上；对应完整下游报文见[问卷转发](agent-runtime-forwarding.md#questionnaires)。
+
+**整份人工忽略（questionnaireIgnoreUser）：**
+
+```json
+{"sessionId":"session_001","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_questionnaire_001","approved":false,"scope":"once","questionnaireAnswers":{"ignore":true,"ignoredQuestions":[{"question":"请选择分析期间","reason":"USER"},{"question":"请选择部署环境","reason":"USER"}]}}
+```
+
+**整份超时忽略（questionnaireIgnoreTimeout，须已到有效截止时间）：**
+
+```json
+{"sessionId":"session_001","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_questionnaire_001","approved":false,"scope":"once","questionnaireAnswers":{"ignore":true,"ignoredQuestions":[{"question":"请选择分析期间","reason":"TIMEOUT"},{"question":"请选择部署环境","reason":"TIMEOUT"}]}}
+```
+
+**部分回答、部分人工忽略（questionnairePartialAnswer）：**
+
+```json
+{"sessionId":"session_001","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_questionnaire_001","approved":true,"scope":"once","questionnaireAnswers":{"label":{"请选择分析期间":"本月"},"ignoredQuestions":[{"question":"请选择部署环境","reason":"USER"}]}}
+```
+
+**仅逐题忽略（questionnaireIgnoreOnly，第一题未提交）：**
+
+```json
+{"sessionId":"session_001","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_questionnaire_001","approved":true,"scope":"once","questionnaireAnswers":{"ignoredQuestions":[{"question":"请选择部署环境","reason":"USER"}]}}
+```
+
 - 列表非空，每项仅有 `question/reason`；题目精确匹配原文本，不可重复、未知或与答案重叠。
   `reason` 大小写敏感，仅接受 `USER/TIMEOUT`；未知字段、null、空白及错误类型拒绝。
 - 整份忽略附明细时必须覆盖全部题目，不可携带 `label`；人工逐题提交不必覆盖全部题目，
@@ -2267,7 +2320,8 @@ POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
   "messageId": "msg_user_xxx",
   "skillId": "RE_national-cfo",
   "selectedIntent": {"intentId": "national_cfo", "intentName": "国家CFO专家"},
-  "intentAccessName": "finance_pc_entry"
+  "intentAccessName": "finance_pc_entry",
+  "channel": "mobile"
 }
 ```
 
@@ -2282,6 +2336,14 @@ POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
 专家完成后转RESUMABLE，下一轮恢复路由，再次命中可恢复；问卷等待仍ACTIVE，回答完成后才执行完成策略。
 forceReroute、换专家、Stop、失败、删除及下游Session失效均保持既有规则。
 所有后端实例支持本扩展后再启用专家候选纠偏，真实Relay会话恢复需联调确认。
+
+普通专家回答完成后下一轮请求例如以下内容；沿用原App Tag约束（应用会话仍需原标签），不再传候选skillId：
+
+```json
+{"sessionId":"session_xxx","runMode":"NEXT","message":"继续分析上月数据","channel":"mobile"}
+```
+
+channel只写新建消息，候选切换复用的user来源不变；Session来源也不改变。
 
 前端在请求期间继续保留A的订阅，以接收标准`run.cancelled`。接口成功返回标准
 `ChatRunStartDto`后，清空A尚未固化的临时正文并改订阅B的`streamTopicId`；B会在自己的事件流中重新给出
@@ -3432,6 +3494,10 @@ run-A 从 `WAITING_USER` 改成 `CANCELLED`；它会把 Interaction 改为 `CANC
 stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay WebSocket 或 DomainAgent cancel adapter，用于下游企业权限校验。Relay 优先在本机 active WS 上发送 `{"type":"stop_all_agents"}`，并在 `interrupt-ack-timeout` 内等待发送链完成或 stop 后的 `session-state=paused`；这段时间 run 保持 `CANCELLING`，同会话不能创建新 run。如果 stop 请求落到其他实例、本机连接已清理或处于 Relay 问卷等待，后端会新建临时 Relay WS，使用可信 `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后再发送 `stop_all_agents`，然后等待 `session-state=paused` 或 ack 超时后释放临时连接。确认、失败或超时后都会提交本地取消终态。固定专家的运行态 stop 不取消 Binding，下一轮继续使用同一 `runtimeSessionId` 执行 `RESUME`。DomainAgent 等待链使用 source/effective run 的真实技能标识调用现有 cancel 接口。等待态本地事务会先取消 Interaction 及其精确关联的 ACTIVE Binding；即使下游 cancel 失败，也不会恢复等待，不阻止用户提交下一条问题。无关的 `RESUMABLE` Relay Binding 不会被取消。
 
 ### DomainAgent Stop 等待期限
+
+Stop无请求体，不提交下游reason、sessionId或timeout；仍使用`POST /v1/chat/runs/{runId}/stop`。
+返回`status=CANCELLED`只能说明本地结果，不能据此展示“领域Agent已经停止计算”。若事务或CAS竞争导致其他
+实际结果，按返回/stream-status处理；未知网络结果不要直接把本地状态设成已停止。
 
 普通运行及异步任务等待中的 DomainAgent Stop 按 `CANCELLING -> 等待下游HTTP -> 取消本机订阅 -> 本地终态提交`
 处理，再返回实际状态。仅 HTTP 2xx 记为下游受理成功，不解析业务响应体；非2xx、网络错误或超时均告警后

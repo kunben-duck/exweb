@@ -4,6 +4,10 @@
 
 入口：`/v1/chat/ws`，生产使用 `wss`，加上部署的 Servlet context path 和 Jalor 网关路由前缀。WebSocket 只传订阅控制和事件，不用它提交 Query、问卷答案、Stop 或异步回调。REST 字段完整约束见[OpenAPI](openapi/financeex-chatservice-v1.yaml)和[前端联调文档](frontend-integration.md)。
 
+本文是**前端出入站**协议；后端到Relay的config/业务帧、DomainAgent HTTP及请求头另见
+[Agent后端转发接口](agent-runtime-forwarding.md)。逐题ignoredQuestions经REST提交，不增加WS命令；
+message.channel也不新增WS字段，不能与Part展示channel混用。promote不新增转换广播。
+
 ## 阅读约定与场景索引
 
 - 标为“客户端 → 服务端”的 JSON 是控制请求；标为“服务端 → 客户端”的 JSON 是完整 WebSocket Envelope。
@@ -4582,6 +4586,23 @@ Run-A 仍在运行时，接口先 Stop A。旧 topic 上可收到（若已有可
 
 最后的 candidate-skill-switch 持久化及后处理 ACK 完成后才放行后续路由/Runtime；这个 ACK 是内部控制，不额外发给前端。只回放意图路由、选择及既有切换标识，不复制旧正文、卡片、引用、拒答业务帧或终态。最多 32 条、256KiB 的路由继承可能被裁剪，不能假设总能看到完整无限回溯。
 
+候选切换到Relay专家时仍使用上述事件顺序，关键标识示例如下（完整ChatEvent，外层WS封装与上例相同）：
+
+```json
+{
+  "runId":"run_switch_b","sessionId":"session_demo","sequence":1912,"type":"runtime.progress",
+  "payload":{
+    "source":"chatservice","sourceType":"candidate-skill-switch","stage":"candidate_skill_switch",
+    "status":"COMPLETED","message":"已选择候选技能重新调用","sourceRunId":"run_switch_a",
+    "targetType":"DOMAIN_EXPERT","targetId":"national-cfo","skillId":"RE_national-cfo",
+    "intentId":"national_cfo","intentName":"国家CFO专家"
+  }
+}
+```
+
+后续选择事件为selectedDomainExpert，不是selectedDomainAgent。skillId保留候选原值，targetId为最终roleName；
+后续普通直连及non-sticky例外见[候选切换联调](frontend-integration.md#候选技能立即切换)。
+
 A 终态提交先于 B 创建，但不同连接及发送队列会影响到达顺序：B 的启动 HTTP 响应可能先于旧 topic 的 cancelled 到达浏览器。按 runId 分流，不要求先收到 A 的 WS 终态才能处理已成功受理的 B，也不能让迟到的 A 终态关闭 B 的运行状态。
 
 A 已完成则跳过 Stop，不再发一个 A 的 cancelled。原 user 不复制，B 是新 assistant 版本，前端清空新版本的临时正文/思维链后消费 B，而不是往 A 的正文末尾追加；A/B 历史版本仍可查。B 再次拒答沿 S07 处理。source 不在当前允许路径、其他活动 Run 或 Stop 未完成等情况返回 REST 409，不能先假定 B 已启动。当前不支持任意更早非末尾历史回答分支重生成；该能力不在本手册描述范围内。FULL 可恢复继承 Parts；no-store 不强制复制不可留存的业务事件。意图反馈结果通过 REST/历史 DTO 回显，不新增 WS 通知。
@@ -5859,6 +5880,12 @@ HTTP DTO数量上限仍为20，超限或权限校验在准入前失败时只有R
 #### 运行中 Stop
 
 REST `POST /v1/chat/runs/{runId}/stop`，使用当前运行的 Run ID。Run 先进入 CANCELLING，再做有界下游取消和本地终态；**没有专用 run.cancelling WS 事件**。取消竞争也可能先由自然完成赢得终态，按实际响应处理。
+
+活动DomainAgent（含ASYNC_WAITING）等待Stop HTTP成功、失败或stop-timeout后收尾；纯问卷等待态仍不等
+下游响应。活动DomainAgent或Relay的Stop请求断开时，后端停止等待下游，继续后台本地收尾；不保证立即提交，
+也不保证下游停止计算。重连查询stream-status并按可靠已消费游标Resume，不把断开或取消按钮状态当成终态。
+本地取消成功仍只产生原run.cancelled/done，不增加“下游Stop成功”事件。完整边界见
+[Stop转发说明](agent-runtime-forwarding.md#stop)。
 
 存在可保存 partial 时：
 

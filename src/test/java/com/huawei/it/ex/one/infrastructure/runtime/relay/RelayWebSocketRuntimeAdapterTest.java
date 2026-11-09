@@ -32,6 +32,7 @@ import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.reactivestreams.Publisher;
 import org.springframework.core.io.buffer.DataBuffer;
@@ -44,17 +45,54 @@ import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
 
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 class RelayWebSocketRuntimeAdapterTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @ParameterizedTest
+    @CsvSource({
+            "questionnaireIgnoreUser,relay-ignore-user",
+            "questionnaireIgnoreTimeout,relay-ignore-timeout",
+            "questionnaireIgnoreMixed,relay-ignore-mixed",
+            "questionnairePartialAnswer,relay-partial",
+            "questionnaireIgnoreOnly,relay-ignore-only"
+    })
+    void swaggerExamplesMatchDocumentedRelayFrames(String frontendName, String wireName) throws Exception {
+        LoaderOptions options = new LoaderOptions();
+        options.setAllowDuplicateKeys(false);
+        JsonNode api = objectMapper.valueToTree(new Yaml(new SafeConstructor(options)).load(
+                Files.readString(Path.of("docs/openapi/financeex-chatservice-v1.yaml"))));
+        JsonNode front = api.path("paths").path("/v1/chat/runs").path("post").path("requestBody")
+                .path("content").path("application/json").path("examples").path(frontendName).path("value");
+        Map<String, Object> response = objectMapper.convertValue(front,
+                new com.fasterxml.jackson.core.type.TypeReference<>() { });
+        var request = new AgentRuntimeInteractionResponseRequest("tenant_demo", "user_demo", "demo_account", null,
+                "session_demo", "run_B", "relay_session_demo", "relay", "interaction_questionnaire_001",
+                "AGENT_CLARIFICATION", "approval_demo", response, RuntimeForwardHeaders.empty());
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay_session_demo\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay_session_demo\"}"));
+        StepVerifier.create(adapter(client).continueWithUserResponse(request)).expectNextCount(3).verifyComplete();
+        var example = Pattern.compile("(?s)<!-- contract: " + wireName + " -->\\s+```json\\s+(.*?)```")
+                .matcher(Files.readString(Path.of("docs/agent-runtime-forwarding.md")));
+        assertThat(example.find()).as(wireName).isTrue();
+        assertThat(client.sent()).hasSize(2);
+        assertThat(objectMapper.readTree(client.sent().get(1))).isEqualTo(objectMapper.readTree(example.group(1)));
+    }
 
     @Test
     void observedExpertHandshakePreservesBusinessTraceAndRecordsRealSession() throws Exception {

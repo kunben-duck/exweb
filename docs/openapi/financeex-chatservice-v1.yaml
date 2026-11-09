@@ -381,7 +381,7 @@ paths:
                     - documentId: doc_003
                   metadata: {}
               refusalSwitchApprove:
-                summary: DomainAgent 拒答后确认切换到新目标
+                summary: BEFORE_INTENT交还Supervisor重新意图；存量无阶段确认仍执行已保存候选
                 value:
                   commandId: cmd_013
                   sessionId: session_001
@@ -389,6 +389,16 @@ paths:
                   interactionId: interaction_switch_001
                   approved: true
                   scope: once
+                  metadata: {}
+              refusalRetryCurrent:
+                summary: BEFORE_INTENT且refusalRecoverable=true，重试当前DomainAgent，不调用Intent
+                value:
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_switch_001
+                  approved: true
+                  interactionAction: RETRY_CURRENT
+                  channel: mobile
                   metadata: {}
               refusalSwitchDecline:
                 summary: DomainAgent 拒答后拒绝切换
@@ -429,6 +439,69 @@ paths:
                   questionnaireAnswers:
                     ignore: true
                   metadata: {}
+              questionnaireIgnoreUser:
+                summary: Relay或DomainAgent整份人工忽略；示例问卷恰有下列两题
+                value:
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_questionnaire_001
+                  approved: false
+                  scope: once
+                  questionnaireAnswers:
+                    ignore: true
+                    ignoredQuestions:
+                      - {question: 请选择分析期间, reason: USER}
+                      - {question: 请选择部署环境, reason: USER}
+              questionnaireIgnoreTimeout:
+                summary: 整份超时忽略，必须已到持久化autoActionAt且自动动作为IGNORE_QUESTIONNAIRE
+                value:
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_questionnaire_001
+                  approved: false
+                  scope: once
+                  questionnaireAnswers:
+                    ignore: true
+                    ignoredQuestions:
+                      - {question: 请选择分析期间, reason: TIMEOUT}
+                      - {question: 请选择部署环境, reason: TIMEOUT}
+              questionnaireIgnoreMixed:
+                summary: 一题人工忽略，剩余题超时；不提交草稿答案
+                value:
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_questionnaire_001
+                  approved: false
+                  scope: once
+                  questionnaireAnswers:
+                    ignore: true
+                    ignoredQuestions:
+                      - {question: 请选择分析期间, reason: USER}
+                      - {question: 请选择部署环境, reason: TIMEOUT}
+              questionnairePartialAnswer:
+                summary: 部分回答、部分人工忽略；同一道题不得同时出现在两处
+                value:
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_questionnaire_001
+                  approved: true
+                  scope: once
+                  questionnaireAnswers:
+                    label:
+                      请选择分析期间: 本月
+                    ignoredQuestions:
+                      - {question: 请选择部署环境, reason: USER}
+              questionnaireIgnoreOnly:
+                summary: 仅逐题忽略，不等于整份忽略；允许省略label或使用空对象
+                value:
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_questionnaire_001
+                  approved: true
+                  scope: once
+                  questionnaireAnswers:
+                    ignoredQuestions:
+                      - {question: 请选择部署环境, reason: USER}
       responses:
         '200':
           description: Run 已创建，首个事件已经持久化
@@ -507,20 +580,26 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/SwitchDomainAgentRequest'
-            example:
-              messageId: msg_user_001
-              skillId: finance_query
-              selectedIntent:
-                intentId: finance.query
-                intentName: 财经智能问数
-              metadata:
-                bizContext:
-                  contextVersion: 1
-                  page:
-                    pageId: finance-dashboard
-                    name: 财经看板
-              agentMode: null
-              intentAccessName: finance_pc_entry
+            examples:
+              domainAgent:
+                summary: 原DomainAgent候选切换
+                value:
+                  messageId: msg_user_001
+                  skillId: finance_query
+                  selectedIntent: {intentId: finance.query, intentName: 财经智能问数}
+                  metadata:
+                    bizContext:
+                      contextVersion: 1
+                      page: {pageId: finance-dashboard, name: 财经看板}
+                  intentAccessName: finance_pc_entry
+              relayExpert:
+                summary: 专家前缀RE_时，候选skillId原样传入，后端解析roleName=national-cfo
+                value:
+                  messageId: msg_user_001
+                  skillId: RE_national-cfo
+                  selectedIntent: {intentId: national_cfo, intentName: 国家CFO专家}
+                  intentAccessName: finance_pc_entry
+                  channel: mobile
       responses:
         '200':
           description: Replacement Run已创建，首个事件已经持久化
@@ -530,6 +609,16 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/ChatRunStart'
                   - $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                replacement:
+                  summary: 两种目标返回同一结构；后续订阅此新Run
+                  value:
+                    runId: run_replacement
+                    sessionId: session_001
+                    userMessageId: msg_user_001
+                    firstSeq: 1042
+                    createdAt: '2026-11-09T02:00:00Z'
+                    streamTopicId: chat-run-run_replacement
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -590,6 +679,14 @@ paths:
                       accessName: EX_finance_query
                       skillId: finance_query
                       intentName: 财经智能问数
+                      confidence: 0.92
+                relayExpertCandidate:
+                  summary: 通用前缀EX_、专家前缀RE_；查询只剥离通用前缀
+                  value:
+                    - intentId: national_cfo
+                      accessName: EX_RE_national-cfo
+                      skillId: RE_national-cfo
+                      intentName: 国家CFO专家
                       confidence: 0.92
                 empty:
                   value: []
@@ -899,13 +996,20 @@ paths:
       description: |
         运行态使用 `activeRunId`；等待态使用 `stream-status.waitingSourceRunId`。请求无 body。
 
-        - RUNNING/CANCELLING：调用当前 Runtime 的真实取消能力并按既有流程保存 partial assistant。
+        - RUNNING/CANCELLING：取得停止控制权后进入CANCELLING，等待下游，再取消本机订阅、保存partial assistant并提交终态。
+        - 活动DomainAgent（含ASYNC_WAITING）：等待Stop HTTP 2xx、失败或超时；非2xx/网络错误/超时告警后仍本地收尾，不自动重试。
+          stop-timeout优先，未配置回退旧timeout（默认120s）；未启用或未配置stop-path不发HTTP。期限不包含数据库收尾。
+        - Relay活动连接按原发送完成/paused及超时规则停止；无活动连接则临时RESUME，不改变原等待期限。
         - Intent 澄清或 AMBIGUOUS_ROUTE：取消本地 Interaction；没有实际 Runtime 时不调用下游。
         - Relay 问卷：取消精确 ACTIVE Binding，并尽力执行 `RESUME + stop_all_agents`。
-        - DomainAgent 等待：调用实际 DomainAgent cancel。
+        - DomainAgent问卷纯等待态：先取消本地Interaction，再后台尽力调用cancel，不等待下游。
 
         等待源 run-A 的历史状态仍保持 WAITING_USER，但 Interaction 变为 CANCELLED，随后允许新的 NEXT。
         若 run-B 已经创建，`effectiveRunId` 返回实际被停止的 continuation run。
+        活动DomainAgent和Relay的Stop订阅被调用方取消时，终止下游等待，继续后台本地收尾；不等原Stop期限，
+        但仍可能受数据库/调度延迟影响。断开不等于取消失败，也不等于已经提交；重连用stream-status和Resume校准。
+        候选切换在等待Stop时断开，只继续停止旧Run，不创建替代Run；删除后的Stop串行后台执行，删除响应不等待。
+        返回CANCELLED仅表示本地取消结果，不保证下游已停止计算。业务事务/CAS失败仍沿用原异常与竞争裁决。
       parameters:
         - $ref: '#/components/parameters/RunId'
         - $ref: '#/components/parameters/OptionalCookie'
@@ -1626,6 +1730,7 @@ paths:
         已是主站会话时幂等返回；不存在或DELETED拒绝，ARCHIVED不自动恢复ACTIVE。
         仅更新应用标签，保留sessionId、状态、时间、消息、Run和Binding；运行中及等待输入时也可转换。
         主站列表需传appScope=MAIN_SITE，普通全应用查询不隐藏这些会话。
+        appScope=MAIN_SITE不能同时传appId；转换成功后清空cursor并重查列表，不隐式新增转换通知。
         转换后不再属于原应用分类，后续Run和Interaction请求须省略旧appId/appName。
       parameters:
         - $ref: '#/components/parameters/SessionId'
@@ -2310,6 +2415,10 @@ components:
               $ref: '#/components/examples/AmbiguousRouteCardEvent'
             routeSwitchConfirmation:
               $ref: '#/components/examples/RouteSwitchConfirmationEvent'
+            recoverableRefusalConfirmation:
+              $ref: '#/components/examples/RecoverableRefusalConfirmationEvent'
+            relayExpertCandidateSwitch:
+              $ref: '#/components/examples/RelayExpertCandidateSwitchEvent'
             relayQuestionnaireCard:
               $ref: '#/components/examples/RelayQuestionnaireCardEvent'
     ChatSessionResponse:
@@ -2320,6 +2429,25 @@ components:
             oneOf:
               - $ref: '#/components/schemas/ChatSession'
               - $ref: '#/components/schemas/ApiErrorResponse'
+          examples:
+            mainSiteSession:
+              summary: 主站会话或promote成功后快照（ARCHIVED转换不自动变ACTIVE）
+              value:
+                sessionId: session_001
+                tenantId: tenant_demo
+                userId: user_demo
+                title: 费用分析
+                status: ACTIVE
+                channel: mobile
+                appId: null
+                appName: null
+                hasUnread: false
+                latestMessageSeq: 0
+                lastReadSeq: 0
+                createdAt: '2026-11-09T01:00:00Z'
+                updatedAt: '2026-11-09T01:00:00Z'
+            accessDenied:
+              $ref: '#/components/examples/AccessDenied'
     UploadedDocumentResponse:
       description: 文档元数据；也可能是 HTTP 200/ACCESS_DENIED 提示
       content:
@@ -2587,6 +2715,66 @@ components:
                 autoActionAt: '2026-08-05T10:00:30Z'
                 autoActionTimeoutMs: 30000
                 autoActionType: APPROVE_ROUTE_SWITCH
+    RecoverableRefusalConfirmationEvent:
+      summary: 可恢复拒答的两选项卡片，提交须使用run.waiting_user中的interactionId
+      value:
+        type: conversation-turn-stream
+        payload:
+          type: stream-item
+          conversationId: session_001
+          turnId: run_A
+          streamItemId: evt_2021
+          encodedItem:
+            encoding: chat-event-json-v1
+            event: runtime.card
+            data:
+              runId: run_A
+              sessionId: session_001
+              sequence: 2021
+              type: runtime.card
+              payload:
+                source: chatservice
+                sourceType: route-switch-confirmation-request
+                interactionType: ROUTE_SWITCH_CONFIRMATION
+                confirmationStage: BEFORE_INTENT
+                currentProvider: domain-agent
+                currentTargetId: skill_A
+                currentRouteSource: front-selected
+                refusalRecoverable: true
+                message: 当前技能暂未完成回答，请选择仍然使用当前技能重试，或交还Supervisor重新意图。
+                originalQuery: 分析本月费用
+                autoActionType: APPROVE_ROUTE_SWITCH
+                autoActionAt: '2026-11-09T02:00:30Z'
+                autoActionTimeoutMs: 30000
+    RelayExpertCandidateSwitchEvent:
+      summary: 专家候选切换标识，原skillId与最终targetId不同；不是下游业务帧
+      value:
+        type: conversation-turn-stream
+        payload:
+          type: stream-item
+          conversationId: session_001
+          turnId: run_replacement
+          streamItemId: evt_1043
+          encodedItem:
+            encoding: chat-event-json-v1
+            event: runtime.progress
+            data:
+              runId: run_replacement
+              sessionId: session_001
+              sequence: 1043
+              type: runtime.progress
+              payload:
+                source: chatservice
+                sourceType: candidate-skill-switch
+                stage: candidate_skill_switch
+                status: COMPLETED
+                message: 已选择候选技能重新调用
+                sourceRunId: run_A
+                targetType: DOMAIN_EXPERT
+                targetId: national-cfo
+                skillId: RE_national-cfo
+                intentId: national_cfo
+                intentName: 国家CFO专家
     RelayQuestionnaireCardEvent:
       summary: Relay 返回单选和多选问卷卡片
       value:
@@ -2896,6 +3084,15 @@ components:
             TIMEOUT须通过持久化autoActionType=IGNORE_QUESTIONNAIRE及autoActionAt已到校验，非法提交在claim前拒绝。
             超时不提交草稿，人工已忽略项保留USER，其余题目记为TIMEOUT。旧请求缺少原因时不补造。
           properties:
+            label:
+              description: |
+                仅对Relay/DomainAgent问卷，此字段为object，key为原题目全文；单选为非空白字符串，多选为非空字符串数组。
+                无ignoredQuestions时必须非空；有有效忽略列表时可省略或传空对象。不能用null/空答案表示忽略。
+                此处不施加跨Interaction类型的结构限制，普通Intent澄清继续使用其原有问答结构。
+              example: {请选择分析期间: 本月, 请选择部署环境: [测试环境]}
+            ignore:
+              description: 仅对Relay/DomainAgent问卷，此字段为boolean；整份忽略时必须为true且approved=false，不得携带label；逐题提交不传ignore（即使false也不允许）。其他Interaction仍遵循原规则。
+              example: true
             ignoredQuestions:
               type: array
               minItems: 1
@@ -3009,7 +3206,7 @@ components:
         ambiguousAutoSelect: interactionAction=AUTO_SELECT，不能同时提交 target、答案或附件。
         ambiguousOther: questionnaireAnswers 或有效 attachments，重新调用 Intent。
         routeSwitchConfirmation: approved=true/false，不提交 target 或答案；approved=true允许本次显式附件，不传action时保持原重新意图或存量候选调用。
-        retryCurrent: BEFORE_INTENT且持久化refusalRecoverable=true时允许interactionAction=RETRY_CURRENT，要求approved=true，不传target或答案，允许本次显式附件。
+        retryCurrent: BEFORE_INTENT且持久化refusalRecoverable=true时允许interactionAction=RETRY_CURRENT，要求approved=true，不传target或答案，允许本次显式附件。未知动作、存量无阶段、false/null不可恢复标记或冲突在claim前拒绝。重试与重新意图共用max-reroutes（默认3），跨Run累计；approved=false仅结束本轮，不是Stop。
         relayQuestionnaire: DomainAgent与Relay共用label/ignore互斥规则；可选ignoredQuestions记载逐题原因，逐题提交可仅有忽略列表，整份忽略附明细须覆盖全部题目。
 
     SwitchDomainAgentRequest:

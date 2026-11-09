@@ -58,7 +58,12 @@ Relay 普通协议见 [Relay WebSocket 文档](docs/relay.md)，Domain Expert �
 
 可由 Swagger UI、Redoc 或代码生成工具直接读取的 OpenAPI 3.0.3 定义见
 [FinanceEX ChatService OpenAPI](docs/openapi/financeex-chatservice-v1.yaml)。该定义覆盖全部公开业务接口，
-并为普通澄清、歧义路由选择、拒答切换确认、Relay 问卷、等待态 stop 和恢复流程提供命名示例。
+并为普通澄清、歧义路由选择、专家候选切换、拒答原技能重试、逐题忽略、主站会话及等待态 stop 提供命名示例。
+此文件供现有 Swagger UI 导入，不新增应用内 Swagger 页面或运行时依赖。
+
+后端实际调用 Relay/DomainAgent 的完整字段、请求头、NEW/RESUME、问卷、Stop 与超时边界，统一见
+[Agent 后端转发接口说明](docs/agent-runtime-forwarding.md)。该文档区分客户端 API、下游出站协议和异步回调方向，
+包含可直接对照 Mapper/适配器测试的完整 JSON；不要把前端请求直接转交给 Agent。
 
 单实例 `4C4G` 的流式任务、文档上传、普通查询、WebSocket 和 Event Resume 容量测试流程，参见
 [单实例压测指导](docs/performance-testing-guide.md)。该文档包含环境准备、测试数据、负载阶梯、停止条件、
@@ -68,7 +73,7 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 [DomainAgent Assistant 留存控制设计](docs/architecture/domain-agent-assistant-persistence.md)。
 
 - `POST /v1/chat/runs`：唯一任务提交入口。普通提问创建后台 run；`runMode=CONTINUE_INTERACTION` 时提交澄清/审批/确认响应并启动续接 run；返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
-- `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为不可变分组标识和名称快照。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
+- `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为应用分组标识和名称快照，普通续聊不改写。专用 `POST /v1/chat/sessions/{sessionId}/promote` 可幂等清空两者转主站；不支持任意改成其他应用。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
 - `GET /v1/chat/sessions/apps`：查询当前用户非删除会话中的全部 App 分类；`channel` 可选，双端默认省略以查询全部渠道，返回去重后的 `appId/appName`，按分类最近活动时间倒序排列。
 - `GET /v1/chat/sessions?appScope=MAIN_SITE&keyword=利润&limit=20&cursor=...`：游标分页查询当前用户会话列表；`keyword`统一模糊匹配标题、已持久化user问题和assistant回答，范围与页码接口一致；原`title`仍只搜索标题，两者不能同时非空。`appScope=MAIN_SITE` 仅返回 `appId=null` 的主站会话，省略时保持全量语义；也可改传具体 `appId`，并返回每个会话第一条 assistant 的 `firstAssistantAnswer/firstAssistantMetadataJson`。keyword搜索使用v6游标，翻页须保持搜索词及其他过滤条件不变，不增加总数查询。
 - `GET /v1/chat/sessions/page?appScope=MAIN_SITE&keyword=利润&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`keyword`统一模糊匹配标题、已持久化user问题和assistant回答，返回 `totalRows/totalPages`、每个会话第一条 assistant 的正文及原始 metadata 字符串，并返回同一最后Run的`lastRunStatus/lastRunSkillId`。搜索事务默认限时2秒，超时返回`503/SESSION_SEARCH_TIMEOUT`。
@@ -82,8 +87,8 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 - `POST /v1/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
 - `POST /v1/chat/sessions/{sessionId}/archive|restore`：会话归档和恢复。
 - `POST /v1/chat/sessions/{sessionId}/promote`：将当前用户的应用会话转入主站，幂等清空appId/appName，不改状态、活动时间或历史。各系统使用自己的appId创建；主站列表传`appScope=MAIN_SITE`，跳转时显式转换，后续续聊省略原应用标签。
-- `DELETE /v1/chat/sessions/{sessionId}`：软删除会话；若存在 active run，后端会先主动取消 run。
-- `DELETE /v1/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，运行中会话会先取消 run 后删除。
+- `DELETE /v1/chat/sessions/{sessionId}`：软删除会话提交后，后台停止已有 active run；响应不等待下游停止。
+- `DELETE /v1/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，提交后串行执行该批次Stop，单项失败记录告警并继续。
 - `WS /v1/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。
 - `GET /v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件；SSE data 同样是 `conversation-turn-stream`。
 - `GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`。live tail 异常时当前连接结束，前端从最后成功处理的 sequence 重新恢复。

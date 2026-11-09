@@ -1,5 +1,9 @@
 # RelayAgent WebSocket 接口文档
 
+本文保留 Relay 协议参考。ChatService 当前真正发送的头和帧、Delegate/专家的 NEW/RESUME、
+问卷逐题忽略及两种 Stop 路径，见[Agent 后端转发接口说明](agent-runtime-forwarding.md)。
+协议可选能力不等于 ChatService 自动发送；前端只调用 ChatService API，不直接使用本 WS。
+
 ## 1. 接口链接
 
 ```

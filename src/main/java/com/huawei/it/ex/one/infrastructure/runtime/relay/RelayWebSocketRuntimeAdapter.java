@@ -866,6 +866,15 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private Map<String, Object> relayQuestionnaireAnswers(Map<?, ?> answerMap) {
+        if (answerMap.containsKey("ignoredQuestions")) {
+            Map<String, Object> answers = new LinkedHashMap<>();
+            if (answerMap.get("label") instanceof Map<?, ?> labels && !labels.isEmpty()) {
+                answers.put("label", labels);
+            }
+            answers.put("ignore", Boolean.TRUE.equals(answerMap.get("ignore")));
+            answers.put("ignored_questions", answerMap.get("ignoredQuestions"));
+            return answers;
+        }
         if (answerMap.containsKey("label")) {
             // 前端仍只提交 label；Relay 新协议要求正常回答显式声明未忽略问卷。
             Map<String, Object> answers = new LinkedHashMap<>();

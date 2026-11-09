@@ -443,10 +443,34 @@ data: {"type":"approval-request","approval_id":"approval_001","operation_type":"
 }
 ```
 
-单选及自定义回答为字符串，多选为字符串数组。手动忽略与自动忽略都发送
+单选及自定义回答为字符串，多选为字符串数组。未使用逐题忽略明细的旧请求中，手动忽略与自动忽略都发送
 `approved=false, questionnaire_answers={"ignore":true}`。`approved` 只表示本次回答或忽略，
 不是给下游授予额外业务权限。`request_id` 来自持久化的 `approval_id`，其余关联 ID 来自可信
 Run/Interaction/Binding，不接受客户端 metadata 覆盖。Cookie 仅来自本次续跑 HTTP 请求头。
+
+DomainAgent 与 Relay 问卷统一支持可选的逐题忽略明细。前端在 `questionnaireAnswers.ignoredQuestions`
+提交列表，ChatService 仅将字段名映射为 `questionnaire_answers.ignored_questions`，保留条目和顺序：
+
+```json
+{
+  "approved": true,
+  "scope": "once",
+  "questionnaire_answers": {
+    "label": {"请选择分析期间": "本月"},
+    "ignore": false,
+    "ignored_questions": [{"question": "请选择部署环境", "reason": "USER"}]
+  }
+}
+```
+
+- `question` 精确匹配原问卷文本，`reason` 仅支持 `USER/TIMEOUT`；不能重复、未知或与答案重叠。
+- 逐题提交使用 `approved=true`，允许只有忽略列表；没有有效答案时省略下游 `label`，保留 `ignore=false`。
+- 整份忽略仍使用 `approved=false + ignore=true`，可附带覆盖全部题目的明细，不能携带 `label`。
+- 包含 `TIMEOUT` 时，服务端在 claim 前校验该 Interaction 已保存的 `autoActionType=IGNORE_QUESTIONNAIRE`
+  及 `autoActionAt` 已到。旧请求不新增时间校验，不补造忽略原因。
+- 超时不提交草稿答案；保留已主动忽略题目的 `USER`，其余标记 `TIMEOUT`，以整份忽略提交完整明细。
+- 明细沿用现有响应、历史与留存链路，不新增数据库写入或服务端定时任务。下游及全部后端实例支持后
+  再启用前端新参数；来源是客户端声明，时间校验不证明真实人工点击。
 
 下游必须在原连接关闭后保留等待上下文，通过 session 与问卷 ID 恢复，并将后续执行关联到新的 Run-B。
 续跑可继续返回现有正文、思维链、卡片、引用和结束帧；再次发问应使用新的 `approval_id`。

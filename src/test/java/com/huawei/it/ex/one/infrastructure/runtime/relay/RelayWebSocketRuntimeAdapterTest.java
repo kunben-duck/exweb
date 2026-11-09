@@ -1325,6 +1325,53 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(response.has("approval_id")).isFalse();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void delegateAndExpertForwardDetailedIgnoresWithoutChangingHandshake(boolean expert) throws Exception {
+        List<Map<String, String>> mixed = List.of(Map.of("question", "Q1", "reason", "USER"),
+                Map.of("question", "Q2", "reason", "TIMEOUT"));
+        List<Map<String, String>> user = List.of(Map.of("question", "Q2", "reason", "USER"));
+        List<Map<String, String>> timeout = List.of(Map.of("question", "Q1", "reason", "TIMEOUT"),
+                Map.of("question", "Q2", "reason", "TIMEOUT"));
+        List<Map<String, String>> allUser = List.of(Map.of("question", "Q1", "reason", "USER"), user.getFirst());
+        List<Map<String, Object>> inputs = List.of(
+                Map.of("ignore", true, "ignoredQuestions", timeout),
+                Map.of("ignore", true, "ignoredQuestions", allUser),
+                Map.of("ignore", true, "ignoredQuestions", mixed),
+                Map.of("label", Map.of("Q1", "A"), "ignoredQuestions", user),
+                Map.of("ignoredQuestions", user),
+                Map.of("label", Map.of(), "ignoredQuestions", user));
+        List<Map<String, Object>> expected = List.of(
+                Map.of("ignore", true, "ignored_questions", timeout),
+                Map.of("ignore", true, "ignored_questions", allUser),
+                Map.of("ignore", true, "ignored_questions", mixed),
+                Map.of("label", Map.of("Q1", "A"), "ignore", false, "ignored_questions", user),
+                Map.of("ignore", false, "ignored_questions", user),
+                Map.of("ignore", false, "ignored_questions", user));
+        for (int i = 0; i < inputs.size(); i++) {
+            FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                    "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                    "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"));
+            AgentRuntimeInteractionResponseRequest request = interactionRequest(i >= 3, inputs.get(i));
+            if (expert) {
+                request = expertInteractionRequest(request);
+            }
+            StepVerifier.create(adapter(client).continueWithUserResponse(request)).expectNextCount(3).verifyComplete();
+            assertThat(client.sent()).hasSize(2);
+            JsonNode config = objectMapper.readTree(client.sent().getFirst()).path("config");
+            assertThat(config.path("sessionMode").asText()).isEqualTo("resume");
+            assertThat(config.path("sessionId").asText()).isEqualTo(request.runtimeSessionId());
+            assertThat(config.path("supports_incremental_recovery").asBoolean()).isTrue();
+            if (expert) {
+                assertThat(config.path("roleName").asText()).isEqualTo("system-awareness");
+            }
+            JsonNode response = objectMapper.readTree(client.sent().get(1));
+            assertThat(response).isEqualTo(objectMapper.valueToTree(Map.of("type", "approval-response",
+                    "request_id", "approval-1", "approved", i >= 3, "scope", "once",
+                    "questionnaire_answers", expected.get(i))));
+        }
+    }
+
     @Test
     void openingHandshakeTimeoutCancelsPendingInteractionUpgrade() {
         NeverOpeningWebSocketClient client = new NeverOpeningWebSocketClient();
@@ -1835,7 +1882,10 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private AgentRuntimeInteractionResponseRequest expertInteractionRequest() {
-        AgentRuntimeInteractionResponseRequest delegate = interactionRequest();
+        return expertInteractionRequest(interactionRequest());
+    }
+
+    private AgentRuntimeInteractionResponseRequest expertInteractionRequest(AgentRuntimeInteractionResponseRequest delegate) {
         return new AgentRuntimeInteractionResponseRequest(
                 delegate.tenantId(),
                 delegate.userId(),

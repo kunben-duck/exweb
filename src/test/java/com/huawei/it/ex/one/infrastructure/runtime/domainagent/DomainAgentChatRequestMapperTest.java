@@ -56,6 +56,39 @@ class DomainAgentChatRequestMapperTest {
     }
 
     @Test
+    void questionnaireIgnoreDetailsPreserveWireShapeAndOrder() {
+        List<Map<String, String>> user = List.of(Map.of("question", "范围", "reason", "USER"));
+        List<Map<String, String>> mixed = List.of(Map.of("question", "期间", "reason", "USER"),
+                Map.of("question", "范围", "reason", "TIMEOUT"));
+        List<Map<String, String>> timeout = List.of(Map.of("question", "期间", "reason", "TIMEOUT"),
+                Map.of("question", "范围", "reason", "TIMEOUT"));
+        List<Map<String, String>> allUser = List.of(Map.of("question", "期间", "reason", "USER"), user.getFirst());
+        List<Map<String, Object>> inputs = List.of(
+                Map.of("ignore", true, "ignoredQuestions", timeout),
+                Map.of("ignore", true, "ignoredQuestions", allUser),
+                Map.of("ignore", true, "ignoredQuestions", mixed),
+                Map.of("label", Map.of("期间", "本月"), "ignoredQuestions", user),
+                Map.of("ignoredQuestions", user),
+                Map.of("label", Map.of(), "ignoredQuestions", user));
+        List<Map<String, Object>> expected = List.of(
+                Map.of("ignore", true, "ignored_questions", timeout),
+                Map.of("ignore", true, "ignored_questions", allUser),
+                Map.of("ignore", true, "ignored_questions", mixed),
+                Map.of("label", Map.of("期间", "本月"), "ignore", false, "ignored_questions", user),
+                Map.of("ignore", false, "ignored_questions", user),
+                Map.of("ignore", false, "ignored_questions", user));
+        for (int i = 0; i < inputs.size(); i++) {
+            Map<String, Object> wire = mapper.toInteractionWireRequest(interaction(Map.of(
+                    "approved", i >= 3, "questionnaireAnswers", inputs.get(i))));
+            assertThat(wire).containsExactlyInAnyOrderEntriesOf(Map.of("type", "approval-response",
+                    "runId", "run-b", "messageId", "user-message", "sessionId", "runtime-session",
+                    "skillId", "skill-a", "request_id", "q1", "approved", i >= 3, "scope", "once",
+                    "questionnaire_answers", expected.get(i)));
+            assertThat(wire.toString()).doesNotContain("ignoredQuestions");
+        }
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void forwardsMetadataExtensionsButOverridesReservedBindingFields() {
         Map<String, Object> metadata = Map.of(

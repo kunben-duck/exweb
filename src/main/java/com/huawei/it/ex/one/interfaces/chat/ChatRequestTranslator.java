@@ -78,7 +78,7 @@ public class ChatRequestTranslator {
                 runMode, request.parentMessageId(), request.editedMessageId(),
                 request.regeneratedMessageId(), routeTrigger(request.forceReroute()),
                 request.interactionId(), request.approved(), request.scope(),
-                normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName(),
+                normalizeQuestionnaireAnswers(request.questionnaireAnswers()), request.appId(), request.appName(),
                 toAgentMode(request.agentMode()), request.interactionAction(), request.language(),
                 normalizeText(request.intentAccessName()), intentExpertScope);
     }
@@ -212,6 +212,15 @@ public class ChatRequestTranslator {
         }
         String expertName = normalizeRequiredText(selectedExpert.expertName(), "selectedExpert.expertName");
         return new IntentExpertScope(expertId, expertName, intentAccessName);
+    }
+
+    private Map<String, Object> normalizeQuestionnaireAnswers(Map<String, Object> answers) {
+        // 新格式的 null 应报告参数错误，不能先在命令的不可变 Map 复制中触发 NPE。
+        if (answers != null && answers.containsKey("ignoredQuestions")
+                && answers.values().stream().anyMatch(Objects::isNull)) {
+            throw new IllegalArgumentException("逐题忽略请求的 questionnaireAnswers 字段值不能为 null");
+        }
+        return normalizeMetadata(answers);
     }
 
     private Map<String, Object> normalizeMetadata(Map<String, Object> metadata) {

@@ -77,8 +77,14 @@ public class DomainAgentChatRequestMapper {
             normalized.put("ignore", false);
         } else if (Boolean.FALSE.equals(approved) && Boolean.TRUE.equals(values.get("ignore"))) {
             normalized.put("ignore", true);
+        } else if (Boolean.TRUE.equals(approved) && values.get("ignoredQuestions") instanceof List<?> details
+                && !details.isEmpty() && !values.containsKey("ignore")) {
+            normalized.put("ignore", false);
         } else {
             throw new IllegalArgumentException("DomainAgent questionnaire response is invalid");
+        }
+        if (values.containsKey("ignoredQuestions")) {
+            normalized.put("ignored_questions", values.get("ignoredQuestions"));
         }
         body.put("approved", approved);
         body.put("scope", "once");

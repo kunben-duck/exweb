@@ -179,10 +179,36 @@ Delegate转专家、不同角色及跨聚合专家范围仍不交叉恢复；没
 | request_id | string | 是 | 值取自对应 `approval-request` 中的 `approval_id` |
 | approved | bool | 是 | 是否批准 |
 | scope | string | 是 | 当前固定为 `"once"` |
-| questionnaire_answers | object | 是 | 正常回答包含 `label` 和 `ignore=false`；忽略问卷只包含 `ignore=true` |
+| questionnaire_answers | object | 是 | 正常回答包含 `label` 和 `ignore=false`；整份忽略包含 `ignore=true`；可选 `ignored_questions` 记录逐题忽略原因 |
 
 > ChatService 不发送 `approval_id`、扁平答案、`metadata` 或 `timestamp`。完整问卷协议以
 > [ask_user 交互文档](relay-clarify.md)为准。
+
+逐题忽略与 DomainAgent 使用相同协议，前端的 `questionnaireAnswers.ignoredQuestions` 映射为
+`questionnaire_answers.ignored_questions`。新增字段不改变 `config/RESUME` 或帧发送顺序：
+
+```json
+{
+  "type": "approval-response",
+  "request_id": "approval_xxx",
+  "approved": false,
+  "scope": "once",
+  "questionnaire_answers": {
+    "ignore": true,
+    "ignored_questions": [
+      {"question": "请选择技术方案", "reason": "USER"},
+      {"question": "请选择部署环境", "reason": "TIMEOUT"}
+    ]
+  }
+}
+```
+
+`reason` 精确接受 `USER/TIMEOUT`；题目必须属于原问卷、不得重复或同时出现在 `label`。
+整份忽略的明细须覆盖全部题目；逐题提交使用 `approved=true`，可以只提交忽略列表，此时下游
+不含 `label` 且 `ignore=false`。`TIMEOUT` 必须满足该 Interaction 持久化的自动忽略截止时间，
+不读取 DomainAgent 配置或重新计算。旧请求不含明细时，校验与报文不变，忽略原因未知。
+超时不提交草稿，保留人工忽略原因，其余题目记为超时，以整份忽略提交。Relay 下游需要支持新字段后
+再启用前端；ChatService 不承诺下游已实现逐题处理，也不修改问卷业务结果判定。
 
 ### 2.4 interrupt / pause — 中断当前轮次
 

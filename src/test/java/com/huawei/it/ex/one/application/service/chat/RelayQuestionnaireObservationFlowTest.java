@@ -60,19 +60,22 @@ import java.util.concurrent.CopyOnWriteArrayList;
 class RelayQuestionnaireObservationFlowTest extends ChatFlowTestSupport {
     @ParameterizedTest
     @CsvSource({
-        "false, false, 1, true, false, false",
-        "true, false, 1, true, true, false",
-        "false, true, 1, true, true, false",
-        "true, true, 1, true, false, false",
-        "false, false, 2, true, true, false",
-        "true, false, 2, true, true, false",
-        "false, false, 1, false, false, false",
-        "false, true, 2, true, true, true",
-        "true, false, 2, true, true, true"
+        "false, false, 1, true, false, false, false",
+        "true, false, 1, true, true, false, false",
+        "false, true, 1, true, true, false, false",
+        "true, true, 1, true, false, false, false",
+        "false, false, 2, true, true, false, false",
+        "true, false, 2, true, true, false, false",
+        "false, false, 1, false, false, false, false",
+        "false, true, 2, true, true, true, false",
+        "true, false, 2, true, true, true, false",
+        "true, true, 2, true, true, false, true",
+        "true, false, 2, true, true, true, true",
+        "true, false, 1, false, false, false, true"
     })
     void nullableQuestionnaireKeepsTraceAcrossAnswersAndInstances(
             boolean crossInstance, boolean ignore, int rounds, boolean enabled, boolean priorRefusal,
-            boolean noStoreContinuation) {
+            boolean noStoreContinuation, boolean detailedIgnore) {
         try (ObservationTestFixture first = observation(enabled);
                 ObservationTestFixture second = observation(enabled)) {
             Fixture fixture = new Fixture(rounds, priorRefusal);
@@ -106,10 +109,16 @@ class RelayQuestionnaireObservationFlowTest extends ChatFlowTestSupport {
                     ? fixture.service(second, "instance-b") : firstService;
             for (int round = 1; round <= rounds; round++) {
                 continuation.advance(Duration.ofSeconds(5));
+                Map<String, Object> answers = ignore ? Map.of("ignore", true) : Map.of("label", Map.of("Choose", "A"));
+                if (detailedIgnore) {
+                    answers = ignore ? Map.of("ignore", true, "ignoredQuestions",
+                            List.of(Map.of("question", "Choose", "reason", "USER")))
+                            : Map.of("ignoredQuestions", List.of(Map.of("question", "Choose", "reason", "USER")));
+                }
                 var next = nextService.startRun(fixture.user, new ChatCommand(null, null, null,
                         root.sessionId(), null, "web", null, List.of(), Map.of(), null, null,
                         ChatRunMode.CONTINUE_INTERACTION, null, null, null, null, waiting.id(), !ignore,
-                        "once", ignore ? Map.of("ignore", true) : Map.of("label", Map.of("Choose", "A"))),
+                        "once", answers),
                         RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
                 assertThat(next).isNotNull();
                 boolean completed = round == rounds;
@@ -118,6 +127,9 @@ class RelayQuestionnaireObservationFlowTest extends ChatFlowTestSupport {
                 assertThat(next.userMessageId()).isEqualTo(root.userMessageId());
                 assertThat(fixture.interactions.requests.get(waiting.id()).status())
                         .isEqualTo(ChatInteractionStatus.ANSWERED);
+                assertThat(fixture.interactions.requests.get(waiting.id()).responsePayload())
+                        .containsEntry("questionnaireAnswers", answers);
+                assertThat(fixture.answers.get(round - 1).responsePayload()).containsEntry("questionnaireAnswers", answers);
                 TurnTraceContext sent = fixture.answers.get(round - 1).turnTraceContext();
                 if (enabled) {
                     assertInherited(sent, original, round + 1);

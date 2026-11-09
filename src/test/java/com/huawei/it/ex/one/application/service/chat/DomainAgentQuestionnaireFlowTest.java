@@ -79,6 +79,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -640,6 +641,60 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
         assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
         assertThat(submitted.get()).isNull();
         assertThat(runs.runs).hasSize(1);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void detailedIgnoresArePersistedAndForwardedWithoutConsumingInvalidClaims(boolean wholeIgnore, boolean noStore) {
+        ChatInteractionRequest original = start();
+        Map<String, Object> answers = wholeIgnore
+                ? Map.of("ignore", true, "ignoredQuestions", List.of(
+                        Map.of("question", "期间", "reason", "USER"),
+                        Map.of("question", "范围", "reason", "TIMEOUT")))
+                : Map.of("label", Map.of("期间", "本月"), "ignoredQuestions",
+                        List.of(Map.of("question", "范围", "reason", "USER")));
+        Map<String, Object> premature = Map.of("ignoredQuestions",
+                List.of(Map.of("question", "范围", "reason", "TIMEOUT")));
+        assertThatThrownBy(() -> respond(original, true, premature)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> respond(original, true, Map.of("label", Map.of("范围", List.of("境内")),
+                "ignoredQuestions", List.of(Map.of("question", "范围", "reason", "USER")))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(interactions.requests.get(original.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(submitted.get()).isNull();
+        assertThat(runs.runs).hasSize(1);
+
+        Map<String, Object> payload = new LinkedHashMap<>(original.requestPayload());
+        payload.put("autoActionType", "IGNORE_QUESTIONNAIRE");
+        payload.put("autoActionAt", Instant.now().minusSeconds(1).toString());
+        ChatInteractionRequest waiting = new ChatInteractionRequest(original.id(), original.tenantId(), original.userId(),
+                original.sessionId(), original.sourceRunId(), original.continueRunId(), original.userMessageId(),
+                original.assistantMessageId(), original.runtimeProvider(), original.runtimeBindingId(),
+                original.runtimeSessionId(), original.approvalId(), original.interactionType(), original.status(),
+                payload, original.responsePayload(), original.expiresAt(), original.answeredAt(), original.cancelledAt(),
+                original.createdAt(), original.updatedAt());
+        interactions.requests.put(waiting.id(), waiting);
+        if (noStore) {
+            var policy = new AgentDataPersistenceState("hidden")
+                    .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER).markRuntimeDispatchStarted();
+            runs.save(runs.runs.get(waiting.sourceRunId()).withMetadata(policy.runMetadataOverlay()));
+        }
+        List<ChatEvent> result = respond(waiting, !wholeIgnore, answers);
+        assertThat(result.getLast().type()).isEqualTo("run.completed");
+        assertThat(submitted.get().responsePayload()).containsEntry("questionnaireAnswers", answers);
+        assertThat(submitted.get().runtimeSessionId()).isEqualTo(waiting.runtimeSessionId());
+        assertThat(interactions.requests.get(waiting.id()).responsePayload()).containsEntry("questionnaireAnswers", answers);
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
+        assertThat(result).filteredOn(event -> "clarification-response".equals(event.payload().get("sourceType")))
+                .singleElement().satisfies(event -> assertThat(event.payload()).containsEntry("questionnaireAnswers", answers));
+        if (!noStore) {
+            assertThat(messages.messages).filteredOn(message -> waiting.assistantMessageId().equals(message.id()))
+                    .singleElement().satisfies(message -> assertThat(message.parts())
+                            .filteredOn(part -> "AGENT_CLARIFICATION_RESPONSE".equals(part.partType()))
+                            .singleElement().satisfies(part -> assertThat(part.payload())
+                                    .containsEntry("questionnaireAnswers", answers)));
+        }
+        assertThatThrownBy(() -> respond(waiting, !wholeIgnore, answers)).isInstanceOf(ChatInteractionUnavailableException.class);
+        assertThat(runs.runs).hasSize(2);
     }
 
     @Test

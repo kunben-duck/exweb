@@ -168,7 +168,7 @@ paths:
         - AMBIGUOUS_ROUTE 代选：提交 `interactionAction=AUTO_SELECT`。
         - AMBIGUOUS_ROUTE 其他：提交答案或附件，重新调用 Intent。
         - 拒答切换确认：提交 `approved=true/false`；到达 autoActionAt 后前端提交 `approved=true`。
-        - Relay/DomainAgent 问卷：严格使用 `questionnaireAnswers.label`，忽略使用 `ignore=true`，不支持附件。
+        - Relay/DomainAgent 问卷：答案使用 `questionnaireAnswers.label`，整份忽略使用 `ignore=true`；可选 `ignoredQuestions` 记录逐题 USER/TIMEOUT 原因，不支持附件。
           DomainAgent 续跑复用原user/assistant，使用原Binding向同一HTTP地址发送approval-response，
           不重发query/messages/附件；下游再次拒答使用发问时保存的逻辑入口及专家范围重意图。
 
@@ -2889,6 +2889,29 @@ components:
           nullable: true
           maxProperties: 50
           additionalProperties: true
+          description: >-
+            Relay/DomainAgent问卷可选ignoredQuestions；不传时保留原label/ignore规则。
+            逐题提交approved=true，可同时提交有效label，也可仅提交忽略列表，label允许省略或空对象。
+            整份忽略approved=false且ignore=true，不得携带label；提供明细时必须覆盖全部题目。
+            TIMEOUT须通过持久化autoActionType=IGNORE_QUESTIONNAIRE及autoActionAt已到校验，非法提交在claim前拒绝。
+            超时不提交草稿，人工已忽略项保留USER，其余题目记为TIMEOUT。旧请求缺少原因时不补造。
+          properties:
+            ignoredQuestions:
+              type: array
+              minItems: 1
+              description: 仅DomainAgent/Relay问卷支持；题目须精确匹配原问卷，不重复且不与label重叠。下游映射为ignored_questions。
+              items:
+                type: object
+                required: [question, reason]
+                additionalProperties: false
+                properties:
+                  question:
+                    type: string
+                    minLength: 1
+                    description: 原问卷完整问题文本，不能为纯空白。
+                  reason:
+                    type: string
+                    enum: [USER, TIMEOUT]
         attachments:
           type: array
           nullable: true
@@ -2987,7 +3010,7 @@ components:
         ambiguousOther: questionnaireAnswers 或有效 attachments，重新调用 Intent。
         routeSwitchConfirmation: approved=true/false，不提交 target 或答案；approved=true允许本次显式附件，不传action时保持原重新意图或存量候选调用。
         retryCurrent: BEFORE_INTENT且持久化refusalRecoverable=true时允许interactionAction=RETRY_CURRENT，要求approved=true，不传target或答案，允许本次显式附件。
-        relayQuestionnaire: questionnaireAnswers.label 或 questionnaireAnswers.ignore=true，二者互斥。
+        relayQuestionnaire: DomainAgent与Relay共用label/ignore互斥规则；可选ignoredQuestions记载逐题原因，逐题提交可仅有忽略列表，整份忽略附明细须覆盖全部题目。
 
     SwitchDomainAgentRequest:
       type: object
@@ -3834,6 +3857,18 @@ components:
           nullable: true
           enum: [IGNORE_QUESTIONNAIRE]
       x-internal-relay-forwarding:
+        detailedIgnore:
+          type: approval-response
+          request_id: approval_xxx
+          approved: false
+          scope: once
+          questionnaire_answers:
+            ignore: true
+            ignored_questions:
+              - question: 请选择技术方案
+                reason: USER
+              - question: 请选择部署环境
+                reason: TIMEOUT
         answer:
           type: approval-response
           request_id: approval_xxx
@@ -3855,6 +3890,8 @@ components:
           run-B 跳过 Intent，使用原 Relay runtimeSessionId 执行 RESUME，等待 session-ready 后发送
           approval-response。request_id 的值来源于入站 approval-request.approval_id；当前协议不发送
           approval_id、metadata 或 timestamp。正常回答由后端补充 questionnaire_answers.ignore=false。
+          可选ignoredQuestions映射为ignored_questions；没有答案的逐题提交省略label，ignore=false。
+          新字段需下游支持后启用，不传时出站报文保持不变。DomainAgent使用相同答案映射，但仍使用原HTTP请求。
 
     RelayQuestionnaireQuestion:
       type: object

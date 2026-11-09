@@ -638,6 +638,20 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         assertThat(answerRequest.get()).isNull();
         assertThat(bindings.saved.id()).isEqualTo(originalBindingId);
         assertThat(bindings.saved.lastRunId()).isEqualTo(run.id());
+        for (Map<String, Object> answers : List.of(
+                Map.<String, Object>of("ignoredQuestions", List.of(Map.of("question", "请选择技术方案", "reason", "TIMEOUT"))),
+                Map.<String, Object>of("ignoredQuestions", List.of(Map.of("question", "unknown", "reason", "USER"))),
+                Map.<String, Object>of("label", Map.of("请选择技术方案", "方案A"), "ignoredQuestions",
+                        List.of(Map.of("question", "请选择技术方案", "reason", "USER"))))) {
+            ChatCommand invalidDetails = new ChatCommand(null, null, null, run.sessionId(), null, "mobile", null,
+                    List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                    null, waiting.id(), true, "once", answers);
+            assertThatThrownBy(() -> service.startRun(user, invalidDetails, RuntimeForwardHeaders.empty())
+                    .block(Duration.ofSeconds(5))).isInstanceOf(IllegalArgumentException.class);
+            assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+            assertThat(runs.runs).hasSize(1);
+            assertThat(answerRequest.get()).isNull();
+        }
         ChatCommand answer = new ChatCommand(null, null, null, run.sessionId(), null, "mobile", null,
                 List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                 null, waiting.id(), true, "once", Map.of("label", Map.of("请选择技术方案", "方案A")));

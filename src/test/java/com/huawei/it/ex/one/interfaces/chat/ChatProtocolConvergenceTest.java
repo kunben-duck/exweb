@@ -85,6 +85,32 @@ import java.util.stream.Collectors;
 class ChatProtocolConvergenceTest {
 
     @ParameterizedTest
+    @ValueSource(strings = {"ignoredQuestions", "label", "ignore"})
+    void detailedIgnoreNullFieldsAreParameterErrorsBeforeCommandConstruction(String nullField) {
+        Map<String, Object> answers = new java.util.LinkedHashMap<>();
+        answers.put("ignoredQuestions", List.of(Map.of("question", "Q1", "reason", "USER")));
+        answers.put(nullField, null);
+        CreateChatRunRequest request = new ObjectMapper().convertValue(Map.of(
+                "sessionId", "session1", "runMode", "CONTINUE_INTERACTION", "interactionId", "interaction1",
+                "approved", true, "questionnaireAnswers", answers), CreateChatRunRequest.class);
+        assertThatThrownBy(() -> new ChatRequestTranslator().toCommand(request))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("逐题忽略请求的 questionnaireAnswers 字段值不能为 null");
+    }
+
+    @Test
+    void translatorPreservesDetailedIgnoresAndNestedNullForClaimValidation() {
+        Map<String, Object> ignored = new java.util.LinkedHashMap<>();
+        ignored.put("question", "Q1");
+        ignored.put("reason", null);
+        Map<String, Object> answers = Map.of("ignoredQuestions", List.of(ignored));
+        CreateChatRunRequest request = new ObjectMapper().convertValue(Map.of(
+                "runMode", "CONTINUE_INTERACTION", "interactionId", "interaction1", "approved", true,
+                "questionnaireAnswers", answers), CreateChatRunRequest.class);
+        assertThat(new ChatRequestTranslator().toCommand(request).questionnaireAnswers()).isEqualTo(answers);
+    }
+
+    @ParameterizedTest
     @NullSource
     @ValueSource(booleans = {true, false})
     void translatorBuildsTrustedIntentExpertScopeOutsideClientMetadata(Boolean forceReroute) {

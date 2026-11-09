@@ -137,6 +137,14 @@
 |------|------|------|------|
 | label | object | 否 | 答案对象，key为问题文本，value为答案（单选为字符串，多选为数组） |
 | ignore | boolean | 否 | 是否忽略问卷，为true时工具返回失败 |
+| ignored_questions | array | 否 | 逐题忽略明细；每项仅含原问题文本 `question` 和原因 `reason=USER/TIMEOUT` |
+
+ChatService 前端使用 camelCase `questionnaireAnswers.ignoredQuestions`，下游使用 snake_case
+`ignored_questions`。未传新字段时保留原行为；整份忽略附明细须覆盖全部题目，不能携带答案。
+逐题提交可以同时提供 `label` 与明细，但题目不能重叠；也可仅提供明细，下游仍为 `ignore=false`。
+声明 `TIMEOUT` 必须通过 ChatService 已保存的 `autoActionAt/autoActionType` 校验，与下文描述的
+Relay 工具自身超时不同。前端超时不提交草稿答案，人工已忽略项保留 `USER`，其余为 `TIMEOUT`。
+双方支持新协议后再启用前端，旧请求缺少原因时不推测补齐。
 
 
 ## 五、超时处理

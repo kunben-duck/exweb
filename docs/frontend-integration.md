@@ -1900,7 +1900,7 @@ user 消息正文仍为 `帮我看下这个方案`。多轮澄清按首次出现
 
 DomainAgent 也可返回 `runtime.card(source=domain-agent, sourceType=approval-request,
 operation_type=questionnaire)`，前端复用下节 Relay 的问卷卡片、`label/ignore` 答案格式及
-`CONTINUE_INTERACTION` 请求，不增加公开字段。不要将普通卡片视为 Ask User。
+`CONTINUE_INTERACTION` 请求，并统一支持可选 `ignoredQuestions`。不要将普通卡片视为 Ask User。
 
 1. 收到问卷卡片后，等待 `run.waiting_user` 中的可信 `interactionId/assistantMessageId`。
    Run-A 已停止本轮流式执行，Binding 仍保持 ACTIVE。等待期间普通 NEXT 仍受原等待态规则约束。
@@ -1985,6 +1985,48 @@ Relay 返回 `approval-request(operation_type=questionnaire)` 时，run-A 保存
 `label` 与 `ignore` 互斥；旧扁平答案、未知问题、单选数组、多选字符串以及
 `approved=true + ignore=true` 会在 Interaction claim 前返回参数错误，原 Interaction 仍为 `WAITING`。
 续接请求不支持附件。Cookie 只使用本次 HTTP 请求头，不得写入 metadata。
+
+**逐题忽略原因（DomainAgent 与 Relay 共用）**
+
+仅对支持新协议的后端及下游启用 `questionnaireAnswers.ignoredQuestions`。例如用户主动忽略第一题，
+随后第二题超时，前端仍提交整份忽略，并保留各题真实原因：
+
+```json
+{
+  "sessionId": "session_xxx",
+  "runMode": "CONTINUE_INTERACTION",
+  "interactionId": "interaction_xxx",
+  "approved": false,
+  "scope": "once",
+  "questionnaireAnswers": {
+    "ignore": true,
+    "ignoredQuestions": [
+      {"question": "请选择技术方案", "reason": "USER"},
+      {"question": "请选择部署环境", "reason": "TIMEOUT"}
+    ]
+  }
+}
+```
+
+| 提交方式 | 参数 |
+| --- | --- |
+| 整份人工忽略 | `approved=false + ignore=true`，可附全部题目及 `USER` 原因 |
+| 整份超时忽略 | 同上，全部原因为 `TIMEOUT`，或保留已有人工忽略项的 `USER` |
+| 部分回答、部分人工忽略 | `approved=true + label + ignoredQuestions`，不传 `ignore` |
+| 仅逐题忽略 | `approved=true + ignoredQuestions`，可省略 `label` 或传空对象 |
+
+- 列表非空，每项仅有 `question/reason`；题目精确匹配原文本，不可重复、未知或与答案重叠。
+  `reason` 大小写敏感，仅接受 `USER/TIMEOUT`；未知字段、null、空白及错误类型拒绝。
+- 整份忽略附明细时必须覆盖全部题目，不可携带 `label`；人工逐题提交不必覆盖全部题目，
+  未列出的题目仍是未提交，不自动视为忽略。单选、多选有效答案的格式保持不变。
+- `TIMEOUT` 校验该 Interaction 已保存的 `autoActionType=IGNORE_QUESTIONNAIRE` 与 `autoActionAt`，
+  早于截止时间或未启用自动忽略时，在 claim 前返回参数错误，问卷仍等待。前端不要自行使用另一 Provider 的期限。
+- 自动忽略不提交草稿答案：前端保存用户明确忽略的题目，其余记为 `TIMEOUT`；不能覆盖原 `USER`。
+  用户重新填写时移除对应忽略记录。没有服务端草稿保存，刷新后不能推测已丢失的人工选择。
+- 两种下游都接收 `questionnaire_answers.ignored_questions`；逐题提交由后端补 `ignore=false`，无答案时省略 `label`。
+  新字段沿用现有 Interaction 响应与历史留存，不增加独立保存或服务器定时任务。
+- 不传新字段的旧请求保持原校验及报文，不推测原因；新参数须等全部后端实例和对应下游支持后启用。
+  服务端验证超时资格，但原因仍是客户端声明，不证明实际人工点击。
 
 提交成功返回新的 `ChatRunStartDto`：
 

@@ -9,8 +9,12 @@ import static com.huawei.it.ex.one.application.service.observation.ObservationTe
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -64,6 +68,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -1132,6 +1137,177 @@ class SessionApplicationServiceTest {
                 branch, "run2", List.of()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("分支历史快照");
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", " \t", " custom branch "})
+    void branchCopiesMultipleTurnsWithoutChangingRepositoryOrIdOrder(String title) {
+        InMemorySessionRepository storedSessions = new InMemorySessionRepository();
+        InMemoryMessageRepository storedMessages = new InMemoryMessageRepository();
+        ChatSession sourceSession = storedSessions.save(taggedSession("session1", "fund-app", "fund", Instant.now()));
+        for (int i = 0; i < 4; i++) {
+            ChatMessage source = storedMessages.save(branchSourceMessage(i));
+            if ("user".equals(source.role())) {
+                storedMessages.saveAttachment(new ChatMessageAttachment("att-" + i, "tenant1", "user1",
+                        "session1", source.id(), "doc-" + i, 5, "report.pdf", "application/pdf", 123L,
+                        null, source.createdAt()));
+            }
+        }
+        List<ChatMessage> sourcePath = storedMessages.findPathToMessage("tenant1", "user1", "session1", "source-3");
+        SessionRepository sessions = mock(SessionRepository.class, delegatesTo(storedSessions));
+        ChatMessageRepository messages = mock(ChatMessageRepository.class, delegatesTo(storedMessages));
+        IdGenerator ids = spy(new IncrementingIdGenerator());
+        SessionApplicationService service = new SessionApplicationService(sessions, messages, ids, new PermissionChecker());
+
+        ChatSession branch = service.createBranch(user(), "session1", "source-3", title);
+        List<ChatMessage> copies = storedMessages.findPathToMessage(
+                "tenant1", "user1", branch.id(), branch.currentLeafMessageId());
+
+        assertThat(branch.title()).isEqualTo(title == null || title.isBlank() ? "分支 · session1" : title.trim());
+        assertThat(branch.appId()).isEqualTo(sourceSession.appId());
+        assertThat(branch.appName()).isEqualTo(sourceSession.appName());
+        assertThat(branch.channel()).isEqualTo(sourceSession.channel());
+        assertThat(branch.rootSessionId()).isEqualTo(sourceSession.rootSessionId());
+        assertThat(branch.branchSourceSessionId()).isEqualTo(sourceSession.id());
+        assertThat(branch.branchSourceMessageId()).isEqualTo("source-3");
+        assertThat(branch.status()).isEqualTo("ACTIVE");
+        assertThat(branch.lastNodeOrder()).isEqualTo(4);
+        assertCopiedBranchPath(sourcePath, copies, branch);
+        assertBranchCopyCallOrder(sessions, messages, ids, sourcePath, copies, branch);
+        assertThat(storedSessions.findById("session1")).contains(sourceSession);
+        assertThat(storedMessages.findPathToMessage("tenant1", "user1", "session1", "source-3"))
+                .isEqualTo(sourcePath);
+    }
+
+    private ChatMessage branchSourceMessage(int index) {
+        Instant now = Instant.parse("2026-10-01T00:00:00Z");
+        boolean assistant = index % 2 == 1;
+        List<ChatMessagePart> parts = assistant ? List.of(new ChatMessagePart("part-" + index,
+                "tenant1", "user1", "session1", "source-" + index, "run-" + index,
+                "CARD", "cardUrl", "card", Map.of("cardUrl", "https://example.com/card.js"), 7, now)) : List.of();
+        return new ChatMessage("source-" + index, "tenant1", "user1", "session1",
+                index == 0 ? null : "source-" + (index - 1), (long) index + 10, index, 3,
+                assistant ? "assistant" : "user", "content-" + index, 11, "run-" + index,
+                "NORMAL", false, null, null, "old-edit", "old-regeneration",
+                "{\"skillId\":\"agent-a\"}", parts, now).withChannel(assistant ? "mobile" : "web");
+    }
+
+    private void assertCopiedBranchPath(List<ChatMessage> sources, List<ChatMessage> copies, ChatSession branch) {
+        assertThat(copies).hasSameSizeAs(sources);
+        for (int i = 0; i < sources.size(); i++) {
+            ChatMessage source = sources.get(i);
+            ChatMessage copy = copies.get(i);
+            assertThat(copy).usingRecursiveComparison().ignoringFields("id", "sessionId", "parentMessageId",
+                    "nodeOrder", "siblingIndex", "runId", "originType", "locked", "sourceSessionId",
+                    "sourceMessageId", "editedFromMessageId", "regeneratedFromMessageId", "parts",
+                    "attachments", "createdAt").isEqualTo(source);
+            assertThat(copy.id()).isNotEqualTo(source.id());
+            assertThat(copy.sessionId()).isEqualTo(branch.id());
+            assertThat(copy.parentMessageId()).isEqualTo(i == 0 ? null : copies.get(i - 1).id());
+            assertThat(copy.nodeOrder()).isEqualTo(i + 1L);
+            assertThat(copy.siblingIndex()).isEqualTo(1);
+            assertThat(copy.runId()).isNull();
+            assertThat(copy.originType()).isEqualTo("BRANCH_SNAPSHOT");
+            assertThat(copy.locked()).isTrue();
+            assertThat(copy.sourceSessionId()).isEqualTo(source.sessionId());
+            assertThat(copy.sourceMessageId()).isEqualTo(source.id());
+            assertThat(copy.editedFromMessageId()).isNull();
+            assertThat(copy.regeneratedFromMessageId()).isNull();
+            assertThat(copy.createdAt()).isEqualTo(branch.createdAt());
+            assertThat(copy.parts()).hasSameSizeAs(source.parts());
+            if (!source.parts().isEmpty()) {
+                ChatMessagePart part = copy.parts().getFirst();
+                assertThat(part).usingRecursiveComparison()
+                        .ignoringFields("id", "sessionId", "messageId", "partOrder", "createdAt")
+                        .isEqualTo(source.parts().getFirst());
+                assertThat(part.id()).isNotEqualTo(source.parts().getFirst().id());
+                assertThat(part.sessionId()).isEqualTo(branch.id());
+                assertThat(part.messageId()).isEqualTo(copy.id());
+                assertThat(part.partOrder()).isEqualTo(1);
+                assertThat(part.createdAt()).isEqualTo(branch.createdAt());
+            }
+            assertCopiedBranchAttachments(source, copy);
+        }
+    }
+
+    private void assertCopiedBranchAttachments(ChatMessage source, ChatMessage copy) {
+        assertThat(copy.attachments()).hasSameSizeAs(source.attachments());
+        if (!source.attachments().isEmpty()) {
+            ChatMessageAttachment attachment = copy.attachments().getFirst();
+            ChatMessageAttachment original = source.attachments().getFirst();
+            assertThat(attachment).usingRecursiveComparison().ignoringFields("id", "sessionId", "messageId",
+                    "attachmentOrder", "sourceAttachmentId", "createdAt").isEqualTo(original);
+            assertThat(attachment.id()).isNotEqualTo(original.id());
+            assertThat(attachment.sessionId()).isEqualTo(copy.sessionId());
+            assertThat(attachment.messageId()).isEqualTo(copy.id());
+            assertThat(attachment.attachmentOrder()).isEqualTo(1);
+            assertThat(attachment.sourceAttachmentId()).isEqualTo(original.id());
+        }
+    }
+
+    private void assertBranchCopyCallOrder(SessionRepository sessions, ChatMessageRepository messages,
+                                           IdGenerator ids, List<ChatMessage> sources,
+                                           List<ChatMessage> copies, ChatSession branch) {
+        InOrder order = inOrder(sessions, messages, ids);
+        order.verify(sessions).findByTenantIdAndUserIdAndId("tenant1", "user1", "session1");
+        order.verify(messages).findByOwnerAndId("tenant1", "user1", "source-3");
+        order.verify(messages).findPathToMessage("tenant1", "user1", "session1", "source-3");
+        order.verify(ids).newId("session", IdGenerateContext.of("tenant1", "user1"));
+        order.verify(sessions).save(any(ChatSession.class));
+        IdGenerateContext context = IdGenerateContext.of("tenant1", "user1", branch.id());
+        for (ChatMessage source : sources) {
+            order.verify(ids).newId("msg", context);
+            order.verify(sessions).nextNodeOrder("tenant1", "user1", branch.id());
+            if (!source.parts().isEmpty()) {
+                order.verify(ids).newId("part", context);
+            }
+            order.verify(messages).save(any(ChatMessage.class));
+            order.verify(messages).findAttachments("tenant1", "user1", source.id());
+            if (!source.attachments().isEmpty()) {
+                order.verify(ids).newId("msg_att", context);
+                order.verify(messages).saveAttachment(any(ChatMessageAttachment.class));
+            }
+        }
+        order.verify(sessions).updateCurrentLeaf("tenant1", "user1", branch.id(), copies.getLast().id());
+        order.verify(sessions).findByTenantIdAndUserIdAndId("tenant1", "user1", branch.id());
+        verifyNoMoreInteractions(sessions, messages, ids);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing-session", "other-user", "other-tenant", "deleted", "missing-message",
+            "other-session-message", "empty-path"})
+    void invalidBranchSourceDoesNotCreateIdsOrWrite(String scenario) {
+        SessionRepository sessions = mock(SessionRepository.class);
+        ChatMessageRepository messages = mock(ChatMessageRepository.class);
+        IdGenerator ids = mock(IdGenerator.class);
+        UserContext caller = new UserContext("other-tenant".equals(scenario) ? "other" : "tenant1",
+                "other-user".equals(scenario) ? "other" : "user1", "tester");
+        ChatSession source = taggedSession("session1", "source", "deleted".equals(scenario) ? "DELETED" : "ACTIVE",
+                null, null, Instant.now());
+        if (!"missing-session".equals(scenario)) {
+            when(sessions.findById("session1")).thenReturn(Optional.of(source));
+        }
+        if (!List.of("missing-session", "other-user", "other-tenant").contains(scenario)) {
+            when(sessions.findByTenantIdAndUserIdAndId("tenant1", "user1", "session1"))
+                    .thenReturn(Optional.of(source));
+        }
+        if (!"missing-message".equals(scenario)) {
+            ChatMessage leaf = "other-session-message".equals(scenario)
+                    ? new ChatMessage("source-3", "tenant1", "user1", "other", "assistant", "answer", 1, Instant.now())
+                    : branchSourceMessage(3);
+            when(messages.findByOwnerAndId("tenant1", "user1", "source-3")).thenReturn(Optional.of(leaf));
+        }
+        SessionApplicationService service = new SessionApplicationService(sessions, messages, ids, new PermissionChecker());
+        assertThatThrownBy(() -> service.createBranch(caller, "session1", "source-3", null))
+                .isInstanceOf(List.of("other-user", "other-tenant").contains(scenario)
+                        ? SecurityException.class : IllegalArgumentException.class);
+        verifyNoInteractions(ids);
+        verify(sessions, never()).save(any());
+        verify(sessions, never()).nextNodeOrder(any(), any(), any());
+        verify(sessions, never()).updateCurrentLeaf(any(), any(), any(), any());
+        verify(messages, never()).save(any());
+        verify(messages, never()).saveAttachment(any());
     }
 
     @Test

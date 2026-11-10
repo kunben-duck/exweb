@@ -38,8 +38,7 @@ record RouteSwitchRerouteContext(String originalQuery, String routeQuery,
             return false;
         }
         if (!RETRY_CURRENT.equals(action) || !Boolean.TRUE.equals(command.approved())
-                || command.targetType() != null && !command.targetType().isBlank()
-                || command.targetId() != null && !command.targetId().isBlank()
+                || hasExplicitTarget(command)
                 || !command.questionnaireAnswers().isEmpty()) {
             throw new IllegalArgumentException("RETRY_CURRENT 需要 approved=true，且不能指定目标或问卷答案");
         }
@@ -50,6 +49,11 @@ record RouteSwitchRerouteContext(String originalQuery, String routeQuery,
             throw new IllegalArgumentException("当前确认不支持原技能重试");
         }
         return true;
+    }
+
+    private static boolean hasExplicitTarget(ChatInteractionResponseCommand command) {
+        return command.targetType() != null && !command.targetType().isBlank()
+                || command.targetId() != null && !command.targetId().isBlank();
     }
 
     static boolean authorized(ChatCommand command) {

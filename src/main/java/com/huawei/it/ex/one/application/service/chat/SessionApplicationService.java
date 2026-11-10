@@ -943,6 +943,12 @@ public class SessionApplicationService implements ChatSessionFacade {
                 now,
                 now
         ));
+        String previousNewMessageId = copyBranchPath(user, branch, sourcePath, now);
+        sessionRepository.updateCurrentLeaf(user.tenantId(), user.ownerUserId(), branch.id(), previousNewMessageId);
+        return requireOwnedSession(user.tenantId(), user.ownerUserId(), branch.id(), false);
+    }
+
+    private String copyBranchPath(UserContext user, ChatSession branch, List<ChatMessage> sourcePath, Instant now) {
         String previousNewMessageId = null;
         ChatMessage lastCopied = null;
         for (ChatMessage source : sourcePath) {
@@ -974,8 +980,7 @@ public class SessionApplicationService implements ChatSessionFacade {
             copyAttachments(user, source, lastCopied);
             previousNewMessageId = lastCopied.id();
         }
-        sessionRepository.updateCurrentLeaf(user.tenantId(), user.ownerUserId(), branch.id(), previousNewMessageId);
-        return requireOwnedSession(user.tenantId(), user.ownerUserId(), branch.id(), false);
+        return previousNewMessageId;
     }
 
     private List<ChatMessagePart> buildMessageParts(MessagePartBuildContext context) {

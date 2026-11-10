@@ -51,6 +51,8 @@ import reactor.core.scheduler.Schedulers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -64,6 +66,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
     private final UserContext user = new UserContext("tenant1", "user1", "tester");
@@ -324,6 +327,48 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         assertThat(waiting().id()).isEqualTo(first.id());
         assertThat(intents).hasValue(0);
         assertThat(queries).hasValue(1);
+    }
+
+    @ParameterizedTest
+    @MethodSource("retryParameterCases")
+    void retryParameterValidationPreservesBoundariesAndShortCircuitOrder(
+            String action, Boolean approved, String targetType, String targetId,
+            Map<String, Object> answers, Boolean expected) {
+        recoverable = true;
+        ChatInteractionRequest interaction = start();
+        ChatInteractionResponseCommand command = new ChatInteractionResponseCommand(user, interaction.id(),
+                approved, null, answers, Map.of(), interaction.sessionId(), null, null, List.of(), null,
+                targetType, targetId, action);
+        if (expected == null) {
+            // Invalid submission fields must be rejected before reading persisted retry eligibility.
+            assertThatThrownBy(() -> RouteSwitchRerouteContext.validateRetryCurrent(null, command))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("RETRY_CURRENT 需要 approved=true，且不能指定目标或问卷答案");
+        } else {
+            assertThat(RouteSwitchRerouteContext.validateRetryCurrent(interaction, command)).isEqualTo(expected);
+        }
+        assertThat(interactions.claimCalls).hasValue(0);
+        assertThat(waiting().id()).isEqualTo(interaction.id());
+        assertThat(intents).hasValue(0);
+        assertThat(queries).hasValue(1);
+    }
+
+    private static Stream<Arguments> retryParameterCases() {
+        return Stream.of(
+                Arguments.of(null, false, "DOMAIN_AGENT", "agent-b", Map.of("answer", "value"), false),
+                Arguments.of("", null, null, null, Map.of(), false),
+                Arguments.of(" \t", null, null, null, Map.of(), false),
+                Arguments.of("RETRY_CURRENT", true, null, null, Map.of(), true),
+                Arguments.of("RETRY_CURRENT", true, "", "", Map.of(), true),
+                Arguments.of("RETRY_CURRENT", true, " \t", "\u2003", Map.of(), true),
+                Arguments.of("UNKNOWN", true, null, null, Map.of(), null),
+                Arguments.of("retry_current", true, null, null, Map.of(), null),
+                Arguments.of("RETRY_CURRENT", false, null, null, Map.of(), null),
+                Arguments.of("RETRY_CURRENT", null, null, null, Map.of(), null),
+                Arguments.of("RETRY_CURRENT", true, "DOMAIN_AGENT", null, Map.of(), null),
+                Arguments.of("RETRY_CURRENT", true, null, "agent-b", Map.of(), null),
+                Arguments.of("RETRY_CURRENT", true, "DOMAIN_AGENT", "agent-b", Map.of(), null),
+                Arguments.of("RETRY_CURRENT", true, null, null, Map.of("answer", "value"), null));
     }
 
     @Test

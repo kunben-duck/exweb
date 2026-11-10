@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
+import com.huawei.it.ex.one.domain.intent.IntentServiceIdentity;
 import com.huawei.it.ex.one.domain.observation.ObservationMetadata;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
@@ -130,7 +131,41 @@ public class ChatRequestTranslator {
             sanitized.remove("domainAgentRerouteContext");
             sanitized.remove("_routeSwitchRerouteContext");
         }
-        return removeDomainAgentAsyncTaskMetadata(sanitized);
+        return removeClientIntentIds(removeDomainAgentAsyncTaskMetadata(sanitized));
+    }
+
+    private Map<String, Object> removeClientIntentIds(Map<String, Object> metadata) {
+        boolean nestedId = metadata.get("conversationContext") instanceof Map<?, ?> context
+                && hasRejectIntentId(context);
+        if (!metadata.containsKey(IntentServiceIdentity.BINDING_KEY)
+                && !hasRejectIntentId(metadata) && !nestedId) {
+            return metadata;
+        }
+        Map<String, Object> sanitized = new LinkedHashMap<>(metadata);
+        sanitized.remove(IntentServiceIdentity.BINDING_KEY);
+        removeRejectIntentId(sanitized);
+        if (sanitized.get("conversationContext") instanceof Map<?, ?> context
+                && context.get("lastIntentRejectReason") instanceof Map<?, ?> reason
+                && reason.containsKey("lastIntentId")) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            context.forEach((key, value) -> copy.put(String.valueOf(key), value));
+            removeRejectIntentId(copy);
+            sanitized.put("conversationContext", copy);
+        }
+        return sanitized;
+    }
+
+    private boolean hasRejectIntentId(Map<?, ?> metadata) {
+        return metadata.get("lastIntentRejectReason") instanceof Map<?, ?> reason && reason.containsKey("lastIntentId");
+    }
+
+    private void removeRejectIntentId(Map<String, Object> metadata) {
+        if (metadata.get("lastIntentRejectReason") instanceof Map<?, ?> reason
+                && reason.containsKey("lastIntentId")) {
+            Map<Object, Object> copy = new LinkedHashMap<>(reason);
+            copy.remove("lastIntentId");
+            metadata.put("lastIntentRejectReason", copy);
+        }
     }
 
     private String normalizeRequiredId(String value, String fieldName) {

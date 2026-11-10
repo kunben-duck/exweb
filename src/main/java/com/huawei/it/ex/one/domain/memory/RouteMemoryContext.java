@@ -45,4 +45,22 @@ public record RouteMemoryContext(
     public boolean hasHistory() {
         return !history.isEmpty();
     }
+
+    /** The optional service ID enriches a history item, but does not change its existing deduplication key. */
+    public static void appendHistory(List<Map<String, Object>> history, Map<String, Object> item) {
+        Map<String, Object> key = new LinkedHashMap<>(item);
+        key.remove("intentId");
+        for (int index = 0; index < history.size(); index++) {
+            Map<String, Object> existing = history.get(index);
+            Map<String, Object> existingKey = new LinkedHashMap<>(existing);
+            existingKey.remove("intentId");
+            if (existingKey.equals(key)) {
+                if (!existing.containsKey("intentId") && item.containsKey("intentId")) {
+                    history.set(index, item);
+                }
+                return;
+            }
+        }
+        history.add(item);
+    }
 }

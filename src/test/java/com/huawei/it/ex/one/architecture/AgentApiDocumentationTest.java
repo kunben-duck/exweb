@@ -128,6 +128,26 @@ class AgentApiDocumentationTest {
         return json.valueToTree(api);
     }
 
+    @Test
+    void documentedIntentContextMatchesTheRequestMapper() throws Exception {
+        var context = new com.huawei.it.ex.one.domain.memory.RouteMemoryContext("domain_reject",
+                List.of(Map.of("type", "route", "query", "查询销售指标口径", "intent", "财经知识助手",
+                        "intentId", "intent_knowledge_001")),
+                Map.of("lastIntent", "财经知识助手", "lastIntentId", "intent_knowledge_001",
+                        "domainRejectMessage", "该问题需要销售数据分析能力"));
+        var requestMapper = new com.huawei.it.ex.one.infrastructure.intent.IntentServiceRequestMapper(
+                new com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties());
+        var wire = requestMapper.toWireRequest(null,
+                com.huawei.it.ex.one.domain.memory.MemoryContext.empty().withRouteMemory(context), null);
+        assertThat(json.<JsonNode>valueToTree(wire.conversationContext()))
+                .isEqualTo(documentedExamples().get("intent-reject-context"));
+        var blocks = Pattern.compile("(?s)```json\\s+(.*?)```")
+                .matcher(Files.readString(Path.of("docs/intent/intent.md")));
+        while (blocks.find()) {
+            assertThat(json.readTree(blocks.group(1))).isNotNull();
+        }
+    }
+
     private JsonNode runExample(JsonNode api, String name) {
         JsonNode value = api.path("paths").path("/v1/chat/runs").path("post").path("requestBody")
                 .path("content").path("application/json").path("examples").path(name).path("value");

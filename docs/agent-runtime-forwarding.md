@@ -147,6 +147,30 @@ X-Observation-Id: obs_0123456789abcdef0123456789abcdef
 
 不会转成问卷答案协议，也不会自动传 `RETRY_CURRENT/retry/recoverable/approved`。
 若前端不传 action、仅 approved=true，则沿用拒答重意图参数，先 Intent 再执行目标；不排除原技能。
+
+Intent请求的 `conversationContext` 在有可信原始意图ID时补充如下字段（以下为字段片段）：
+
+<!-- contract: intent-reject-context -->
+```json
+{
+  "routeTrigger": "domain_reject",
+  "lastIntentRejectReason": {
+    "lastIntent": "财经知识助手",
+    "lastIntentId": "intent_knowledge_001",
+    "domainRejectMessage": "该问题需要销售数据分析能力"
+  },
+  "history": [
+    {"type": "route", "query": "查询销售指标口径", "intent": "财经知识助手", "intentId": "intent_knowledge_001"}
+  ]
+}
+```
+
+ID仅来自意图服务实际返回并采用的结果或已保存的选中候选，不使用前端 `selectedIntent.intentId`、
+技能ID、Relay roleName或内部兜底编码。缺失时省略；只有唯一意图的route历史补充ID，澄清、无匹配和
+多意图不补顶层ID。不新增历史条目，不改变原历史过滤范围；该片段不代表当前Run的拒答路由会被加入history。
+完整口径见[Intent协议](intent/intent.md#22-conversationcontext)。这些字段只补充Intent上下文，
+不会自动追加到DomainAgent或Relay业务请求，`RETRY_CURRENT`仍不调用Intent。
+
 逻辑重试/重意图共用 max-reroutes（默认3）并跨确认 Run 累计，不等于 HTTP 自动重试。
 
 <a id="questionnaires"></a>

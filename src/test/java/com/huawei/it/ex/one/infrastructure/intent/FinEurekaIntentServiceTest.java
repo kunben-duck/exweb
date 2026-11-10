@@ -105,10 +105,15 @@ class FinEurekaIntentServiceTest {
                     new DefaultIntentRetryPolicy(), loader);
 
             ChatCommand command = command(entry);
-            IntentDecision decision = service.recognize(command, MemoryContext.empty(), user());
+            var context = new RouteMemoryContext("domain_reject", List.of(Map.of(
+                    "type", "route", "query", "prior", "intent", "Knowledge", "intentId", "EX_prior-id")),
+                    Map.of("lastIntent", "Knowledge", "lastIntentId", "EX_prior-id", "domainRejectMessage", "reason"));
+            IntentDecision decision = service.recognize(command, MemoryContext.empty().withRouteMemory(context), user());
 
             assertThat(decision.intentCode()).isEqualTo("ok");
             assertThat(attempts.get()).isEqualTo(2);
+            assertThat(objectMapper.readTree(lastRequestBody.get()).path("conversationContext"))
+                    .isEqualTo(objectMapper.valueToTree(context.toConversationContext()));
             assertThat(lastRequestBody.get()).contains(
                     "\"userPreferenceCorrections\":[{\"query\":\"问题\",\"preferenceIntent\":\"偏好意图\"");
             assertThat(preferenceLoads.get()).isEqualTo(1);

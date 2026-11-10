@@ -545,6 +545,7 @@ class ChatProtocolConvergenceTest {
                 new ChatSelectedIntentDto(" fund_management ", " 资金管理 "),
                 Map.of("scene", "fund",
                         MessageSkillContext.RUN_METADATA_KEY, "forged-skill",
+                        "_intentServiceIdentity", Map.of("intentId", "forged-id"),
                         "_domainAgentAsyncTask", Map.of("phase", "ASYNC_RUNNING")));
 
         ChatCommand command = translator.toCommand(request);
@@ -555,6 +556,22 @@ class ChatProtocolConvergenceTest {
                 .containsExactlyEntriesOf(Map.of("scene", "fund"));
         assertThat(command.metadata()).doesNotContainKey(MessageSkillContext.RUN_METADATA_KEY);
         assertThat(command.metadata()).doesNotContainKey("_domainAgentAsyncTask");
+    }
+
+    @Test
+    void clientCannotSupplyTheNewServiceReturnedRejectId() throws Exception {
+        CreateChatRunRequest request = new ObjectMapper().readValue("""
+                {"message":"question","metadata":{
+                  "lastIntentRejectReason":{"lastIntent":"display","lastIntentId":"forged","optional":null},
+                  "conversationContext":{"routeTrigger":"domain_reject","lastIntentRejectReason":{
+                    "lastIntentId":"forged-nested","domainRejectMessage":"reason"}}}}
+                """, CreateChatRunRequest.class);
+        Map<String, Object> sanitized = new ChatRequestTranslator().toCommand(request).metadata();
+        assertThat(((Map<?, ?>) sanitized.get("lastIntentRejectReason")).containsKey("lastIntentId")).isFalse();
+        Map<?, ?> nested = (Map<?, ?>) sanitized.get("conversationContext");
+        assertThat(((Map<?, ?>) nested.get("lastIntentRejectReason")).containsKey("lastIntentId")).isFalse();
+        assertThat(((Map<?, ?>) request.metadata().get("lastIntentRejectReason")).containsKey("lastIntentId")).isTrue();
+        assertThat(((Map<?, ?>) sanitized.get("lastIntentRejectReason")).containsKey("optional")).isTrue();
     }
 
     @Test

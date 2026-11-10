@@ -24,6 +24,7 @@ import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
+import com.huawei.it.ex.one.domain.intent.IntentServiceIdentity;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
@@ -224,6 +225,7 @@ final class RouteResolutionCoordinator {
                                                    Map<String, Object> commandMetadata,
                                                    IntentExpertScope intentExpertScope) {
         Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put(IntentServiceIdentity.BINDING_KEY, IntentServiceIdentity.bindingSnapshot(intent));
         if (route != null) {
             metadata.put("domainAgentId", route.selectedAgentCode());
             metadata.put("routeSource", route.routeSource());

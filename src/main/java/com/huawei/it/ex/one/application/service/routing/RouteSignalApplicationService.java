@@ -28,6 +28,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
+import com.huawei.it.ex.one.domain.intent.IntentServiceIdentity;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
@@ -512,9 +513,7 @@ public class RouteSignalApplicationService {
         if (context != null && context.history() != null) {
             history.addAll(context.history());
         }
-        inlineRoutes.stream()
-                .filter(item -> !history.contains(item))
-                .forEach(history::add);
+        inlineRoutes.forEach(item -> RouteMemoryContext.appendHistory(history, item));
         trimOldestRoutes(history);
         return new RouteMemoryContext(
                 context == null ? RouteMemoryApplicationService.TRIGGER_FIRST_TURN : context.routeTrigger(),
@@ -602,6 +601,10 @@ public class RouteSignalApplicationService {
                 explicit.get("reason"));
         if (lastIntent != null) {
             reason.put("lastIntent", lastIntent);
+        }
+        String lastIntentId = IntentServiceIdentity.text(explicit.get("lastIntentId"));
+        if (lastIntentId != null) {
+            reason.put("lastIntentId", lastIntentId);
         }
         if (domainRejectMessage != null) {
             reason.put("domainRejectMessage", domainRejectMessage);

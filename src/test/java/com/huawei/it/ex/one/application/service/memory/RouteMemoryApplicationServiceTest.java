@@ -22,6 +22,8 @@ import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -38,6 +40,53 @@ class RouteMemoryApplicationServiceTest {
     private final InMemoryRouteMemoryRepository repository = new InMemoryRouteMemoryRepository();
     private final RouteMemoryApplicationService service = new RouteMemoryApplicationService(
             repository, new FixedIdGenerator(), new RouteMemoryProperties());
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void preservesReturnedIntentIdInBothInlineAndPersistedHistory(boolean expert) {
+        IntentDecision decision = new IntentDecision("EX_original-id", "Knowledge", TaskComplexity.SIMPLE,
+                1.0, true, expert ? "RE_national-cfo" : "skill-a",
+                Map.of("routeAction", "ROUTE_SINGLE", "intentId", "EX_original-id"),
+                List.of(), Map.of());
+        var command = new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "returned-id-session", "run-id", "question", decision,
+                expert ? RouteTarget.domainExpertRuntime("intent-agent", 1.0, "accepted",
+                        "national-cfo", "RE_national-cfo")
+                        : RouteTarget.domainAgent("skill-a", "intent-agent", 1.0, "accepted"));
+        service.recordRouteDecision(command);
+
+        Map<String, Object> expected = Map.of("type", "route", "query", "question",
+                "intent", "Knowledge", "intentId", "EX_original-id");
+        assertThat(service.routeHistory(command)).isEqualTo(expected);
+        assertThat(service.loadForIntent(user, "returned-id-session", "domain_reject", Map.of()).history())
+                .containsExactly(expected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"NO_MATCH", "ROUTE_MULTI"})
+    void doesNotAddIdToNonUniqueHistoryEvenWhenSlotsContainAnId(String action) {
+        IntentDecision decision = new IntentDecision("fallback", "Fallback", TaskComplexity.COMPLEX,
+                0.0, false, null, Map.of("routeAction", action, "intentId", "unused-id"), List.of(), Map.of());
+        var command = new RouteMemoryApplicationService.RouteMemoryRouteCommand(user, "non-unique", "run-id",
+                "question", decision, RouteTarget.agentRuntime("intent-agent", 0.0, "fallback"));
+        service.recordRouteDecision(command);
+        assertThat(service.routeHistory(command)).doesNotContainKey("intentId");
+        assertThat(service.loadForIntent(user, "non-unique", "first_turn", Map.of()).history())
+                .allSatisfy(item -> assertThat(item).doesNotContainKey("intentId"));
+    }
+
+    @Test
+    void doesNotUseUnusedDiagnosticCandidateFromHistoricalFallback() {
+        IntentDecision decision = new IntentDecision("finance.runtime.intent_error", "Protocol error",
+                TaskComplexity.COMPLEX, 0.0, false, null,
+                Map.of("routeAction", "ROUTE_SINGLE", "intentId", "unused-id"), List.of(), Map.of());
+        var command = new RouteMemoryApplicationService.RouteMemoryRouteCommand(user, "protocol-error", "run-id",
+                "question", decision, RouteTarget.agentRuntime("intent-agent", 0.0, "fallback"));
+        service.recordRouteDecision(command);
+        assertThat(service.routeHistory(command)).doesNotContainKey("intentId");
+        assertThat(service.loadForIntent(user, "protocol-error", "first_turn", Map.of()).history())
+                .singleElement().satisfies(item -> assertThat(item).doesNotContainKey("intentId"));
+    }
 
     @Test
     void loadsRecentRoutesAndActiveClarificationsAsIntentHistory() {

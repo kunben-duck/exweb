@@ -108,13 +108,15 @@ financeex:
   "routeTrigger": "domain_reject",
   "lastIntentRejectReason": {
     "lastIntent": "财经深度研究",
+    "lastIntentId": "intent_research_001",
     "domainRejectMessage": "深度研究无法给出支付成功率下降处理相关内容，返回主入口重新决策"
   },
   "history": [
     {
       "type": "route",
       "query": "查一下 3 月 19 到 20 号各渠道支付成功率有没有明显下降",
-      "intent": "财经智能问数"
+      "intent": "财经智能问数",
+      "intentId": "intent_query_001"
     }
   ]
 }
@@ -125,6 +127,19 @@ financeex:
 | `routeTrigger` | string | 否 | 触发重新分流的原因。 |
 | `lastIntentRejectReason` | object | 否 | 上一个跳出的意图及拒答原因。仅传当前这次拒答，不累计历史拒答噪音。 |
 | `history` | array | 否 | 历史已生效路由记录和未完成的澄清链路，按时间从早到晚排列。 |
+| `lastIntentRejectReason.lastIntentId` | string | 否 | 当前被拒答技能关联的、此前意图服务实际返回的原始 `intentId`。 |
+| `history[].intentId` | string | 否 | 仅在 `type=route` 且具有唯一可信意图ID时发送。 |
+
+两个ID只取自实际采用的 `data.result.items[].intentId`，或服务端已保存并选定的模糊候选
+`data.result.clarification.candidateIntents[].intentId`，不套用 `accessName` 的前缀处理规则。
+不使用 `skillId/accessName/roleName`、内部兜底 `intentCode` 或前端 `selectedIntent.intentId` 替代。
+仅前端提交ID而没有对应服务端意图结果时，仍省略字段。旧Binding或历史记录无法确认原始ID时也省略，
+不发送null，不回填、不额外查询。`NO_MATCH`、`clarify`、`ROUTE_MULTI`不新增顶层 `intentId`，
+原有 `candidateIntents[].intentId` 不变。
+
+拒答ID随既有私有上下文保留，覆盖自动重意图、确认后重意图及澄清续跑；连续拒答改为当前被拒答技能的ID。
+两个字段适用于阻塞与流式Intent，历史范围、排序、TopK及去重口径不变。下游启用前需兼容新增可选字段；
+这不是前端请求新增参数，也不改变拒答确认或路由选择规则。
 
 ### 2.3 routeTrigger 枚举
 

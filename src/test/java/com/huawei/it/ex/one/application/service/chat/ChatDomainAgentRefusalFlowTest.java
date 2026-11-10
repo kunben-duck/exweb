@@ -112,7 +112,8 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                     var initialIntent = new com.huawei.it.ex.one.domain.intent.IntentDecision(
                             "intent-a", "财经知识问答",
                             com.huawei.it.ex.one.domain.intent.TaskComplexity.SIMPLE,
-                            1.0, true, "agent-a", Map.of("routeAction", "ROUTE_SINGLE"), List.of(), Map.of());
+                            1.0, true, "agent-a", Map.of("routeAction", "ROUTE_SINGLE", "intentId", "EX_original-a"),
+                            List.of(), Map.of());
                     return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(RouteTarget.domainAgent(
                             "agent-a", "intent-agent", 1.0, "initial intent route"),
                             initialIntent, 1L, 0.85)));
@@ -188,6 +189,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .isEqualTo(initialUserMessageId.get());
         assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
                 "lastIntent", "财经知识问答",
+                "lastIntentId", "EX_original-a",
                 "domainRejectMessage", "cannot answer this domain"));
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .singleElement()
@@ -374,7 +376,8 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 "domain-agent", "domain-leaf", "domain-session-a", RuntimeBindingStatus.ACTIVE, "old-domain-run",
                 null, now.minus(Duration.ofDays(1)), now.minus(Duration.ofDays(1)),
                 Map.of("domainAgentId", "agent-a", "routeSource", "user-confirmed",
-                        "intentName", "财经知识问答")));
+                        "intentName", "财经知识问答", "_intentServiceIdentity", Map.of(
+                                "targetId", "agent-a", "intentName", "财经知识问答", "intentId", "EX_persisted-a"))));
         bindings.save(new RuntimeBinding("relay-binding", user.tenantId(), user.ownerUserId(), "session1",
                 "relay", "relay-leaf", "relay-session-1", RuntimeBindingStatus.RESUMABLE, "old-run",
                 null, now.minus(Duration.ofDays(30)), now.minus(Duration.ofDays(30)),
@@ -443,6 +446,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         assertThat(routeCalls).hasValue(1);
         assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
                 "lastIntent", "财经知识问答",
+                "lastIntentId", "EX_persisted-a",
                 "domainRejectMessage", "cannot answer this domain"));
         assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user");
         assertThat(relaySessionMode).hasValue(RuntimeSessionMode.RESUME);
@@ -1275,6 +1279,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 Map.entry("refusalReason", "当前请求不在该领域 Agent 处理范围内"),
                 Map.entry("lastIntentRejectReason", Map.of(
                         "lastIntent", "领域 A",
+                        "lastIntentId", "EX_stored-a",
                         "domainRejectMessage", "当前请求不在该领域 Agent 处理范围内")),
                 Map.entry("rerouteCount", 0),
                 Map.entry("rejectedDomainAgentIds", List.of("agent-a")),
@@ -1345,6 +1350,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .containsEntry("routeTrigger", "clarify_answer")
                 .containsEntry("lastIntentRejectReason", Map.of(
                         "lastIntent", "领域 A",
+                        "lastIntentId", "EX_stored-a",
                         "domainRejectMessage", "当前请求不在该领域 Agent 处理范围内"));
         assertThat(interactions.requests.values())
                 .noneMatch(request -> request.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);

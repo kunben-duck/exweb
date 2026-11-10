@@ -22,6 +22,7 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
+import com.huawei.it.ex.one.domain.intent.IntentServiceIdentity;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
@@ -35,6 +36,7 @@ import reactor.core.scheduler.Scheduler;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -326,6 +328,7 @@ final class DomainAgentRefusalCoordinator {
         }
         DomainAgentRejectReason rejectReason = DomainAgentRejectReason.from(
                 rejectedIntentName(context),
+                rejectedIntentId(context),
                 refusal);
         // 沿用本 Run 的命令、可信附件与入口，只补入本次拒答上下文；不从上一 Run 猜测入口。
         ChatCommand rerouteCommand = eventFactory.commandWithDomainRejectContext(
@@ -493,6 +496,18 @@ final class DomainAgentRefusalCoordinator {
                 || route.type() != RouteType.DOMAIN_AGENT
                 || route.selectedAgentCode() == null
                 || route.selectedAgentCode().isBlank();
+    }
+
+    private String rejectedIntentId(DomainAgentRunContext context) {
+        RuntimeBinding binding = context.bindingRef().get();
+        String name = rejectedIntentName(context);
+        String targetId = context.route().selectedAgentCode();
+        if (binding != null) {
+            return IntentServiceIdentity.bindingId(binding.metadata(), targetId, name);
+        }
+        IntentDecision intent = context.intentDecision();
+        return intent != null && Objects.equals(targetId, intent.candidateDomainAgentId())
+                && Objects.equals(name, intent.intentName()) ? IntentServiceIdentity.id(intent) : null;
     }
 
     private String rejectedIntentName(DomainAgentRunContext context) {

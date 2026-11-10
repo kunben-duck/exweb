@@ -80,6 +80,8 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
     private final AtomicInteger intents = new AtomicInteger();
     private final AtomicInteger queries = new AtomicInteger();
     private final AtomicInteger initialRoutes = new AtomicInteger();
+    private final List<Map<String, Object>> confirmedMetadata = new CopyOnWriteArrayList<>();
+    private boolean serviceIdentity;
     private final List<DomainAgentRequest> agentRequests = new CopyOnWriteArrayList<>();
     private Boolean recoverable = false;
     private boolean explicitNullRecoverable;
@@ -117,6 +119,13 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 initialRoutes.incrementAndGet();
                 if (expert != null || automaticSource) {
+                    if (serviceIdentity) {
+                        var decision = new com.huawei.it.ex.one.domain.intent.IntentDecision("intent-a", "Knowledge",
+                                com.huawei.it.ex.one.domain.intent.TaskComplexity.SIMPLE, 1.0, true, "agent-a",
+                                Map.of("routeAction", "ROUTE_SINGLE", "intentId", "EX_original-a"), List.of(), Map.of());
+                        return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(
+                                RouteTarget.domainAgent("agent-a", "intent-agent"), decision, 1L, 0.85)));
+                    }
                     return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(
                             RouteTarget.domainAgent("agent-a", automaticSource ? "intent-agent" : "user-confirmed",
                                     1.0, "selected expert skill"))));
@@ -128,6 +137,7 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
             public Flux<RouteSignalFrame> routeIntentWithProgress(RouteSignalRequest request) {
                 return Flux.defer(() -> {
                     intents.incrementAndGet();
+                    confirmedMetadata.add(request.command().metadata());
                     if (expert != null) {
                         assertThat(request.command().intentExpertScope()).isEqualTo(expert);
                         assertThat(request.command().intentAccessName()).isEqualTo(expert.intentAccessName());
@@ -242,6 +252,29 @@ class BeforeIntentRouteSwitchFlowTest extends ChatFlowTestSupport {
         assertThat(interactions.requests.values()).noneMatch(ChatInteractionRequest::waiting);
         assertThat(events.events).anySatisfy(event ->
                 assertThat(event.payload()).containsEntry("action", "MAX_REROUTES_REACHED"));
+    }
+
+    @Test
+    void confirmedReroutePreservesIdAcrossWaitAndUpdatesItAfterAnotherRefusal() {
+        automaticSource = true;
+        serviceIdentity = true;
+        recoverable = true;
+        alwaysRefuse = true;
+        ChatInteractionRequest first = start();
+        assertThat(RouteSwitchRerouteContext.require(first).state().lastIntentRejectReason().lastIntentId())
+                .isEqualTo("EX_original-a");
+        var decision = new com.huawei.it.ex.one.domain.intent.IntentDecision("intent-b", "Second",
+                com.huawei.it.ex.one.domain.intent.TaskComplexity.SIMPLE, 1.0, true, "agent-b",
+                Map.of("routeAction", "ROUTE_SINGLE", "intentId", "EX_original-b"), List.of(), Map.of());
+        result = RouteSignalResult.ofIntent(RouteTarget.domainAgent("agent-b", "intent-agent"), decision, 1L, 0.85);
+        assertThat(execute(continuation(first, true, Map.of(), null, null)).getLast().type())
+                .isEqualTo("run.waiting_user");
+        assertThat(confirmedMetadata.getFirst()).containsEntry("lastIntentRejectReason", Map.of(
+                "lastIntent", "Knowledge", "lastIntentId", "EX_original-a",
+                "domainRejectMessage", "cannot answer this domain"));
+        assertThat(RouteSwitchRerouteContext.require(waiting()).state().lastIntentRejectReason().lastIntentId())
+                .isEqualTo("EX_original-b");
+        assertNoPrivateEvents();
     }
 
     @Test

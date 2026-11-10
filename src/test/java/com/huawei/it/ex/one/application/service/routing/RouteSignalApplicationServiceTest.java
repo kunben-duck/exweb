@@ -87,7 +87,8 @@ class RouteSignalApplicationServiceTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void domainRejectDoesNotReintroduceInlineRoutesWhenDatabaseHistoryIsUnavailable(boolean expert) {
-        Map<String, Object> rejectReason = Map.of("lastIntent", "技能B", "domainRejectMessage", "不在处理范围");
+        Map<String, Object> rejectReason = Map.of("lastIntent", "技能B", "lastIntentId", "intent-b",
+                "domainRejectMessage", "不在处理范围");
         ChatCommand rejection = new ChatCommand("cmd-reject", "tenant1", "user1", "session1", null,
                 "web", "原问题", List.of(), Map.of("lastIntentRejectReason", rejectReason), null, null,
                 com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT, null, null, null, "domain_reject");

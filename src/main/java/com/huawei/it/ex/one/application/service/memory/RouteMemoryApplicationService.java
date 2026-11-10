@@ -14,6 +14,7 @@ import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
+import com.huawei.it.ex.one.domain.intent.IntentServiceIdentity;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItem;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemStatus;
@@ -32,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
@@ -268,6 +270,7 @@ public class RouteMemoryApplicationService {
         history.put("type", "route");
         history.put("query", blankToDefault(command.query(), ""));
         history.put("intent", routeHistoryIntent(command.intent(), command.route()));
+        putIfPresent(history, "intentId", IntentServiceIdentity.id(command.intent()));
         return Map.copyOf(history);
     }
 
@@ -450,6 +453,13 @@ public class RouteMemoryApplicationService {
         history.put("type", "route");
         history.put("query", blankToDefault(item.queryText(), ""));
         history.put("intent", routeHistoryIntent(item));
+        if (!isRouteMultiRoute(item)) {
+            String id = IntentServiceIdentity.idFromSlots(map(item.payload().get("slots")));
+            // Diagnostic slots can also contain an unused candidate after a protocol failure.
+            if (Objects.equals(id, item.intentId()) && Objects.equals(id, item.payload().get("intentCode"))) {
+                putIfPresent(history, "intentId", id);
+            }
+        }
         return Map.copyOf(history);
     }
 

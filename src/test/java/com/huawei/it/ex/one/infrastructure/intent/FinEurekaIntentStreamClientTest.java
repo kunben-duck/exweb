@@ -161,6 +161,7 @@ class FinEurekaIntentStreamClientTest {
 
     @Test
     void emitsProgressDeltaAndFinalResultInOrder() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
         AtomicReference<String> requestBody = new AtomicReference<>();
         AtomicReference<String> accept = new AtomicReference<>();
         String response = """
@@ -173,9 +174,12 @@ class FinEurekaIntentStreamClientTest {
                 """ + ROUTE_SINGLE_RESULT;
         try (StreamServerFixture fixture = server(requestBody, accept, exchange -> write(exchange, response))) {
             FinEurekaIntentStreamClient client = client(fixture, properties(0));
+            var context = new com.huawei.it.ex.one.domain.memory.RouteMemoryContext("domain_reject", List.of(Map.of(
+                    "type", "route", "query", "prior", "intent", "Knowledge", "intentId", "EX_prior-id")),
+                    Map.of("lastIntent", "Knowledge", "lastIntentId", "EX_prior-id", "domainRejectMessage", "reason"));
 
             List<IntentDecisionStreamFrame> frames = client
-                    .recognize(command(), MemoryContext.empty(), user())
+                    .recognize(command(), MemoryContext.empty().withRouteMemory(context), user())
                     .collectList()
                     .block();
 
@@ -193,6 +197,8 @@ class FinEurekaIntentStreamClientTest {
             assertThat(frames.get(2).recognitionResult().decision().candidateDomainAgentId())
                     .isEqualTo("knowledge-agent");
             assertThat(requestBody.get()).contains("\"query\":\"用户问题\"");
+            assertThat(objectMapper.readTree(requestBody.get()).path("conversationContext"))
+                    .isEqualTo(objectMapper.valueToTree(context.toConversationContext()));
             assertThat(accept.get()).contains("text/event-stream");
         }
     }

@@ -14,6 +14,7 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.intent.IntentServiceIdentity;
 import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
@@ -282,6 +283,7 @@ final class RouteSwitchContextResolver {
     private Map<String, Object> bindingMetadata(
             ChatInteractionRequest interaction) {
         Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put(IntentServiceIdentity.BINDING_KEY, Map.of());
         putIfNotNull(
                 metadata,
                 "domainAgentId",

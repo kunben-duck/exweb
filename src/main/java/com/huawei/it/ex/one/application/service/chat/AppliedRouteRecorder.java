@@ -324,9 +324,7 @@ final class AppliedRouteRecorder {
                 ? RouteMemoryContext.empty()
                 : memory.routeMemory();
         List<Map<String, Object>> history = new ArrayList<>(current.history());
-        if (!history.contains(historyItem)) {
-            history.add(historyItem);
-        }
+        RouteMemoryContext.appendHistory(history, historyItem);
         String latestRouteSourceRunId = "route".equals(String.valueOf(historyItem.get("type")))
                 ? sourceRunId
                 : current.latestRouteSourceRunId();

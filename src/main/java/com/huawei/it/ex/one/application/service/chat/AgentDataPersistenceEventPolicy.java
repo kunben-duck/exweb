@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentContro
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /** 在 assistant 占位策略下区分持久化控制事实和仅实时传输的业务事件。 */
@@ -78,14 +79,18 @@ final class AgentDataPersistenceEventPolicy {
 
     private boolean relayQuestionnaireRequest(ChatEvent event) {
         if (event == null || !"runtime.card".equals(event.type()) || event.payload() == null
-                || !("relay".equals(text(event.payload().get("source")))
-                        || "domain-agent".equals(text(event.payload().get("source"))))
+                || !questionnaireSource(event.payload())
                 || !RuntimeQuestionnaireAnswerValidator.isQuestionnaire(event.payload())
                 || text(event.payload().get("approval_id")) == null) {
             return false;
         }
         Object questions = event.payload().get("questions");
         return questions instanceof List<?> values && !values.isEmpty();
+    }
+
+    private boolean questionnaireSource(Map<String, Object> payload) {
+        return "relay".equals(text(payload.get("source")))
+                || "domain-agent".equals(text(payload.get("source")));
     }
 
     private String text(Object value) {

@@ -487,24 +487,34 @@ public class ChatRunStopCoordinator {
                     .build());
             return StopMessageTarget.notReady();
         }
+        return replayPartialAssistant(user, run, reason, sessionSnapshot,
+                new StopReplayContext(interactionContinuation, newTurnInteraction, interactionAssistantMessageId,
+                        parentMessageId));
+    }
+
+    private record StopReplayContext(boolean interactionContinuation, boolean newTurnInteraction,
+                                     String interactionAssistantMessageId, String parentMessageId) { }
+
+    private StopMessageTarget replayPartialAssistant(UserContext user, ChatRun run, String reason,
+                                                      ChatSession sessionSnapshot, StopReplayContext replay) {
         try {
             AgentDataPersistenceState persistenceState =
                     AgentDataPersistenceState.fromRunMetadata(run.metadata(), null);
             AssistantAssembly assistant = new AssistantAssembly(persistenceState);
-            if (interactionContinuation && !newTurnInteraction && !persistenceState.placeholderMode()
+            if (replay.interactionContinuation() && !replay.newTurnInteraction() && !persistenceState.placeholderMode()
                     && "domain-agent".equals(run.runtimeProvider())
                     && "AGENT_CLARIFICATION".equals(metadataText(run, "interactionType"))) {
                 // Stop（含跨实例）只回放本轮事件，问卷续跑须先保留发问前已经提交的正文。
                 assistant.seedQuestionnaireContent(sessionService.questionnaireAssistantContent(
-                        user, run.sessionId(), interactionAssistantMessageId));
+                        user, run.sessionId(), replay.interactionAssistantMessageId()));
             }
             chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
             if (!assistant.shouldPersistMessage()) {
                 return StopMessageTarget.notReady();
             }
             ChatSession session = sessionSnapshot == null ? sessionService.getSession(user, run.sessionId()) : sessionSnapshot;
-            String assistantMessageId = interactionContinuation && !newTurnInteraction
-                    ? interactionAssistantMessageId
+            String assistantMessageId = replay.interactionContinuation() && !replay.newTurnInteraction()
+                    ? replay.interactionAssistantMessageId()
                     : idGenerator.newId("msg",
                             IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), run.id()));
             AssistantMessageSaveCommand partialAssistant = new AssistantMessageSaveCommand(
@@ -513,7 +523,7 @@ public class ChatRunStopCoordinator {
                     session,
                     assistant.finalContent(),
                     run.id(),
-                    parentMessageId,
+                    replay.parentMessageId(),
                     null,
                     assistant.parts(),
                     assistant.assistantMetadata(partialMetadata(reason)),

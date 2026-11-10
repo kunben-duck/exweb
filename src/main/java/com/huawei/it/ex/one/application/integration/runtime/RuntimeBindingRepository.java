@@ -259,11 +259,9 @@ public interface RuntimeBindingRepository {
             RuntimeBinding binding,
             String sourceRunId,
             String continueRunId) {
-        if (binding == null || binding.id() == null || binding.id().isBlank()
-                || binding.tenantId() == null || binding.tenantId().isBlank()
-                || binding.userId() == null || binding.userId().isBlank()
-                || binding.chatSessionId() == null || binding.chatSessionId().isBlank()
-                || sourceRunId == null || sourceRunId.isBlank()) {
+        if (binding == null || missingIdentity(binding.id())
+                || missingIdentity(binding.tenantId()) || missingIdentity(binding.userId())
+                || missingIdentity(binding.chatSessionId()) || missingIdentity(sourceRunId)) {
             return false;
         }
         return findById(binding.id())
@@ -279,5 +277,9 @@ public interface RuntimeBindingRepository {
                     return true;
                 })
                 .orElse(false);
+    }
+
+    private static boolean missingIdentity(String value) {
+        return value == null || value.isBlank();
     }
 }

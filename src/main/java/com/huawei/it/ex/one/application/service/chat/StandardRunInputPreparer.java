@@ -54,16 +54,12 @@ final class StandardRunInputPreparer {
     PreparedRun prepare(Request request) {
         RunStartAttempt startAttempt = request.startAttempt();
         runStartCoordinator.ensureActive(startAttempt, "before-run-prepare");
-        RuntimeForwardHeaders headers = normalizeForwardHeaders(request.forwardHeaders());
-        ChatCommand identified = identifiedCommand(request.user(), request.command());
-        ExplicitRuntimeTarget explicitRuntimeTarget = explicitRuntimeTarget(identified);
-        boolean directBypass = admissionCoordinator.transactionalAdmissionAvailable()
-                && directRuntimeWaitBypass(identified, explicitRuntimeTarget);
-        boolean forceReroute = forceReroute(identified);
-        if (forceReroute && explicitRuntimeTarget != null && !explicitRuntimeTarget.intentExpert()) {
-            throw new IllegalArgumentException(
-                    "forceReroute=true 时不能同时指定 targetType/targetId");
-        }
+        InitialTarget target = prepareTarget(request);
+        RuntimeForwardHeaders headers = target.headers();
+        ChatCommand identified = target.command();
+        ExplicitRuntimeTarget explicitRuntimeTarget = target.explicitTarget();
+        boolean directBypass = target.directBypass();
+        boolean forceReroute = target.forceReroute();
         ResolvedChatAttachments resolved = null;
         String trustedInitialTitle = null;
         if (shouldResolveAttachmentsBeforeSession(identified)) {
@@ -89,19 +85,8 @@ final class StandardRunInputPreparer {
                 identified.runMode(), identified.message(), attachments);
         ChatCommand normalized = normalizedCommand(
                 request.user(), session, identified, effectiveMessage, attachments);
-        String runId = startAttempt == null
-                ? idGenerator.newId(
-                        "run",
-                        IdGenerateContext.of(
-                                request.user().tenantId(),
-                                request.user().ownerUserId(),
-                                session.id()))
-                : startAttempt.runId();
-        SessionApplicationService.ShortTermMemoryPath memoryPath =
-                sessionService.resolveShortTermMemoryPath(normalized, session);
-        // 记忆按本次编辑/重生成目标分支预加载，不把当前待回答的 user 消息再作为历史输入。
-        MemoryContext memory = memoryAssembler.assemble(
-                normalized, memoryPath.leafMessageId(), memoryPath.emptyPath());
+        String runId = preparedRunId(request.user(), session, startAttempt);
+        MemoryContext memory = prepareMemory(normalized, session);
         runStartCoordinator.ensureActive(startAttempt, "after-memory-load");
         return new PreparedRun(
                 request.user(),
@@ -151,14 +136,7 @@ final class StandardRunInputPreparer {
         List<UploadedDocument> documents = source.resolvedAttachments().documents();
         ChatCommand normalized = normalizedCommand(
                 request.user(), session, identified, source.userMessage().content(), attachments);
-        String runId = startAttempt == null
-                ? idGenerator.newId(
-                        "run",
-                        IdGenerateContext.of(
-                                request.user().tenantId(),
-                                request.user().ownerUserId(),
-                                session.id()))
-                : startAttempt.runId();
+        String runId = preparedRunId(request.user(), session, startAttempt);
         String memoryLeaf = source.userMessage().parentMessageId();
         MemoryContext memory = memoryAssembler.assemble(
                 normalized,
@@ -181,6 +159,36 @@ final class StandardRunInputPreparer {
                 startAttempt);
     }
 
+    private MemoryContext prepareMemory(ChatCommand normalized, ChatSession session) {
+        SessionApplicationService.ShortTermMemoryPath memoryPath =
+                sessionService.resolveShortTermMemoryPath(normalized, session);
+        // 记忆按本次编辑/重生成目标分支预加载，不把当前待回答的 user 消息再作为历史输入。
+        return memoryAssembler.assemble(
+                normalized, memoryPath.leafMessageId(), memoryPath.emptyPath());
+    }
+
+    private InitialTarget prepareTarget(Request request) {
+        RuntimeForwardHeaders headers = normalizeForwardHeaders(request.forwardHeaders());
+        ChatCommand identified = identifiedCommand(request.user(), request.command());
+        ExplicitRuntimeTarget target = explicitRuntimeTarget(identified);
+        boolean directBypass = admissionCoordinator.transactionalAdmissionAvailable()
+                && directRuntimeWaitBypass(identified, target);
+        boolean forceReroute = forceReroute(identified);
+        if (forceReroute && target != null && !target.intentExpert()) {
+            throw new IllegalArgumentException("forceReroute=true 时不能同时指定 targetType/targetId");
+        }
+        return new InitialTarget(headers, identified, target, directBypass, forceReroute);
+    }
+
+    private String preparedRunId(UserContext user, ChatSession session, RunStartAttempt startAttempt) {
+        return startAttempt == null
+                ? idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id()))
+                : startAttempt.runId();
+    }
+
+    private record InitialTarget(RuntimeForwardHeaders headers, ChatCommand command,
+                                 ExplicitRuntimeTarget explicitTarget, boolean directBypass, boolean forceReroute) { }
+
     private ResolvedChatAttachments resolveAttachments(
             UserContext user,
             ChatCommand command) {
@@ -194,11 +202,15 @@ final class StandardRunInputPreparer {
 
     private boolean shouldResolveAttachmentsBeforeSession(ChatCommand command) {
         return command != null
-                && (command.sessionId() == null || command.sessionId().isBlank())
+                && missingRequestText(command.sessionId())
                 && command.runMode() == ChatRunMode.NEXT
-                && (command.message() == null || command.message().isBlank())
+                && missingRequestText(command.message())
                 && command.attachments() != null
                 && !command.attachments().isEmpty();
+    }
+
+    private boolean missingRequestText(String value) {
+        return value == null || value.isBlank();
     }
 
     static String attachmentTitle(List<AttachmentRef> attachments) {

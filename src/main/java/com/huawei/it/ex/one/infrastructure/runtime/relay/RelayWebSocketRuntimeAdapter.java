@@ -33,6 +33,7 @@ import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
 import reactor.netty.http.client.HttpClient;
 
@@ -418,120 +419,151 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             Flux<String> frames,
             Sinks.Many<String> outbound,
             InterruptWaitContext context) {
-        AgentRuntimeCancelRequest request = context.request();
-        String clientId = context.clientId();
-        String relaySessionId = context.relaySessionId();
-        RuntimeProfileMetadata.Snapshot runtimeProfile = context.runtimeProfile();
-        return Mono.create(sink -> {
-            AtomicBoolean done = new AtomicBoolean(false);
-            AtomicBoolean configReady = new AtomicBoolean(false);
-            AtomicBoolean interruptSent = new AtomicBoolean(false);
-            AtomicReference<Disposable> frameSubscription = new AtomicReference<>();
-            AtomicReference<Disposable> configTimeout = new AtomicReference<>();
-            AtomicReference<Disposable> ackTimeout = new AtomicReference<>();
-            Runnable cleanup = () -> {
+        return Mono.create(sink -> new InterruptAckExchange(outbound, context, sink).start(frames));
+    }
+
+    /** One interrupt handshake and its timers; never shared between subscriptions. */
+    private final class InterruptAckExchange {
+        private final Sinks.Many<String> outbound;
+        private final AgentRuntimeCancelRequest request;
+        private final String clientId;
+        private final String relaySessionId;
+        private final RuntimeProfileMetadata.Snapshot runtimeProfile;
+        private final MonoSink<Void> sink;
+        private final AtomicBoolean done = new AtomicBoolean(false);
+        private final AtomicBoolean configReady = new AtomicBoolean(false);
+        private final AtomicBoolean interruptSent = new AtomicBoolean(false);
+        private final AtomicReference<Disposable> frameSubscription = new AtomicReference<>();
+        private final AtomicReference<Disposable> configTimeout = new AtomicReference<>();
+        private final AtomicReference<Disposable> ackTimeout = new AtomicReference<>();
+
+        private InterruptAckExchange(Sinks.Many<String> outbound, InterruptWaitContext context, MonoSink<Void> sink) {
+            this.outbound = outbound;
+            this.request = context.request();
+            this.clientId = context.clientId();
+            this.relaySessionId = context.relaySessionId();
+            this.runtimeProfile = context.runtimeProfile();
+            this.sink = sink;
+        }
+
+        private void start(Flux<String> frames) {
+            configTimeout.set(Mono.delay(configHandshakeTimeout()).subscribe(ignored -> fail(
+                    new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket interrupt config "
+                            + "handshake timed out. runId=" + request.runId())), this::fail));
+            frameSubscription.set(frames.subscribe(this::frame, this::fail, this::closed));
+            sink.onDispose(this::cleanup);
+        }
+
+        private void cleanup() {
+            Disposable configTimer = configTimeout.getAndSet(null);
+            if (configTimer != null) {
+                configTimer.dispose();
+            }
+            Disposable ackTimer = ackTimeout.getAndSet(null);
+            if (ackTimer != null) {
+                ackTimer.dispose();
+            }
+            Disposable subscription = frameSubscription.getAndSet(null);
+            if (subscription != null) {
+                subscription.dispose();
+            }
+        }
+
+        private void fail(Throwable error) {
+            if (done.compareAndSet(false, true)) {
+                cleanup();
+                sink.error(error);
+            }
+        }
+
+        private void complete() {
+            if (done.compareAndSet(false, true)) {
+                cleanup();
+                sink.success();
+            }
+        }
+
+        private void frame(String frame) {
+            if (done.get()) {
+                return;
+            }
+            try {
+                if (!configReady.get()) {
+                    configFrame(frame);
+                    return;
+                }
+                RelayRuntimeProtocolException failure = configHandshakeFailure(frame);
+                if (failure != null) {
+                    fail(failure);
+                    return;
+                }
+                if (interruptPausedAckFrame(frame)) {
+                    log.info("Relay WebSocket interrupt paused ack received. runId={}, runtimeSessionId={}, "
+                                    + "clientId={}, interruptSent={}, pausedAck=true",
+                            request.runId(), relaySessionId, clientId, interruptSent.get());
+                    complete();
+                }
+            } catch (Throwable ex) {
+                fail(ex);
+            }
+        }
+
+        private void configFrame(String frame) {
+            RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
+            if (configFailure != null) {
+                fail(configFailure);
+                return;
+            }
+            if (configHandshakeCompleteFrame(frame, runtimeProfile)) {
+                configReady.set(true);
                 Disposable configTimer = configTimeout.getAndSet(null);
                 if (configTimer != null) {
                     configTimer.dispose();
                 }
-                Disposable ackTimer = ackTimeout.getAndSet(null);
-                if (ackTimer != null) {
-                    ackTimer.dispose();
-                }
-                Disposable subscription = frameSubscription.getAndSet(null);
-                if (subscription != null) {
-                    subscription.dispose();
-                }
-            };
-            Consumer<Throwable> fail = error -> {
-                if (done.compareAndSet(false, true)) {
-                    cleanup.run();
-                    sink.error(error);
-                }
-            };
-            Runnable complete = () -> {
-                if (done.compareAndSet(false, true)) {
-                    cleanup.run();
-                    sink.success();
-                }
-            };
-            configTimeout.set(Mono.delay(configHandshakeTimeout()).subscribe(ignored -> fail.accept(
-                    new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket interrupt config "
-                            + "handshake timed out. runId=" + request.runId())), fail));
-            frameSubscription.set(frames.subscribe(frame -> {
-                if (done.get()) {
-                    return;
-                }
-                try {
-                    if (!configReady.get()) {
-                        RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
-                        if (configFailure != null) {
-                            fail.accept(configFailure);
-                            return;
-                        }
-                        if (configHandshakeCompleteFrame(frame, runtimeProfile)) {
-                            configReady.set(true);
-                            Disposable configTimer = configTimeout.getAndSet(null);
-                            if (configTimer != null) {
-                                configTimer.dispose();
-                            }
-                            emitInterrupt(outbound, request.runId());
-                            interruptSent.set(true);
-                            log.info("Relay WebSocket interrupt sent. runId={}, runtimeSessionId={}, clientId={}, interruptSent=true",
-                                    request.runId(), relaySessionId, clientId);
-                            ackTimeout.set(Mono.delay(interruptAckTimeout()).subscribe(ignored -> {
-                                if (done.compareAndSet(false, true)) {
-                                    cleanup.run();
-                                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
-                                                    "Relay WebSocket interrupt acknowledgement timed out")
-                                            .runId(request.runId())
-                                            .sessionId(request.sessionId())
-                                            .operation("relay.interrupt.ack")
-                                            .attribute("runtimeSessionId", relaySessionId)
-                                            .attribute("clientId", clientId)
-                                            .build());
-                                    sink.success();
-                                }
-                            }, fail));
-                        }
-                        return;
-                    }
-                    RelayRuntimeProtocolException failure = configHandshakeFailure(frame);
-                    if (failure != null) {
-                        fail.accept(failure);
-                        return;
-                    }
-                    if (interruptPausedAckFrame(frame)) {
-                        log.info("Relay WebSocket interrupt paused ack received. runId={}, runtimeSessionId={}, "
-                                        + "clientId={}, interruptSent={}, pausedAck=true",
-                                request.runId(), relaySessionId, clientId, interruptSent.get());
-                        complete.run();
-                    }
-                } catch (Throwable ex) {
-                    fail.accept(ex);
-                }
-            }, fail, () -> {
-                if (done.get()) {
-                    return;
-                }
-                if (!configReady.get()) {
-                    fail.accept(new RelayRuntimeProtocolException("Relay WebSocket closed before interrupt config "
-                            + "handshake completed. runId=" + request.runId()));
-                    return;
-                }
-                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_UNEXPECTED_CLOSED,
-                                "Relay WebSocket interrupt connection closed before acknowledgement")
+                emitInterrupt(outbound, request.runId());
+                interruptSent.set(true);
+                log.info("Relay WebSocket interrupt sent. runId={}, runtimeSessionId={}, clientId={}, interruptSent=true",
+                        request.runId(), relaySessionId, clientId);
+                ackTimeout.set(Mono.delay(interruptAckTimeout())
+                        .subscribe(ignored -> acknowledgementTimedOut(), this::fail));
+            }
+        }
+
+        private void acknowledgementTimedOut() {
+            if (done.compareAndSet(false, true)) {
+                cleanup();
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                "Relay WebSocket interrupt acknowledgement timed out")
                         .runId(request.runId())
                         .sessionId(request.sessionId())
                         .operation("relay.interrupt.ack")
                         .attribute("runtimeSessionId", relaySessionId)
                         .attribute("clientId", clientId)
-                        .attribute("interruptSent", interruptSent.get())
                         .build());
-                complete.run();
-            }));
-            sink.onDispose(cleanup::run);
-        });
+                sink.success();
+            }
+        }
+
+        private void closed() {
+            if (done.get()) {
+                return;
+            }
+            if (!configReady.get()) {
+                fail(new RelayRuntimeProtocolException("Relay WebSocket closed before interrupt config "
+                        + "handshake completed. runId=" + request.runId()));
+                return;
+            }
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_UNEXPECTED_CLOSED,
+                            "Relay WebSocket interrupt connection closed before acknowledgement")
+                    .runId(request.runId())
+                    .sessionId(request.sessionId())
+                    .operation("relay.interrupt.ack")
+                    .attribute("runtimeSessionId", relaySessionId)
+                    .attribute("clientId", clientId)
+                    .attribute("interruptSent", interruptSent.get())
+                    .build());
+            complete();
+        }
     }
 
     private void emitInterrupt(Sinks.Many<String> outbound, String runId) {
@@ -567,111 +599,137 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private Flux<String> businessFramesAfterConfig(Flux<String> frames, BusinessFrameContext context) {
-        String runId = context.runId();
-        ShortRunExchange exchange = context.exchange();
-        String initialBusinessMessage = context.initialBusinessMessage();
-        Runnable initialBusinessMessageDispatched = context.initialBusinessMessageDispatched();
-        RuntimeProfileMetadata.Snapshot runtimeProfile = context.runtimeProfile();
-        return Flux.create(sink -> {
-            AtomicBoolean done = new AtomicBoolean(false);
-            AtomicBoolean userMessageReleased = new AtomicBoolean(false);
-            AtomicBoolean responseStarted = new AtomicBoolean(false);
-            AtomicBoolean terminalFrameSeen = new AtomicBoolean(false);
-            AtomicReference<Disposable> frameSubscription = new AtomicReference<>();
-            AtomicReference<Disposable> handshakeTimeout = new AtomicReference<>();
-            AtomicReference<Disposable> heartbeatTimer = new AtomicReference<>();
-            AtomicReference<Disposable> livenessTimer = new AtomicReference<>();
-            AtomicReference<Disposable> maxRunTimer = new AtomicReference<>();
-            AtomicLong lastInboundNanos = new AtomicLong(System.nanoTime());
-            Runnable cleanup = () -> {
-                disposeAndClear(handshakeTimeout);
-                disposeAndClear(heartbeatTimer);
-                disposeAndClear(livenessTimer);
-                disposeAndClear(maxRunTimer);
-                disposeAndClear(frameSubscription);
-            };
-            Consumer<Throwable> fail = error -> {
-                if (done.compareAndSet(false, true)) {
-                    cleanup.run();
-                    sink.error(error);
-                }
-            };
-            Runnable complete = () -> {
-                if (done.compareAndSet(false, true)) {
-                    cleanup.run();
-                    sink.complete();
-                }
-            };
+        return Flux.create(sink -> new BusinessFrameExchange(context, sink).start(frames),
+                FluxSink.OverflowStrategy.BUFFER);
+    }
+
+    /** State and callbacks for one config handshake and its subsequent business stream. */
+    private final class BusinessFrameExchange {
+        private final String runId;
+        private final ShortRunExchange exchange;
+        private final String initialBusinessMessage;
+        private final Runnable initialBusinessMessageDispatched;
+        private final RuntimeProfileMetadata.Snapshot runtimeProfile;
+        private final FluxSink<String> sink;
+        private final AtomicBoolean done = new AtomicBoolean(false);
+        private final AtomicBoolean userMessageReleased = new AtomicBoolean(false);
+        private final AtomicBoolean responseStarted = new AtomicBoolean(false);
+        private final AtomicBoolean terminalFrameSeen = new AtomicBoolean(false);
+        private final AtomicReference<Disposable> frameSubscription = new AtomicReference<>();
+        private final AtomicReference<Disposable> handshakeTimeout = new AtomicReference<>();
+        private final AtomicReference<Disposable> heartbeatTimer = new AtomicReference<>();
+        private final AtomicReference<Disposable> livenessTimer = new AtomicReference<>();
+        private final AtomicReference<Disposable> maxRunTimer = new AtomicReference<>();
+        private final AtomicLong lastInboundNanos = new AtomicLong(System.nanoTime());
+
+        private BusinessFrameExchange(BusinessFrameContext context, FluxSink<String> sink) {
+            this.runId = context.runId();
+            this.exchange = context.exchange();
+            this.initialBusinessMessage = context.initialBusinessMessage();
+            this.initialBusinessMessageDispatched = context.initialBusinessMessageDispatched();
+            this.runtimeProfile = context.runtimeProfile();
+            this.sink = sink;
+        }
+
+        private void start(Flux<String> frames) {
             handshakeTimeout.set(Mono.delay(configHandshakeTimeout())
                     .subscribe(ignored -> {
                         if (userMessageReleased.compareAndSet(false, true)) {
-                            fail.accept(new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket "
+                            fail(new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket "
                                     + "config handshake timed out. runId=" + runId));
                         }
-                    }, fail));
-            frameSubscription.set(frames.subscribe(frame -> {
-                if (done.get()) {
-                    return;
-                }
-                if (!userMessageReleased.get()) {
-                    RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
-                    if (configFailure != null && userMessageReleased.compareAndSet(false, true)) {
-                        fail.accept(configFailure);
-                        return;
-                    }
-                    if (configHandshakeCompleteFrame(frame, runtimeProfile)
-                            && userMessageReleased.compareAndSet(false, true)) {
-                        Disposable handshake = handshakeTimeout.getAndSet(null);
-                        if (handshake != null) {
-                            handshake.dispose();
-                        }
-                        /*
-                         * session-ready 是 config 阶段唯一完成信号，也携带 Relay 确认的 session_id。
-                         * adapter 仅放行该受控 metadata，用于持久化 run 与 RuntimeBinding 的
-                         * runtimeSessionId；其他 config 初始化帧继续隔离，避免污染用户回答流。
-                         */
-                        if (sessionReadyFrame(frame)) {
-                            sink.next(frame);
-                        }
-                        try {
-                            exchange.send(initialBusinessMessage);
-                            initialBusinessMessageDispatched.run();
-                            startRunControls(new RunControlContext(exchange, runId, heartbeatTimer, livenessTimer,
-                                    maxRunTimer, lastInboundNanos, fail));
-                        } catch (RuntimeException ex) {
-                            fail.accept(ex);
-                        }
-                    }
-                    return;
-                }
-                lastInboundNanos.set(System.nanoTime());
-                if (!shouldEmitUserResponseFrame(frame, responseStarted)) {
-                    return;
-                }
-                if (userTurnTerminalFrame(frame)) {
-                    terminalFrameSeen.set(true);
-                }
-                sink.next(frame);
-            }, error -> {
-                fail.accept(error);
-            }, () -> {
-                if (!userMessageReleased.get()) {
-                    fail.accept(new RelayRuntimeProtocolException("Relay WebSocket closed before config handshake "
-                            + "completed. runId=" + runId));
-                    return;
-                }
-                if (terminalFrameSeen.get()) {
-                    complete.run();
-                    return;
-                }
-                fail.accept(new RelayRuntimeProtocolException("RELAY_WS_CLOSED_BEFORE_TERMINAL: Relay WebSocket "
-                        + "closed before terminal session-state. runId=" + runId));
-            }));
+                    }, this::fail));
+            frameSubscription.set(frames.subscribe(this::frame, this::fail, this::closed));
             sink.onDispose(() -> {
                 done.set(true);
-                cleanup.run();
+                cleanup();
             });
-        }, FluxSink.OverflowStrategy.BUFFER);
+        }
+
+        private void cleanup() {
+            disposeAndClear(handshakeTimeout);
+            disposeAndClear(heartbeatTimer);
+            disposeAndClear(livenessTimer);
+            disposeAndClear(maxRunTimer);
+            disposeAndClear(frameSubscription);
+        }
+
+        private void fail(Throwable error) {
+            if (done.compareAndSet(false, true)) {
+                cleanup();
+                sink.error(error);
+            }
+        }
+
+        private void complete() {
+            if (done.compareAndSet(false, true)) {
+                cleanup();
+                sink.complete();
+            }
+        }
+
+        private void frame(String frame) {
+            if (done.get()) {
+                return;
+            }
+            if (!userMessageReleased.get()) {
+                configFrame(frame);
+                return;
+            }
+            lastInboundNanos.set(System.nanoTime());
+            if (!shouldEmitUserResponseFrame(frame, responseStarted)) {
+                return;
+            }
+            if (userTurnTerminalFrame(frame)) {
+                terminalFrameSeen.set(true);
+            }
+            sink.next(frame);
+        }
+
+        private void configFrame(String frame) {
+            RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
+            if (configFailure != null && userMessageReleased.compareAndSet(false, true)) {
+                fail(configFailure);
+                return;
+            }
+            if (configHandshakeCompleteFrame(frame, runtimeProfile)
+                    && userMessageReleased.compareAndSet(false, true)) {
+                Disposable handshake = handshakeTimeout.getAndSet(null);
+                if (handshake != null) {
+                    handshake.dispose();
+                }
+                /*
+                 * session-ready 是 config 阶段唯一完成信号，也携带 Relay 确认的 session_id。
+                 * adapter 仅放行该受控 metadata，用于持久化 run 与 RuntimeBinding 的
+                 * runtimeSessionId；其他 config 初始化帧继续隔离，避免污染用户回答流。
+                 */
+                if (sessionReadyFrame(frame)) {
+                    sink.next(frame);
+                }
+                try {
+                    exchange.send(initialBusinessMessage);
+                    initialBusinessMessageDispatched.run();
+                    startRunControls(new RunControlContext(exchange, runId, heartbeatTimer, livenessTimer,
+                            maxRunTimer, lastInboundNanos, this::fail));
+                } catch (RuntimeException ex) {
+                    fail(ex);
+                }
+            }
+        }
+
+        private void closed() {
+            if (!userMessageReleased.get()) {
+                fail(new RelayRuntimeProtocolException("Relay WebSocket closed before config handshake "
+                        + "completed. runId=" + runId));
+                return;
+            }
+            if (terminalFrameSeen.get()) {
+                complete();
+                return;
+            }
+            fail(new RelayRuntimeProtocolException("RELAY_WS_CLOSED_BEFORE_TERMINAL: Relay WebSocket "
+                    + "closed before terminal session-state. runId=" + runId));
+        }
     }
 
     private void disposeAndClear(AtomicReference<Disposable> disposableReference) {

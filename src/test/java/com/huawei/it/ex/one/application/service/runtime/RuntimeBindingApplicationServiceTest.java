@@ -1328,6 +1328,23 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void relayQuestionnaireValidationKeepsStatusBeforeSessionAndDoesNotWrite() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding original = establishedRelayQuestionnaireBinding(RuntimeBindingStatus.CANCELLED)
+                .withMetadata(Map.of());
+        repository.saved = original;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        assertThatThrownBy(() -> service.resumeRelayForInteraction(
+                relayQuestionnaireRequest("different-session"), "run-b",
+                new RunExecutionClaim("run-b", "instance-1", 7L)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("不再是 ACTIVE");
+        assertThat(repository.saved).isSameAs(original);
+        assertThat(repository.resumeClaim).isNull();
+    }
+
+    @Test
     void unstartedRelayQuestionnaireRestoreKeepsActiveRuntimeSession() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         repository.saved = establishedRelayQuestionnaireBinding(RuntimeBindingStatus.ACTIVE)

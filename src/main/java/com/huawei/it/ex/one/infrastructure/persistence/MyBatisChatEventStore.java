@@ -179,21 +179,7 @@ public class MyBatisChatEventStore implements ChatEventStore {
         validateBatch(events, claim);
         ChatEvent first = events.getFirst();
         List<PreparedBatchEvent> preparedEvents = prepareBatchEvents(events);
-        ChatEventAppendContextRow context;
-        try {
-            context = mapper.lockRunForEventAppend(first.sessionId(), first.runId(),
-                    claim.ownerInstanceId(), claim.fencingToken());
-            if (context == null) {
-                throw new ChatEventAppendRejectedException("聊天事件批量写入被 run/execution 行栅栏拒绝: runId="
-                        + first.runId() + ", sessionId=" + first.sessionId());
-            }
-        } catch (RuntimeException ex) {
-            if (lockUnavailable(ex)) {
-                throw new ChatEventAppendRejectedException("聊天事件批量写入遇到 run 行锁竞争，拒绝迟到事件: runId="
-                        + first.runId() + ", sessionId=" + first.sessionId(), ex);
-            }
-            throw ex;
-        }
+        ChatEventAppendContextRow context = lockBatchAppend(first, claim);
         validateAppendContext(context, first);
 
         List<Long> sequences = mapper.nextSeqs(events.size());
@@ -221,6 +207,24 @@ public class MyBatisChatEventStore implements ChatEventStore {
             stored.add(toStoredEvent(events.get(index), sequences.get(index), preparedEvents.get(index).createdAt()));
         }
         return List.copyOf(stored);
+    }
+
+    private ChatEventAppendContextRow lockBatchAppend(ChatEvent first, RunExecutionClaim claim) {
+        try {
+            ChatEventAppendContextRow context = mapper.lockRunForEventAppend(first.sessionId(), first.runId(),
+                    claim.ownerInstanceId(), claim.fencingToken());
+            if (context == null) {
+                throw new ChatEventAppendRejectedException("聊天事件批量写入被 run/execution 行栅栏拒绝: runId="
+                        + first.runId() + ", sessionId=" + first.sessionId());
+            }
+            return context;
+        } catch (RuntimeException ex) {
+            if (lockUnavailable(ex)) {
+                throw new ChatEventAppendRejectedException("聊天事件批量写入遇到 run 行锁竞争，拒绝迟到事件: runId="
+                        + first.runId() + ", sessionId=" + first.sessionId(), ex);
+            }
+            throw ex;
+        }
     }
 
     @Override

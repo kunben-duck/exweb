@@ -72,14 +72,7 @@ public class IntentFeedbackCommitService {
             return existing.get();
         }
         if (command.replacementRunId() != null) {
-            ChatRun replacement = ownedRun(user, command.replacementRunId());
-            if (replacement.id().equals(source.id())
-                    || !Objects.equals(replacement.sessionId(), source.sessionId())
-                    || !Objects.equals(replacement.userMessageId(), messageId)
-                    || replacement.runMode() != ChatRunMode.REGENERATE_ASSISTANT
-                    || replacement.createdAt().isBefore(source.createdAt())) {
-                throw new IllegalArgumentException("replacementRunId must reference a later replacement of the same question");
-            }
+            validateReplacement(user, command.replacementRunId(), source, messageId);
         }
         String query = null;
         if (selected != null) {
@@ -101,6 +94,17 @@ public class IntentFeedbackCommitService {
                     query, selected.intentName(), null, now, now));
         }
         return submission;
+    }
+
+    private void validateReplacement(UserContext user, String replacementRunId, ChatRun source, String messageId) {
+        ChatRun replacement = ownedRun(user, replacementRunId);
+        if (replacement.id().equals(source.id())
+                || !Objects.equals(replacement.sessionId(), source.sessionId())
+                || !Objects.equals(replacement.userMessageId(), messageId)
+                || replacement.runMode() != ChatRunMode.REGENERATE_ASSISTANT
+                || replacement.createdAt().isBefore(source.createdAt())) {
+            throw new IllegalArgumentException("replacementRunId must reference a later replacement of the same question");
+        }
     }
 
     @Transactional(readOnly = true, timeout = 2)

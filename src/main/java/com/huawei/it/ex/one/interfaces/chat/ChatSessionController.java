@@ -519,10 +519,6 @@ public class ChatSessionController {
         return toDto(session, null, null);
     }
 
-    private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant) {
-        return toDto(session, firstAssistant, null);
-    }
-
     private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant,
                                  ChatSessionLastRunSummary lastRun) {
         ChatRunStatus lastRunStatus = lastRun == null ? null : lastRun.status();

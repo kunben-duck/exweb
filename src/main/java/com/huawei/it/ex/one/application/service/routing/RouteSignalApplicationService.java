@@ -245,21 +245,7 @@ public class RouteSignalApplicationService {
             return intentFailureFrames(request, result.decision(), latencyMs, intentFailureReason(result.decision()));
         }
         if (result.waitingClarification()) {
-            recordAmbiguousIntent(request, result, latencyMs);
-            // 澄清不是可执行路由；交由等待终态创建 Interaction，不能在这里启动候选 Runtime。
-            if (clarificationRoundLimitReached(request)) {
-                RouteSignalResult routeResult = RouteSignalResult.of(RouteTarget.agentRuntime(IntentAgentRuntime.PROVIDER, 0.0,
-                        "intent clarification max rounds exceeded"));
-                return intentResultAndRouteFrames(request, routeResult, null, latencyMs, "DEGRADED");
-            }
-            Map<String, Object> clarificationPayload = intentClarificationPayload(
-                    request.command(), result, request.routeTrigger(), intentMemory);
-            return Flux.just(RouteSignalFrame.result(RouteSignalResult.waitingIntentClarification(
-                    clarificationPayload,
-                    latencyMs,
-                    routingPolicy.intentConfidenceThreshold(),
-                    result.intentSessionId(),
-                    result.intentRequestId())));
+            return waitingClarificationFrames(request, intentMemory, result, latencyMs);
         }
         IntentDecision intent = result == null ? null : result.decision();
         if (intent != null && intent.complexity() == TaskComplexity.NEED_CLARIFICATION) {
@@ -285,6 +271,25 @@ public class RouteSignalApplicationService {
                 intent, latencyMs, routingPolicy.intentConfidenceThreshold());
         return intentResultAndRouteFrames(request, routeResult, intent, latencyMs,
                 routeAction(result, intent, route));
+    }
+
+    private Flux<RouteSignalFrame> waitingClarificationFrames(IntentRouteRequest request, MemoryContext intentMemory,
+                                                              IntentRecognitionResult result, long latencyMs) {
+        recordAmbiguousIntent(request, result, latencyMs);
+        // 澄清不是可执行路由；交由等待终态创建 Interaction，不能在这里启动候选 Runtime。
+        if (clarificationRoundLimitReached(request)) {
+            RouteSignalResult routeResult = RouteSignalResult.of(RouteTarget.agentRuntime(IntentAgentRuntime.PROVIDER, 0.0,
+                    "intent clarification max rounds exceeded"));
+            return intentResultAndRouteFrames(request, routeResult, null, latencyMs, "DEGRADED");
+        }
+        Map<String, Object> payload = intentClarificationPayload(
+                request.command(), result, request.routeTrigger(), intentMemory);
+        return Flux.just(RouteSignalFrame.result(RouteSignalResult.waitingIntentClarification(
+                payload,
+                latencyMs,
+                routingPolicy.intentConfidenceThreshold(),
+                result.intentSessionId(),
+                result.intentRequestId())));
     }
 
     private void recordAmbiguousIntent(IntentRouteRequest request, IntentRecognitionResult result, long latencyMs) {

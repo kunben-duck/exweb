@@ -107,8 +107,7 @@ public interface SessionRepository {
         String title = filter == null ? null : filter.title();
         String channel = filter == null ? null : filter.channel();
         boolean mainSiteOnly = filter != null && filter.mainSiteOnly();
-        if ((title == null || title.isBlank()) && (appId == null || appId.isBlank())
-                && (channel == null || channel.isBlank()) && !mainSiteOnly) {
+        if (emptyFilter(title) && emptyFilter(appId) && emptyFilter(channel) && !mainSiteOnly) {
             return pageByTenantIdAndUserId(tenantId, userId, cursor, limit);
         }
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
@@ -162,9 +161,8 @@ public interface SessionRepository {
                 findByTenantIdAndUserId(tenantId, userId), filter, curPage, pageSize);
     }
 
-    private static ChatSessionNumberPage pageNumberFromSessions(
-            List<ChatSession> sessions, String appId, int curPage, int pageSize) {
-        return pageNumberFromSessions(sessions, new SessionListFilter(appId, null, null), curPage, pageSize);
+    private static boolean emptyFilter(String value) {
+        return value == null || value.isBlank();
     }
 
     private static ChatSessionNumberPage pageNumberFromSessions(

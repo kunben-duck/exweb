@@ -143,20 +143,25 @@ public class ApiStoreDocumentStorage implements DocumentStorage {
             String objectKey = docId != null ? docId : "api-store-url:" + sha256Hex(url);
             String docName = text(documentNode, "docName");
             Long docSize = longValue(documentNode, "docSize");
-            Map<String, Object> metadata = new LinkedHashMap<>();
-            metadata.put("providerLocatorType", docId == null ? "URL" : "DOC_ID");
-            for (String field : PROVIDER_DOCUMENT_FIELDS) {
-                JsonNode value = documentNode.get(field);
-                if (value != null && !value.isNull()) {
-                    metadata.put(field, objectMapper.convertValue(value, Object.class));
-                }
-            }
+            Map<String, Object> metadata = providerDocumentMetadata(documentNode, docId);
             return new ProviderDocument(docId, url, objectKey, docName, docSize, metadata, skillId(request.command()));
         } catch (IllegalArgumentException ex) {
             throw ex;
         } catch (Exception ex) {
             throw new IllegalStateException("api-store 上传响应解析失败", ex);
         }
+    }
+
+    private Map<String, Object> providerDocumentMetadata(JsonNode documentNode, String docId) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("providerLocatorType", docId == null ? "URL" : "DOC_ID");
+        for (String field : PROVIDER_DOCUMENT_FIELDS) {
+            JsonNode value = documentNode.get(field);
+            if (value != null && !value.isNull()) {
+                metadata.put(field, objectMapper.convertValue(value, Object.class));
+            }
+        }
+        return metadata;
     }
 
     private String metadataJson(DocumentStorageUploadRequest request, ProviderDocument providerDocument) {

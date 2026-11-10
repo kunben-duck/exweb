@@ -315,17 +315,23 @@ public class RelayRuntimeResponseNormalizer {
         }
         String normalized = normalizeTypeName(type);
         Set<String> configured = mappingProperties.normalizedAnswerEventTypes();
+        return answerDeltaType(normalized) || outputDeltaType(normalized) || configured.contains(normalized);
+    }
+
+    private boolean answerDeltaType(String normalized) {
         return "message.delta".equals(normalized)
                 || "delta".equals(normalized)
                 || "answer".equals(normalized)
                 || "answer.delta".equals(normalized)
-                || "assistant.delta".equals(normalized)
-                || "output".equals(normalized)
+                || "assistant.delta".equals(normalized);
+    }
+
+    private boolean outputDeltaType(String normalized) {
+        return "output".equals(normalized)
                 || "output.delta".equals(normalized)
                 || "output_text".equals(normalized)
                 || "text".equals(normalized)
-                || "output-text".equals(normalized)
-                || configured.contains(normalized);
+                || "output-text".equals(normalized);
     }
 
     private ChatEvent mappedRuntimeEvent(String runId, String sessionId, JsonNode root,
@@ -436,7 +442,11 @@ public class RelayRuntimeResponseNormalizer {
                 || normalized.equals("auth")
                 || normalized.endsWith("_auth")
                 || normalized.contains("token")
-                || normalized.contains("secret")
+                || credentialField(normalized);
+    }
+
+    private boolean credentialField(String normalized) {
+        return normalized.contains("secret")
                 || normalized.contains("password")
                 || normalized.contains("credential")
                 || normalized.contains("api_key")
@@ -463,7 +473,11 @@ public class RelayRuntimeResponseNormalizer {
     private boolean isTerminalText(String frame) {
         String normalized = normalizeTypeName(frame);
         return "[done]".equalsIgnoreCase(frame == null ? "" : frame.trim())
-                || "steam-complete".equals(normalized)
+                || streamCompletedType(normalized);
+    }
+
+    private boolean streamCompletedType(String normalized) {
+        return "steam-complete".equals(normalized)
                 || "stream-complete".equals(normalized)
                 || "stream.complete".equals(normalized)
                 || "stream-completed".equals(normalized);
@@ -500,10 +514,7 @@ public class RelayRuntimeResponseNormalizer {
                 || "completed".equals(normalized)
                 || "complete".equals(normalized)
                 || "done".equals(normalized)
-                || "steam-complete".equals(normalized)
-                || "stream-complete".equals(normalized)
-                || "stream.complete".equals(normalized)
-                || "stream-completed".equals(normalized);
+                || streamCompletedType(normalized);
     }
 
     private boolean isError(String type) {

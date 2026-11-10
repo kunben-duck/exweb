@@ -86,10 +86,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         }
         String assistantMessageId = requiredAssistantMessageId(initial);
         List<ChatEvent> ordered = callbackEvents(callback, initial, assistantMessageId);
-        ChatSession session = sessionRepository.findByTenantIdAndUserIdAndId(
-                        initial.tenantId(), initial.userId(), initial.sessionId())
-                .orElseThrow(() -> new IllegalStateException("DomainAgent async callback session is unavailable"));
-        session = sessionService.lockAndReloadForMessageMutation(initial.tenantId(), initial.userId(), session);
+        ChatSession session = lockCallbackSession(initial);
         // 删除提交与后台 Stop 之间仍可能收到回调，必须依据锁后状态阻止消息写入。
         if ("DELETED".equals(session.status())) {
             return CommitResult.rejected(initial);
@@ -100,12 +97,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         ChatRunStatus terminalStatus = callback.completed()
                 ? ChatRunStatus.COMPLETED : ChatRunStatus.FAILED;
         // CAS 同时检查 RUNNING、ASYNC_WAITING 和截止时间；Stop、超时及重复回调只有一方可提交。
-        boolean claimed = runRepository.tryClaimExternalTerminal(
-                new ChatRunRepository.ExternalTerminalClaim(
-                        initial.id(), initial.tenantId(), initial.userId(), initial.sessionId(),
-                        terminalStatus, initial.cancelReason(), finishedAt,
-                        ChatRunRepository.ExternalTerminalGuard.ASYNC_CALLBACK,
-                        null, null, null, null));
+        boolean claimed = claimCallbackTerminal(initial, terminalStatus, finishedAt);
         if (!claimed) {
             return CommitResult.rejected(runRepository.findById(initial.id()).orElse(initial));
         }
@@ -134,11 +126,31 @@ public class DomainAgentAsyncTaskCallbackCommitService {
                 new UserContext(initial.tenantId(), initial.userId(), initial.userId()),
                 session,
                 terminal.sequence());
+        notifyAsyncFinished(initial, terminalStatus);
+        turns.committed(committedRun, terminal.payload().get("code") instanceof String code ? code : null);
+        return new CommitResult(true, committedRun, existing.id(), List.copyOf(sequenced));
+    }
+
+    private void notifyAsyncFinished(ChatRun initial, ChatRunStatus terminalStatus) {
         notificationPublisher.publish(new UserNotificationRecipient(initial.tenantId(), initial.userId()),
                 new UserNotification("session.async.finished", Map.of(
                         "sessionId", initial.sessionId(), "runId", initial.id(), "status", terminalStatus.name())));
-        turns.committed(committedRun, terminal.payload().get("code") instanceof String code ? code : null);
-        return new CommitResult(true, committedRun, existing.id(), List.copyOf(sequenced));
+    }
+
+    private ChatSession lockCallbackSession(ChatRun initial) {
+        ChatSession session = sessionRepository.findByTenantIdAndUserIdAndId(
+                        initial.tenantId(), initial.userId(), initial.sessionId())
+                .orElseThrow(() -> new IllegalStateException("DomainAgent async callback session is unavailable"));
+        return sessionService.lockAndReloadForMessageMutation(initial.tenantId(), initial.userId(), session);
+    }
+
+    private boolean claimCallbackTerminal(ChatRun initial, ChatRunStatus terminalStatus, Instant finishedAt) {
+        return runRepository.tryClaimExternalTerminal(
+                new ChatRunRepository.ExternalTerminalClaim(
+                        initial.id(), initial.tenantId(), initial.userId(), initial.sessionId(),
+                        terminalStatus, initial.cancelReason(), finishedAt,
+                        ChatRunRepository.ExternalTerminalGuard.ASYNC_CALLBACK,
+                        null, null, null, null));
     }
 
     private List<ChatEvent> callbackEvents(
@@ -157,17 +169,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
 
         List<ChatEvent> events = new ArrayList<>();
         if (callback.resultProvided()) {
-            Map<String, Object> startedPayload = new LinkedHashMap<>();
-            startedPayload.put("source", "domain-agent");
-            startedPayload.put("sourceType", "agent.async_result_started");
-            startedPayload.put("status", "ASYNC_RESULT_STARTED");
-            startedPayload.put("resultMode", callback.resultMode());
-            startedPayload.put("messageReady", true);
-            startedPayload.put("assistantMessageId", assistantMessageId);
-            startedPayload.put("feedbackTargetMessageId", assistantMessageId);
-            events.add(new RuntimeEvent(
-                    run.id(), run.sessionId(), 0L, Instant.now(), "run.async_result_started",
-                    Map.copyOf(startedPayload)));
+            events.add(asyncResultStarted(callback, run, assistantMessageId));
             events.addAll(callback.businessEvents());
         }
         events.add(new RuntimeEvent(
@@ -201,6 +203,20 @@ public class DomainAgentAsyncTaskCallbackCommitService {
                     "DomainAgent后台任务执行失败", payload));
         }
         return List.copyOf(events);
+    }
+
+    private ChatEvent asyncResultStarted(PreparedCallback callback, ChatRun run, String assistantMessageId) {
+        Map<String, Object> startedPayload = new LinkedHashMap<>();
+        startedPayload.put("source", "domain-agent");
+        startedPayload.put("sourceType", "agent.async_result_started");
+        startedPayload.put("status", "ASYNC_RESULT_STARTED");
+        startedPayload.put("resultMode", callback.resultMode());
+        startedPayload.put("messageReady", true);
+        startedPayload.put("assistantMessageId", assistantMessageId);
+        startedPayload.put("feedbackTargetMessageId", assistantMessageId);
+        return new RuntimeEvent(
+                run.id(), run.sessionId(), 0L, Instant.now(), "run.async_result_started",
+                Map.copyOf(startedPayload));
     }
 
     private List<PublishedEvent> sequenceAndPersist(

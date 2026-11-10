@@ -177,9 +177,8 @@ public class ChatInteractionApplicationService {
     }
 
     public int markWaitingForRun(String tenantId, String userId, String interactionId, String continueRunId) {
-        if (tenantId == null || tenantId.isBlank() || userId == null || userId.isBlank()
-                || interactionId == null || interactionId.isBlank()
-                || continueRunId == null || continueRunId.isBlank()) {
+        if (missingClaimId(tenantId) || missingClaimId(userId)
+                || missingClaimId(interactionId) || missingClaimId(continueRunId)) {
             return 0;
         }
         return repository.markWaitingForRun(tenantId, userId, interactionId, continueRunId);
@@ -190,9 +189,8 @@ public class ChatInteractionApplicationService {
      */
     public int cancelRespondingForRun(String tenantId, String userId, String interactionId,
                                       String continueRunId, Instant cancelledAt) {
-        if (tenantId == null || tenantId.isBlank() || userId == null || userId.isBlank()
-                || interactionId == null || interactionId.isBlank()
-                || continueRunId == null || continueRunId.isBlank()) {
+        if (missingClaimId(tenantId) || missingClaimId(userId)
+                || missingClaimId(interactionId) || missingClaimId(continueRunId)) {
             return 0;
         }
         return repository.cancelRespondingForRun(
@@ -385,5 +383,9 @@ public class ChatInteractionApplicationService {
             }
         }
         return ChatInteractionType.AGENT_CLARIFICATION;
+    }
+
+    private boolean missingClaimId(String value) {
+        return value == null || value.isBlank();
     }
 }

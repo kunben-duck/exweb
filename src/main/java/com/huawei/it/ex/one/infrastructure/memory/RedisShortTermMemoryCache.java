@@ -224,8 +224,7 @@ public class RedisShortTermMemoryCache {
                 && ("user".equalsIgnoreCase(message.role()) || "assistant".equalsIgnoreCase(message.role()))
                 && message.content() != null
                 && !message.content().isBlank()
-                && !("assistant".equalsIgnoreCase(message.role())
-                && AgentDataPersistenceMetadata.placeholderAssistant(message.metadataJson()));
+                && !placeholderAssistant(message);
         return new MemoryCacheEntry(
                 message.id(),
                 message.parentMessageId(),
@@ -293,5 +292,10 @@ public class RedisShortTermMemoryCache {
             @JsonInclude(JsonInclude.Include.NON_NULL) String skillId,
             Instant createdAt
     ) {
+    }
+
+    private boolean placeholderAssistant(ChatMessage message) {
+        return "assistant".equalsIgnoreCase(message.role())
+                && AgentDataPersistenceMetadata.placeholderAssistant(message.metadataJson());
     }
 }

@@ -169,15 +169,23 @@ public class CandidateDomainAgentSwitchApplicationService {
                 || !Objects.equals(user.ownerUserId(), interaction.userId())
                 || !Objects.equals(run.sessionId(), interaction.sessionId())
                 || !Objects.equals(interactionId, interaction.id())
-                || !Objects.equals(run.id(), interaction.continueRunId())
+                || invalidContinuationSource(run, assistantId, interaction)) {
+            throw CandidateSwitchConflictException.staleSource(run.id());
+        }
+        return new AssistantSource(assistantId, interaction.sourceRunId());
+    }
+
+    private boolean invalidContinuationSource(ChatRun run, String assistantId, ChatInteractionRequest interaction) {
+        return !Objects.equals(run.id(), interaction.continueRunId())
                 || !Objects.equals(run.userMessageId(), interaction.userMessageId())
                 || !Objects.equals(assistantId, interaction.assistantMessageId())
                 || interaction.interactionType() != ChatInteractionType.INTENT_CLARIFICATION
                 || !AmbiguousRouteSupport.isAmbiguous(interaction)
-                || interaction.sourceRunId() == null || interaction.sourceRunId().isBlank()) {
-            throw CandidateSwitchConflictException.staleSource(run.id());
-        }
-        return new AssistantSource(assistantId, interaction.sourceRunId());
+                || missingSourceRun(interaction);
+    }
+
+    private boolean missingSourceRun(ChatInteractionRequest interaction) {
+        return interaction.sourceRunId() == null || interaction.sourceRunId().isBlank();
     }
 
     private String metadataText(ChatRun run, String key) {

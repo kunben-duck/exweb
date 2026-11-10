@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.application.service.agentdatapersistence;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfiguration;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationException;
 import com.huawei.it.ex.one.application.service.domainagentconfig.DomainAgentSkillConfigurationService;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -99,31 +100,7 @@ public class AgentDataPersistenceGate {
         }
         // 留存与两项附件检查共享本次不可变配置快照，不分别读取缓存或调用 Provider。
         return configurationService.resolve(user, skillId, forwardHeaders)
-                .map(configuration -> {
-                    if (policyService.enabled()) {
-                        targetState.tighten(policyService.resolve(skillId, configuration));
-                    }
-                    if (countValidator.exceeds(documents, configuration.allowedUploadCount())) {
-                        return Decision.unsupported(targetState, countValidator.payload(
-                                skillId, configuration.skillName(), documents.size(),
-                                configuration.allowedUploadCount(), "SKILL"));
-                    }
-                    DomainAgentAttachmentTypeValidator.Validation validation =
-                            attachmentValidator.validate(configuration, documents);
-                    if (validation.malformed()) {
-                        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.CONFIGURATION_INVALID,
-                                        "DomainAgent attachment type configuration is invalid; validation is skipped")
-                                .operation("domain-agent-attachment.validate")
-                                .attribute("skillId", skillId)
-                                .build());
-                    }
-                    return validation.unsupported()
-                            ? Decision.unsupported(
-                                    targetState,
-                                    attachmentValidator.payload(
-                                            skillId, configuration.skillName(), validation))
-                            : Decision.allowed(targetState);
-                })
+                .map(configuration -> evaluateConfiguration(targetState, skillId, documents, configuration))
                 .onErrorResume(DomainAgentSkillConfigurationException.class, error -> {
                     // 留存策略不能在配置未知时放宽；仅做附件检查时沿用失败开放，不等同于空配置放行。
                     if (policyService.enabled()) {
@@ -136,6 +113,33 @@ public class AgentDataPersistenceGate {
                             .build(), error);
                     return Mono.just(Decision.allowed(targetState));
                 });
+    }
+
+    private Decision evaluateConfiguration(AgentDataPersistenceState state, String skillId,
+                                           List<UploadedDocument> documents,
+                                           DomainAgentSkillConfiguration configuration) {
+        if (policyService.enabled()) {
+            state.tighten(policyService.resolve(skillId, configuration));
+        }
+        if (countValidator.exceeds(documents, configuration.allowedUploadCount())) {
+            return Decision.unsupported(state, countValidator.payload(
+                    skillId, configuration.skillName(), documents.size(),
+                    configuration.allowedUploadCount(), "SKILL"));
+        }
+        DomainAgentAttachmentTypeValidator.Validation validation =
+                attachmentValidator.validate(configuration, documents);
+        if (validation.malformed()) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.CONFIGURATION_INVALID,
+                            "DomainAgent attachment type configuration is invalid; validation is skipped")
+                    .operation("domain-agent-attachment.validate")
+                    .attribute("skillId", skillId)
+                    .build());
+        }
+        return validation.unsupported()
+                ? Decision.unsupported(
+                        state,
+                        attachmentValidator.payload(skillId, configuration.skillName(), validation))
+                : Decision.allowed(state);
     }
 
     public record Decision(Status status, AgentDataPersistenceState state, Map<String, Object> payload) {

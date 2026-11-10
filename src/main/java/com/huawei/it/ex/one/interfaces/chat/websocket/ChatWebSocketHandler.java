@@ -82,7 +82,29 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                 .onBackpressureBuffer(Queues.<WebSocketMessage>get(properties.normalizedOutboundQueueSize()).get()),
                 Sinks.many().multicast().directBestEffort(), Sinks.empty());
         ChatWebSocketOutbound sender = envelope -> emit(session, outbound, user, envelope);
-        Mono<Void> inbound = session.receive()
+        Mono<Void> inbound = inbound(session, outbound, user, sender);
+        // 通知不能与 Run 争用同一个 Sink 的生产者保护；合流只预取一条，不等待发送锁。
+        Flux<WebSocketMessage> messages = outbound.messages();
+        // 期限从接收结束开始，覆盖 socket 的实际发送完成，不限制正常长连接。
+        Mono<Void> send = session.send(messages)
+                .timeout(outbound.drainDeadline(), Mono.defer(() -> {
+                    closeOverloaded(session, outbound, user);
+                    return Mono.empty();
+                }))
+                .takeUntilOther(outbound.closed().asMono())
+                .doFinally(signal -> {
+                    outbound.abort();
+                    closeSubscriptions(session, outbound, user);
+                });
+        return Mono.when(inbound, send).doFinally(signal -> {
+            outbound.abort();
+            closeSubscriptions(session, outbound, user);
+        });
+    }
+
+    private Mono<Void> inbound(WebSocketSession session, OutboundStreams outbound,
+                               UserContext user, ChatWebSocketOutbound sender) {
+        return session.receive()
                 .filter(message -> message.getType() == WebSocketMessage.Type.TEXT)
                 .handle((message, sink) -> {
                     if (message.getPayloadAsText().length() > properties.normalizedMaxInboundMessageBytes()) {
@@ -116,23 +138,6 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                         closeSubscriptions(session, outbound, user);
                     }
                 });
-        // 通知不能与 Run 争用同一个 Sink 的生产者保护；合流只预取一条，不等待发送锁。
-        Flux<WebSocketMessage> messages = outbound.messages();
-        // 期限从接收结束开始，覆盖 socket 的实际发送完成，不限制正常长连接。
-        Mono<Void> send = session.send(messages)
-                .timeout(outbound.drainDeadline(), Mono.defer(() -> {
-                    closeOverloaded(session, outbound, user);
-                    return Mono.empty();
-                }))
-                .takeUntilOther(outbound.closed().asMono())
-                .doFinally(signal -> {
-                    outbound.abort();
-                    closeSubscriptions(session, outbound, user);
-                });
-        return Mono.when(inbound, send).doFinally(signal -> {
-            outbound.abort();
-            closeSubscriptions(session, outbound, user);
-        });
     }
 
     private void emit(WebSocketSession session, OutboundStreams outbound,

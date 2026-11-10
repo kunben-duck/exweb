@@ -157,20 +157,7 @@ final class RouteSwitchContinuationCoordinator {
                 ? RouteTarget.domainAgent(input.currentTargetId(), reroute.state().currentRouteSource(),
                 1.0, "pending confirmed intent reroute")
                 : contextResolver.target(interaction, input);
-        ChatMessage userMessage = new ChatMessage(
-                interaction.userMessageId(),
-                request.user().tenantId(),
-                request.user().ownerUserId(),
-                request.session().id(),
-                "user",
-                input.originalQuery(),
-                null,
-                Instant.now());
-        ChatRunMessagePlan messagePlan = new ChatRunMessagePlan(
-                ChatRunMode.NEXT,
-                interaction.userMessageId(),
-                userMessage,
-                null);
+        ChatRunMessagePlan messagePlan = switchMessagePlan(request, interaction, input);
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
         CreateChatRunContext createContext = new CreateChatRunContext(
                 request.runId(),
@@ -199,9 +186,37 @@ final class RouteSwitchContinuationCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-domain-switch-execution-create");
-        AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
+        return executeStarted(request, new SwitchStart(interaction, beforeIntent, reroute, input, responseEvent,
+                route, messagePlan, bindingRef, executionClaim));
+    }
+
+    private ChatRunMessagePlan switchMessagePlan(Request request, ChatInteractionRequest interaction,
+                                                  RouteSwitchInput input) {
+        ChatMessage userMessage = new ChatMessage(
+                interaction.userMessageId(),
+                request.user().tenantId(),
+                request.user().ownerUserId(),
+                request.session().id(),
+                "user",
+                input.originalQuery(),
+                null,
+                Instant.now());
+        return new ChatRunMessagePlan(
+                ChatRunMode.NEXT,
+                interaction.userMessageId(),
+                userMessage,
+                null);
+    }
+
+    private record SwitchStart(ChatInteractionRequest interaction, boolean beforeIntent,
+                               RouteSwitchRerouteContext reroute, RouteSwitchInput input, RuntimeEvent responseEvent,
+                               RouteTarget route, ChatRunMessagePlan messagePlan,
+                               AtomicReference<RuntimeBinding> bindingRef, RunExecutionClaim executionClaim) { }
+
+    private Flux<ChatEvent> executeStarted(Request request, SwitchStart started) {
+        AtomicReference<RouteTarget> routeRef = new AtomicReference<>(started.route());
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
-        AssistantAssembly assistant = new AssistantAssembly(beforeIntent ? reroute.persistenceState() : null);
+        AssistantAssembly assistant = new AssistantAssembly(started.beforeIntent() ? started.reroute().persistenceState() : null);
         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef = new AtomicReference<>();
         AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef = new AtomicReference<>();
         AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef =
@@ -209,14 +224,14 @@ final class RouteSwitchContinuationCoordinator {
         RunEventPipelineContext pipelineContext = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
-                messagePlan,
+                started.messagePlan(),
                 routeRef,
-                bindingRef,
+                started.bindingRef(),
                 assistant,
                 request.runId(),
-                executionClaim,
+                started.executionClaim(),
                 pendingInteractionPayloadRef,
-                interaction,
+                started.interaction(),
                 request.startAttempt(),
                 documentIds(request.resolvedAttachments()),
                 deferredDomainAgentBindingRef,
@@ -224,13 +239,13 @@ final class RouteSwitchContinuationCoordinator {
                 pendingRouteSwitchAppliedEventRef);
         StartedSwitchContext context = new StartedSwitchContext(
                 request,
-                interaction,
-                input,
-                route,
-                responseEvent,
-                executionClaim,
+                started.interaction(),
+                started.input(),
+                started.route(),
+                started.responseEvent(),
+                started.executionClaim(),
                 routeRef,
-                bindingRef,
+                started.bindingRef(),
                 assistant,
                 pendingInteractionPayloadRef,
                 deferredDomainAgentBindingRef,

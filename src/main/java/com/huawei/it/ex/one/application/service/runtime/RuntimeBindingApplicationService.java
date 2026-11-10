@@ -200,12 +200,7 @@ public class RuntimeBindingApplicationService {
                         .reversed())
                 .toList();
         if (!activeBindings.isEmpty()) {
-            RuntimeBinding previous = activeBindings.getFirst();
-            RuntimeBinding selected = touchForRun(
-                    previous.withMetadata(bindingMetadata(previous, desiredProfile, metadataOverlay)), runId);
-            cancelDuplicateBindings(activeBindings, selected);
-            cache.put(selected);
-            return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME, previous);
+            return resumeActiveProfile(activeBindings, desiredProfile, metadataOverlay, runId);
         }
         List<RuntimeBinding> resumableBindings = repository
                 .findResumableBySession(tenantId, userId, sessionId, runtimeProvider)
@@ -229,6 +224,17 @@ public class RuntimeBindingApplicationService {
                 tenantId, userId, sessionId, runtimeProvider, runId, leafMessageId, sessionId,
                 bindingMetadata(null, desiredProfile, metadataOverlay)));
         return new RuntimeBindingResolution(created, RuntimeSessionMode.NEW);
+    }
+
+    private RuntimeBindingResolution resumeActiveProfile(List<RuntimeBinding> activeBindings,
+                                                          RuntimeProfileMetadata.Snapshot desiredProfile,
+                                                          Map<String, Object> metadataOverlay, String runId) {
+        RuntimeBinding previous = activeBindings.getFirst();
+        RuntimeBinding selected = touchForRun(
+                previous.withMetadata(bindingMetadata(previous, desiredProfile, metadataOverlay)), runId);
+        cancelDuplicateBindings(activeBindings, selected);
+        cache.put(selected);
+        return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME, previous);
     }
 
     /** 带 Relay 调用档案的 Binding 解析请求。 */
@@ -539,10 +545,7 @@ public class RuntimeBindingApplicationService {
         if (claim == null || !Objects.equals(claim.runId(), request.continueRunId())
                 || request.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
                 || !DOMAIN_AGENT_PROVIDER.equals(request.runtimeProvider())
-                || !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
-                || binding.status() != RuntimeBindingStatus.ACTIVE
-                || !Objects.equals(binding.lastRunId(), request.sourceRunId())
-                || !Objects.equals(expectedSkillId, metadataText(binding, "domainAgentId"))) {
+                || invalidConfirmedRerouteBinding(request, binding, expectedSkillId)) {
             throw new IllegalStateException("确认重意图的原 Binding 已失效");
         }
         RuntimeBinding next = binding.withRun(claim.runId(), binding.expiresAt())
@@ -551,6 +554,14 @@ public class RuntimeBindingApplicationService {
                 .orElseThrow(() -> new ChatEventAppendRejectedException("确认重意图被 execution 栅栏拒绝"));
         synchronizeCache(resumed);
         return resumed;
+    }
+
+    private boolean invalidConfirmedRerouteBinding(ChatInteractionRequest request, RuntimeBinding binding,
+                                                     String expectedSkillId) {
+        return !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                || binding.status() != RuntimeBindingStatus.ACTIVE
+                || !Objects.equals(binding.lastRunId(), request.sourceRunId())
+                || !Objects.equals(expectedSkillId, metadataText(binding, "domainAgentId"));
     }
 
     /**
@@ -592,10 +603,7 @@ public class RuntimeBindingApplicationService {
                 || !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
                 || binding.status() != RuntimeBindingStatus.ACTIVE
                 || !Objects.equals(request.sourceRunId(), binding.lastRunId())
-                || skillId == null || !skillId.equals(metadataText(binding, "domainAgentId"))
-                || request.approvalId() == null || request.approvalId().isBlank()
-                || request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
-                || !Objects.equals(request.runtimeSessionId(), binding.runtimeSessionId())) {
+                || invalidDomainAgentInteractionSession(request, binding, skillId)) {
             throw new IllegalStateException("DomainAgent Interaction Binding 不可续接: " + binding.id());
         }
         RuntimeBinding next = binding.withRun(runId, binding.expiresAt())
@@ -605,6 +613,18 @@ public class RuntimeBindingApplicationService {
                         "DomainAgent Interaction Binding 被 run/execution 栅栏拒绝: runId=" + runId));
         synchronizeCache(resumed);
         return resumed;
+    }
+
+    private boolean invalidDomainAgentInteractionSession(ChatInteractionRequest request, RuntimeBinding binding,
+                                                           String skillId) {
+        return skillId == null || !skillId.equals(metadataText(binding, "domainAgentId"))
+                || missingInteractionValue(request.approvalId())
+                || missingInteractionValue(request.runtimeSessionId())
+                || !Objects.equals(request.runtimeSessionId(), binding.runtimeSessionId());
+    }
+
+    private boolean missingInteractionValue(String value) {
+        return value == null || value.isBlank();
     }
 
     public boolean restoreUnstartedDomainAgentInteraction(RuntimeBinding binding, String runId, String sourceRunId) {
@@ -970,6 +990,10 @@ public class RuntimeBindingApplicationService {
         if (request.approvalId() == null || request.approvalId().isBlank()) {
             throw new IllegalStateException("Interaction 请求缺少 Relay approval_id: " + request.id());
         }
+        validateRelayInteractionSession(request, binding);
+    }
+
+    private void validateRelayInteractionSession(ChatInteractionRequest request, RuntimeBinding binding) {
         if (request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
                 || binding.runtimeSessionId() == null || binding.runtimeSessionId().isBlank()
                 || !Objects.equals(request.runtimeSessionId(), binding.runtimeSessionId())) {
@@ -1240,14 +1264,21 @@ public class RuntimeBindingApplicationService {
         validateDomainAgentBindingCommand(command);
         if (interaction == null || claim == null
                 || !Objects.equals(command.runId(), claim.runId())
-                || !Objects.equals(command.tenantId(), interaction.tenantId())
-                || !Objects.equals(command.userId(), interaction.userId())
-                || !Objects.equals(command.sessionId(), interaction.sessionId())
-                || (interaction.continueRunId() != null
-                && !interaction.continueRunId().isBlank()
-                && !Objects.equals(command.runId(), interaction.continueRunId()))) {
+                || mismatchedInteractionOwner(interaction, command)
+                || mismatchedContinuationRun(interaction, command)) {
             throw new IllegalArgumentException("DomainAgent route-switch Binding 参数不完整或不匹配");
         }
+    }
+
+    private boolean mismatchedInteractionOwner(ChatInteractionRequest interaction, DomainAgentBindingCommand command) {
+        return !Objects.equals(command.tenantId(), interaction.tenantId())
+                || !Objects.equals(command.userId(), interaction.userId())
+                || !Objects.equals(command.sessionId(), interaction.sessionId());
+    }
+
+    private boolean mismatchedContinuationRun(ChatInteractionRequest interaction, DomainAgentBindingCommand command) {
+        return interaction.continueRunId() != null && !interaction.continueRunId().isBlank()
+                && !Objects.equals(command.runId(), interaction.continueRunId());
     }
 
     private void validateDomainAgentRouteSwitchSource(
@@ -1257,8 +1288,7 @@ public class RuntimeBindingApplicationService {
                 || !DOMAIN_AGENT_PROVIDER.equals(source.provider())
                 || (source.status() != RuntimeBindingStatus.ACTIVE
                 && source.status() != RuntimeBindingStatus.CANCELLED)
-                || interaction.sourceRunId() == null
-                || interaction.sourceRunId().isBlank()
+                || missingInteractionValue(interaction.sourceRunId())
                 || !Objects.equals(interaction.sourceRunId(), source.lastRunId())) {
             throw new ChatEventAppendRejectedException(
                     "DomainAgent route-switch source Binding 已变化: bindingId=" + source.id());

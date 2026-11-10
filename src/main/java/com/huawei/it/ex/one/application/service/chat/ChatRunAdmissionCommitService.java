@@ -215,23 +215,7 @@ public class ChatRunAdmissionCommitService {
                 request.source().assistantMessageId(),
                 request.source().reusedAssistantSourceRunId());
         turns.source(request.runId(), request.source().sourceRunId(), null, "CANDIDATE_SWITCH");
-        ChatRun run;
-        try {
-            run = chatRunService.insertRunning(new CreateChatRunContext(
-                    request.runId(),
-                    user,
-                    currentSession.id(),
-                    null,
-                    null,
-                    IntentExpertContext.removeReserved(
-                            SelectedIntentContext.removeReserved(request.command().metadata())),
-                    messagePlan.runMode(),
-                    messagePlan.parentMessageId(),
-                    messagePlan.userMessage().id(),
-                    MessageChannel.fromRequest(request.command().channel())));
-        } catch (ActiveRunExistsException ex) {
-            throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
-        }
+        ChatRun run = insertCandidateRun(request, user, currentSession, messagePlan);
         int cancelledInteractions = interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
         IntentExpertScope previousScope = IntentExpertContext.fromSessionMetadata(
                 currentSession.metadataJson()).orElse(null);
@@ -258,6 +242,26 @@ public class ChatRunAdmissionCommitService {
                 : List.of();
         return new AdmissionResult(messagePlan, run, bindingCancellations,
                 restorableCancellations, null, false);
+    }
+
+    private ChatRun insertCandidateRun(CandidateSwitchAdmissionCommand request, UserContext user,
+                                       ChatSession currentSession, ChatRunMessagePlan messagePlan) {
+        try {
+            return chatRunService.insertRunning(new CreateChatRunContext(
+                    request.runId(),
+                    user,
+                    currentSession.id(),
+                    null,
+                    null,
+                    IntentExpertContext.removeReserved(
+                            SelectedIntentContext.removeReserved(request.command().metadata())),
+                    messagePlan.runMode(),
+                    messagePlan.parentMessageId(),
+                    messagePlan.userMessage().id(),
+                    MessageChannel.fromRequest(request.command().channel())));
+        } catch (ActiveRunExistsException ex) {
+            throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
+        }
     }
 
     /**

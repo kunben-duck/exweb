@@ -352,13 +352,17 @@ final class AssistantAssembly {
         for (int depth = 0; depth < 3 && current instanceof Map<?, ?> map; depth++) {
             if (map.containsKey("thinkState") || map.containsKey("think_state")
                     || map.containsKey("thinkContent") || map.containsKey("think_content")
-                    || map.containsKey("thinkTitle") || map.containsKey("think_title")
-                    || map.containsKey("thinkTime") || map.containsKey("think_time")) {
+                    || containsThinkingTitleOrTime(map)) {
                 return true;
             }
             current = map.get("sourcePayload");
         }
         return false;
+    }
+
+    private static boolean containsThinkingTitleOrTime(Map<?, ?> map) {
+        return map.containsKey("thinkTitle") || map.containsKey("think_title")
+                || map.containsKey("thinkTime") || map.containsKey("think_time");
     }
 
     private static boolean nonEmpty(Object value) {

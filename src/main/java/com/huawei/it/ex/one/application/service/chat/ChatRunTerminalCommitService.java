@@ -275,21 +275,7 @@ public class ChatRunTerminalCommitService {
                 : ChatRunStatus.FAILED;
         java.time.Instant finishedAt = java.time.Instant.now();
         RunDuration duration = RunDuration.forRun(command.run(), finishedAt);
-        boolean claimed = runRepository.tryClaimExternalTerminal(
-                new ChatRunRepository.ExternalTerminalClaim(
-                        command.run().id(),
-                        command.run().tenantId(),
-                        command.run().userId(),
-                        command.run().sessionId(),
-                        terminalStatus,
-                        command.run().cancelReason(),
-                        finishedAt,
-                        command.guard(),
-                        command.recoveredByInstanceId(),
-                        command.fencingToken(),
-                        command.interactionId(),
-                        command.orphanBefore()
-                ));
+        boolean claimed = claimExternalTerminal(command, terminalStatus, finishedAt);
         if (!claimed) {
             ChatRun latest = runRepository.findById(command.run().id()).orElse(command.run());
             return new ExternalTerminalCommitResult(null, latest, false);
@@ -307,7 +293,53 @@ public class ChatRunTerminalCommitService {
             persistExternalPartialAssistant(command, latestRun, skillId, duration);
         }
         ChatEvent stored = chatStreamService.appendWithoutPublish(duration.decorate(command.event()));
-        ChatRun committedRun = runRepository.finalizeExternalTerminal(
+        ChatRun committedRun = finalizeExternalRun(latestRun, terminalStatus, stored, finishedAt);
+        // run.cancelled 表示用户 stop 已经取得控制权；watchdog 只负责闭合终态，不能恢复等待。
+        if (terminalStatus == ChatRunStatus.CANCELLED) {
+            cancelContinuationInteractionClaim(committedRun, command.interactionId());
+        } else {
+            releaseContinuationInteractionClaim(committedRun, command.interactionId());
+        }
+        markExecutionTerminal(stored);
+        if (asyncTask) {
+            notifyAsyncFinished(committedRun, terminalStatus);
+        }
+        try (var scope = turns.openScope(command.run(), terminalStatus == ChatRunStatus.CANCELLED)) {
+            turns.committed(committedRun, stored.payload().get("code") instanceof String code ? code : null);
+        }
+        return new ExternalTerminalCommitResult(stored, committedRun, true);
+    }
+
+    private void notifyAsyncFinished(ChatRun committedRun, ChatRunStatus terminalStatus) {
+        notificationPublisher.publish(
+                new UserNotificationRecipient(committedRun.tenantId(), committedRun.userId()),
+                new UserNotification("session.async.finished", Map.of(
+                        "sessionId", committedRun.sessionId(), "runId", committedRun.id(),
+                        "status", terminalStatus.name())));
+    }
+
+    private boolean claimExternalTerminal(ExternalTerminalCommitCommand command,
+                                          ChatRunStatus terminalStatus, java.time.Instant finishedAt) {
+        return runRepository.tryClaimExternalTerminal(
+                new ChatRunRepository.ExternalTerminalClaim(
+                        command.run().id(),
+                        command.run().tenantId(),
+                        command.run().userId(),
+                        command.run().sessionId(),
+                        terminalStatus,
+                        command.run().cancelReason(),
+                        finishedAt,
+                        command.guard(),
+                        command.recoveredByInstanceId(),
+                        command.fencingToken(),
+                        command.interactionId(),
+                        command.orphanBefore()
+                ));
+    }
+
+    private ChatRun finalizeExternalRun(ChatRun latestRun, ChatRunStatus terminalStatus,
+                                        ChatEvent stored, java.time.Instant finishedAt) {
+        return runRepository.finalizeExternalTerminal(
                 new ChatRunRepository.ExternalTerminalFinalize(
                         latestRun.id(),
                         latestRun.tenantId(),
@@ -318,24 +350,6 @@ public class ChatRunTerminalCommitService {
                         latestRun.cancelReason(),
                         finishedAt
                 ));
-        // run.cancelled 表示用户 stop 已经取得控制权；watchdog 只负责闭合终态，不能恢复等待。
-        if (terminalStatus == ChatRunStatus.CANCELLED) {
-            cancelContinuationInteractionClaim(committedRun, command.interactionId());
-        } else {
-            releaseContinuationInteractionClaim(committedRun, command.interactionId());
-        }
-        markExecutionTerminal(stored);
-        if (asyncTask) {
-            notificationPublisher.publish(
-                    new UserNotificationRecipient(committedRun.tenantId(), committedRun.userId()),
-                    new UserNotification("session.async.finished", Map.of(
-                            "sessionId", committedRun.sessionId(), "runId", committedRun.id(),
-                            "status", terminalStatus.name())));
-        }
-        try (var scope = turns.openScope(command.run(), terminalStatus == ChatRunStatus.CANCELLED)) {
-            turns.committed(committedRun, stored.payload().get("code") instanceof String code ? code : null);
-        }
-        return new ExternalTerminalCommitResult(stored, committedRun, true);
     }
 
     private void persistAsyncTerminalAssistant(ChatRun run, ChatRunStatus terminalStatus, RunDuration duration,
@@ -856,17 +870,7 @@ public class ChatRunTerminalCommitService {
         } else if (runtimeBindingRepository.findById(candidate.id()).isPresent()) {
             throw new IllegalStateException("Deferred DomainAgent binding ID already exists");
         }
-        for (RuntimeBinding active : runtimeBindingRepository.findActiveBySession(
-                candidate.tenantId(), candidate.userId(), candidate.chatSessionId())) {
-            if (active.status() == RuntimeBindingStatus.ACTIVE
-                    && !active.id().equals(candidate.id())) {
-                if (!runtimeBindingRepository.cancelActiveForRun(active.id(), active.lastRunId())) {
-                    throw new ChatEventAppendRejectedException(
-                            "Deferred DomainAgent binding could not replace the current binding: bindingId="
-                                    + active.id());
-                }
-            }
-        }
+        cancelReplacedBindings(candidate);
         java.time.Instant now = java.time.Instant.now();
         RuntimeBinding activated = new RuntimeBinding(
                 candidate.id(), candidate.tenantId(), candidate.userId(), candidate.chatSessionId(),
@@ -878,6 +882,20 @@ public class ChatRunTerminalCommitService {
         RuntimeBinding saved = runtimeBindingRepository.save(activated);
         context.bindingRef().set(saved);
         return saved;
+    }
+
+    private void cancelReplacedBindings(RuntimeBinding candidate) {
+        for (RuntimeBinding active : runtimeBindingRepository.findActiveBySession(
+                candidate.tenantId(), candidate.userId(), candidate.chatSessionId())) {
+            if (active.status() == RuntimeBindingStatus.ACTIVE
+                    && !active.id().equals(candidate.id())) {
+                if (!runtimeBindingRepository.cancelActiveForRun(active.id(), active.lastRunId())) {
+                    throw new ChatEventAppendRejectedException(
+                            "Deferred DomainAgent binding could not replace the current binding: bindingId="
+                                    + active.id());
+                }
+            }
+        }
     }
 
     private RuntimeBinding refreshBinding(TerminalCommitContext context, String leafMessageId) {

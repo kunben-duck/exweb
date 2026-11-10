@@ -189,26 +189,7 @@ public class FinEurekaIntentService implements IntentService {
                     .timeout(properties.normalizedTimeout())
                     .blockOptional()
                     .orElse(null);
-            if (result == null) {
-                observation.outcome("ERROR");
-                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_EMPTY_RESPONSE,
-                                "IntentDecision returned an empty response")
-                        .sessionId(command == null ? null : command.sessionId())
-                        .operation("intent.recognize")
-                        .build());
-                return IntentRecognitionResult.degraded(wireMapper.degraded("empty intent response"));
-            }
-            observation.intentResult();
-            observation.outcome(result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED
-                    ? "ERROR" : result.waitingClarification() ? "WAITING_USER" : "COMPLETED");
-            if (result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED) {
-                log.warn(SystemErrorLogEntry.builder(classifyIntentResult(result),
-                                "IntentDecision returned a non-executable result")
-                        .sessionId(command == null ? null : command.sessionId())
-                        .operation("intent.recognize")
-                        .build());
-            }
-            return result;
+            return observedResult(command, result, observation);
         } catch (RuntimeException ex) {
             observation.error(ex);
             log.warn(SystemErrorLogEntry.builder(classifyIntentFailure(ex),
@@ -220,6 +201,30 @@ public class FinEurekaIntentService implements IntentService {
         } finally {
             observation.finish(SignalType.ON_COMPLETE);
         }
+    }
+
+    private IntentRecognitionResult observedResult(ChatCommand command, IntentRecognitionResult result,
+                                                     AgentObservationRecorder.Scope observation) {
+        if (result == null) {
+            observation.outcome("ERROR");
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_EMPTY_RESPONSE,
+                            "IntentDecision returned an empty response")
+                    .sessionId(command == null ? null : command.sessionId())
+                    .operation("intent.recognize")
+                    .build());
+            return IntentRecognitionResult.degraded(wireMapper.degraded("empty intent response"));
+        }
+        observation.intentResult();
+        observation.outcome(result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED
+                ? "ERROR" : result.waitingClarification() ? "WAITING_USER" : "COMPLETED");
+        if (result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED) {
+            log.warn(SystemErrorLogEntry.builder(classifyIntentResult(result),
+                            "IntentDecision returned a non-executable result")
+                    .sessionId(command == null ? null : command.sessionId())
+                    .operation("intent.recognize")
+                    .build());
+        }
+        return result;
     }
 
     private SystemErrorCode classifyIntentFailure(RuntimeException failure) {

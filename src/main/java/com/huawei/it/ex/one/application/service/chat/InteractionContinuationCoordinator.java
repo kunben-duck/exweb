@@ -179,30 +179,7 @@ final class InteractionContinuationCoordinator {
             RouteSwitchRerouteContext.require(interaction);
         }
         if (interaction.interactionType() != ChatInteractionType.INTENT_CLARIFICATION) {
-            boolean retryCurrent = interaction.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
-                    && RouteSwitchRerouteContext.validateRetryCurrent(interaction, command);
-            if (!retryCurrent) {
-                rejectAmbiguousRouteFields(command);
-            }
-            if (!command.attachments().isEmpty()) {
-                if (interaction.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
-                        || !Boolean.TRUE.equals(command.approved())) {
-                    throw new IllegalArgumentException(
-                            "仅 INTENT_CLARIFICATION 或已批准的 ROUTE_SWITCH_CONFIRMATION 支持在续接时提交附件");
-                }
-                // 确认切换仅使用本次显式附件，解析结果在内存中下传，不给原 user 消息补写附件。
-                context.routeSwitchAttachmentsRef().set(
-                        documentFacade.resolveChatAttachmentsForUser(user, command.attachments()));
-            }
-            runtimeQuestionnaireAnswerValidator.validate(command, interaction);
-            Map<String, Object> response = interactionService.prepareResponsePayload(
-                    command, interaction.interactionType(), null);
-            if (!retryCurrent) {
-                return response;
-            }
-            Map<String, Object> retryResponse = new LinkedHashMap<>(response);
-            retryResponse.put("interactionAction", RouteSwitchRerouteContext.RETRY_CURRENT);
-            return Map.copyOf(retryResponse);
+            return prepareRuntimeResponse(context, interaction, user, command);
         }
         if (AmbiguousRouteSupport.isAmbiguous(interaction)) {
             // 人工候选直接走已校验候选；OTHER 把自定义回答交给澄清链重新调用 Intent。
@@ -236,6 +213,35 @@ final class InteractionContinuationCoordinator {
                 input.intentQuery()));
         payload.put("answerText", input.messageText());
         return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> prepareRuntimeResponse(ContinuationStartContext context,
+                                                        ChatInteractionRequest interaction, UserContext user,
+                                                        ChatInteractionResponseCommand command) {
+        boolean retryCurrent = interaction.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
+                && RouteSwitchRerouteContext.validateRetryCurrent(interaction, command);
+        if (!retryCurrent) {
+            rejectAmbiguousRouteFields(command);
+        }
+        if (!command.attachments().isEmpty()) {
+            if (interaction.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
+                    || !Boolean.TRUE.equals(command.approved())) {
+                throw new IllegalArgumentException(
+                        "仅 INTENT_CLARIFICATION 或已批准的 ROUTE_SWITCH_CONFIRMATION 支持在续接时提交附件");
+            }
+            // 确认切换仅使用本次显式附件，解析结果在内存中下传，不给原 user 消息补写附件。
+            context.routeSwitchAttachmentsRef().set(
+                    documentFacade.resolveChatAttachmentsForUser(user, command.attachments()));
+        }
+        runtimeQuestionnaireAnswerValidator.validate(command, interaction);
+        Map<String, Object> response = interactionService.prepareResponsePayload(
+                command, interaction.interactionType(), null);
+        if (!retryCurrent) {
+            return response;
+        }
+        Map<String, Object> retryResponse = new LinkedHashMap<>(response);
+        retryResponse.put("interactionAction", RouteSwitchRerouteContext.RETRY_CURRENT);
+        return Map.copyOf(retryResponse);
     }
 
     private AmbiguousRouteContinuationPlan ambiguousPlan(

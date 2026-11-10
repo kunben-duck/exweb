@@ -358,7 +358,7 @@ public class DomainAgentResponseNormalizer {
         JsonNode questions = root.get("questions");
         if (approvalId == null || !approvalId.isTextual() || approvalId.asText().isBlank()
                 || approvalId.asText().codePointCount(0, approvalId.asText().length()) > 128
-                || questions == null || !questions.isArray() || questions.isEmpty()) {
+                || invalidQuestions(questions)) {
             throw DomainAgentProtocolException.invalidFrame("DomainAgent questionnaire requires approval_id and questions");
         }
         Set<String> names = new HashSet<>();
@@ -369,6 +369,10 @@ public class DomainAgentResponseNormalizer {
                 throw DomainAgentProtocolException.invalidFrame("DomainAgent questionnaire questions must be nonempty and unique");
             }
         }
+    }
+
+    private boolean invalidQuestions(JsonNode questions) {
+        return questions == null || !questions.isArray() || questions.isEmpty();
     }
 
     private List<ChatEvent> questionnaireEvents(String runId, String sessionId, JsonNode root,
@@ -434,6 +438,11 @@ public class DomainAgentResponseNormalizer {
             }
         }
         // 同帧可同时有状态、卡片与正文；按固定顺序拆出标准事件，事件身份始终使用可信入参。
+        return displayEvents(runId, sessionId, root, state, events);
+    }
+
+    private List<ChatEvent> displayEvents(String runId, String sessionId, JsonNode root,
+                                          DomainAgentStreamState state, List<ChatEvent> events) {
         addMetadataEvents(runId, sessionId, root, events);
         if (!addTypedProcessEvent(runId, sessionId, root, events)) {
             addStateEvent(runId, sessionId, root, events);
@@ -578,13 +587,15 @@ public class DomainAgentResponseNormalizer {
     }
 
     private boolean hasCardPayload(JsonNode root) {
+        return hasExplicitCard(root) || standaloneContentAgent(root) || standaloneRecommendedQuestions(root);
+    }
+
+    private boolean hasExplicitCard(JsonNode root) {
         return root.hasNonNull("cardUrl")
                 || root.hasNonNull("diyCardScene")
                 || root.hasNonNull("cardList")
                 || root.hasNonNull("openCard")
-                || root.hasNonNull("specificSceneInfo")
-                || standaloneContentAgent(root)
-                || standaloneRecommendedQuestions(root);
+                || root.hasNonNull("specificSceneInfo");
     }
 
     private Map<String, Object> processPayload(JsonNode root) {
@@ -697,11 +708,7 @@ public class DomainAgentResponseNormalizer {
 
     private boolean standaloneRecommendedQuestions(JsonNode root) {
         return recommendedQuestionsFrame(root)
-                && !root.hasNonNull("cardUrl")
-                && !root.hasNonNull("diyCardScene")
-                && !root.hasNonNull("cardList")
-                && !root.hasNonNull("openCard")
-                && !root.hasNonNull("specificSceneInfo")
+                && !hasExplicitCard(root)
                 && !root.hasNonNull("contentAgent");
     }
 
@@ -983,7 +990,11 @@ public class DomainAgentResponseNormalizer {
         String normalized = field.toLowerCase(Locale.ROOT);
         return normalized.contains("cookie") || normalized.contains("authorization") || normalized.contains("token")
                 || normalized.contains("secret") || normalized.contains("password")
-                || normalized.contains("credential") || normalized.contains("apikey")
+                || credentialField(normalized);
+    }
+
+    private boolean credentialField(String normalized) {
+        return normalized.contains("credential") || normalized.contains("apikey")
                 || normalized.contains("api_key") || normalized.contains("access_key");
     }
 

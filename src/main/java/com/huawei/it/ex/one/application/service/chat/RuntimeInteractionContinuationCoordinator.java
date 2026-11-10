@@ -91,36 +91,13 @@ final class RuntimeInteractionContinuationCoordinator {
         RelayOutputMode relayOutputMode = inheritedState.relayOutputMode();
         Map<String, Object> domainSnapshot = domainAgent(interaction)
                 ? DomainAgentQuestionnaireContext.require(interaction) : Map.of();
-        RouteTarget route = domainAgent(interaction)
-                ? RouteTarget.domainAgent(DomainAgentQuestionnaireContext.text(domainSnapshot.get("skillId")),
-                        DomainAgentQuestionnaireContext.text(domainSnapshot.get("routeSource")), 1.0,
-                        "continue domain agent questionnaire")
-                : relayOutputMode == RelayOutputMode.ANSWER_STREAM_ONLY
-                ? RouteTarget.agentRuntimeAnswerStreamOnly(
-                        "interaction-continuation", 1.0, "continue waiting user input",
-                        inheritedState.invocationSkillId())
-                : RouteTarget.agentRuntimeWithInvocationSkill(
-                        "interaction-continuation", 1.0, "continue waiting user input",
-                        inheritedState.invocationSkillId());
+        RouteTarget route = interactionRoute(interaction, domainSnapshot, inheritedState, relayOutputMode);
         RuntimeEvent responseEvent = interactionEventFactory.clarificationResponseEvent(
                 request.runId(),
                 request.session().id(),
                 interaction,
                 request.claim().responsePayload());
-        ChatMessage userMessage = new ChatMessage(
-                interaction.userMessageId(),
-                request.user().tenantId(),
-                request.user().ownerUserId(),
-                request.session().id(),
-                "user",
-                "",
-                null,
-                Instant.now());
-        ChatRunMessagePlan messagePlan = new ChatRunMessagePlan(
-                ChatRunMode.NEXT,
-                interaction.userMessageId(),
-                userMessage,
-                null);
+        ChatRunMessagePlan messagePlan = interactionMessagePlan(request, interaction);
         AgentDataPersistenceState persistenceState = inheritedState.persistenceState();
         RuntimeInteractionDispatchState dispatchState = RuntimeQuestionnaireAnswerValidator.isQuestionnaire(interaction)
                 ? RuntimeInteractionDispatchState.tracked()
@@ -150,46 +127,92 @@ final class RuntimeInteractionContinuationCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-interaction-execution-create");
-        AssistantAssembly assistant = new AssistantAssembly(persistenceState);
+        return executeStarted(request, new StartedInteraction(interaction, route, responseEvent, messagePlan,
+                dispatchState, bindingRef, run, executionClaim, persistenceState, domainSnapshot));
+    }
+
+    private RouteTarget interactionRoute(ChatInteractionRequest interaction, Map<String, Object> domainSnapshot,
+                                         InteractionRunLifecycle.InheritedRunState inheritedState,
+                                         RelayOutputMode relayOutputMode) {
+        return domainAgent(interaction)
+                ? RouteTarget.domainAgent(DomainAgentQuestionnaireContext.text(domainSnapshot.get("skillId")),
+                        DomainAgentQuestionnaireContext.text(domainSnapshot.get("routeSource")), 1.0,
+                        "continue domain agent questionnaire")
+                : relayOutputMode == RelayOutputMode.ANSWER_STREAM_ONLY
+                ? RouteTarget.agentRuntimeAnswerStreamOnly(
+                        "interaction-continuation", 1.0, "continue waiting user input",
+                        inheritedState.invocationSkillId())
+                : RouteTarget.agentRuntimeWithInvocationSkill(
+                        "interaction-continuation", 1.0, "continue waiting user input",
+                        inheritedState.invocationSkillId());
+    }
+
+    private ChatRunMessagePlan interactionMessagePlan(Request request, ChatInteractionRequest interaction) {
+        ChatMessage userMessage = new ChatMessage(
+                interaction.userMessageId(),
+                request.user().tenantId(),
+                request.user().ownerUserId(),
+                request.session().id(),
+                "user",
+                "",
+                null,
+                Instant.now());
+        return new ChatRunMessagePlan(
+                ChatRunMode.NEXT,
+                interaction.userMessageId(),
+                userMessage,
+                null);
+    }
+
+    private record StartedInteraction(ChatInteractionRequest interaction, RouteTarget route,
+                                      RuntimeEvent responseEvent, ChatRunMessagePlan messagePlan,
+                                      RuntimeInteractionDispatchState dispatchState,
+                                      AtomicReference<RuntimeBinding> bindingRef, ChatRun run,
+                                      RunExecutionClaim executionClaim, AgentDataPersistenceState persistenceState,
+                                      Map<String, Object> domainSnapshot) { }
+
+    private Flux<ChatEvent> executeStarted(Request request, StartedInteraction started) {
+        AssistantAssembly assistant = new AssistantAssembly(started.persistenceState());
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
-                messagePlan,
-                new AtomicReference<>(route),
-                bindingRef,
+                started.messagePlan(),
+                new AtomicReference<>(started.route()),
+                started.bindingRef(),
                 assistant,
                 request.runId(),
-                executionClaim,
+                started.executionClaim(),
                 new AtomicReference<>(),
-                interaction,
+                started.interaction(),
                 request.startAttempt(),
-                domainAgent(interaction) ? DomainAgentQuestionnaireContext.strings(domainSnapshot.get("documentIds")) : List.of(),
-                dispatchState);
+                domainAgent(started.interaction())
+                        ? DomainAgentQuestionnaireContext.strings(started.domainSnapshot().get("documentIds")) : List.of(),
+                started.dispatchState());
         InteractionExecution execution = new InteractionExecution(
                 request,
-                interaction,
-                run,
-                responseEvent,
-                route,
-                executionClaim,
-                bindingRef,
+                started.interaction(),
+                started.run(),
+                started.responseEvent(),
+                started.route(),
+                started.executionClaim(),
+                started.bindingRef(),
                 assistant,
                 context);
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(context, () ->
                     eventPersistenceCoordinator.requireCurrentOwnerRunning(
-                                    executionClaim, "before-runtime-interaction-binding")
+                                    started.executionClaim(), "before-runtime-interaction-binding")
                             .thenMany(Flux.usingWhen(
                                     Mono.fromCallable(() -> resumeInteractionBinding(
-                                            request, interaction, executionClaim, dispatchState))
+                                            request, started.interaction(), started.executionClaim(), started.dispatchState()))
                                             .subscribeOn(eventIoScheduler),
                                     bindingLifecycle -> executeInteraction(execution, bindingLifecycle),
-                                    lifecycle -> cleanupUnstartedInteraction(
-                                            interaction, request.runId(), bindingRef, lifecycle, "complete"),
-                                    (lifecycle, failure) -> cleanupUnstartedInteraction(
-                                            interaction, request.runId(), bindingRef, lifecycle, "error"),
-                                    lifecycle -> cleanupUnstartedInteraction(
-                                            interaction, request.runId(), bindingRef, lifecycle, "cancel"))));
+                                    bindingLifecycle -> cleanupUnstartedInteraction(
+                                            started.interaction(), request.runId(), started.bindingRef(), bindingLifecycle, "complete"),
+                                    (bindingLifecycle, failure) -> cleanupUnstartedInteraction(
+                                            started.interaction(), request.runId(), started.bindingRef(), bindingLifecycle, "error"),
+                                    bindingLifecycle -> cleanupUnstartedInteraction(
+                                            started.interaction(), request.runId(), started.bindingRef(), bindingLifecycle, "cancel"))));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
         }

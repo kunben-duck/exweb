@@ -135,22 +135,7 @@ final class AmbiguousRouteContinuationCoordinator {
                 new AtomicReference<>(),
                 new AtomicReference<>(),
                 new AtomicReference<>());
-        RunEventPipelineContext context = new RunEventPipelineContext(
-                request.user(),
-                request.session(),
-                started.messagePlan(),
-                routeRef,
-                bindingRef,
-                runtimeReferences.assistant(),
-                request.runId(),
-                started.executionClaim(),
-                runtimeReferences.pendingInteractionPayloadRef(),
-                started.interaction(),
-                request.startAttempt(),
-                request.input().cumulativeDocumentIds(),
-                runtimeReferences.deferredDomainAgentBindingRef(),
-                runtimeReferences.pendingRouteMemoryDecisionRef(),
-                runtimeReferences.pendingRouteSwitchAppliedEventRef());
+        RunEventPipelineContext context = pipelineContext(request, started, runtimeReferences);
         // 候选来自已认领 Interaction 的选择计划，不再调用 Intent；子技能仍进入统一 Gate 和 Runtime。
         RouteSignalResult routeSignal = selectionResolver.routeSignal(
                 started.plan().candidate(),
@@ -177,6 +162,26 @@ final class AmbiguousRouteContinuationCoordinator {
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
         }
+    }
+
+    private RunEventPipelineContext pipelineContext(Request request, StartedExecution started,
+                                                     RuntimeReferences runtimeReferences) {
+        return new RunEventPipelineContext(
+                request.user(),
+                request.session(),
+                started.messagePlan(),
+                runtimeReferences.routeRef(),
+                runtimeReferences.bindingRef(),
+                runtimeReferences.assistant(),
+                request.runId(),
+                started.executionClaim(),
+                runtimeReferences.pendingInteractionPayloadRef(),
+                started.interaction(),
+                request.startAttempt(),
+                request.input().cumulativeDocumentIds(),
+                runtimeReferences.deferredDomainAgentBindingRef(),
+                runtimeReferences.pendingRouteMemoryDecisionRef(),
+                runtimeReferences.pendingRouteSwitchAppliedEventRef());
     }
 
     private RoutePipelineRequest routeRequest(

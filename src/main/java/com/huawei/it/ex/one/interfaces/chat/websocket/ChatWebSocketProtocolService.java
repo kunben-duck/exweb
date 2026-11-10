@@ -372,37 +372,42 @@ public class ChatWebSocketProtocolService {
                 connectionRegistry.unsubscribe(context.connectionId(), context.topicId());
             }
         } else if (decision.action() == LocalWebSocketConnectionRegistry.Action.RECOVER_REQUIRED) {
-            long lastSentSeq = context.lastSeq().get();
-            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEQUENCE_MISMATCH,
-                            "WebSocket event sequence rollback requires recovery")
-                    .runId(run.id())
-                    .sessionId(run.sessionId())
-                    .operation("websocket.topic.deliver")
-                    .attribute("connectionId", context.connectionId())
-                    .attribute("topicId", context.topicId())
-                    .attribute("subscribeAfterSeq", decision.resumeAfterSeq())
-                    .attribute("recoveryAfterSeq", decision.recoveryAfterSeq())
-                    .attribute("actualSeq", decision.actualSeq())
-                    .attribute("highestDeliveredSeq", decision.highestDeliveredSeq())
-                    .attribute("lastSentSeq", lastSentSeq)
-                    .build());
-            context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
-                    context.topicId(), decision.recoveryAfterSeq(), decision.actualSeq(),
-                    Map.of(
-                            "reason", "SEQ_ROLLBACK",
-                            "topicId", context.topicId(),
-                            "runId", run.id(),
-                            "sessionId", run.sessionId(),
-                            "subscribeAfterSeq", decision.resumeAfterSeq(),
-                            "recoveryAfterSeq", decision.recoveryAfterSeq(),
-                            "actualSeq", decision.actualSeq(),
-                            "highestDeliveredSeq", decision.highestDeliveredSeq(),
-                            "lastSentSeq", lastSentSeq
-                    )));
-            // 发现同 topic seq 回退后暂停该 topic，避免前端恢复期间继续接收更高 seq。
-            context.cancellation().tryEmitEmpty();
-            connectionRegistry.unsubscribe(context.connectionId(), context.topicId());
+            recoverTopic(context, run, decision);
         }
+    }
+
+    private void recoverTopic(TopicEventContext context, ChatRun run,
+                              LocalWebSocketConnectionRegistry.DeliveryDecision decision) {
+        long lastSentSeq = context.lastSeq().get();
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEQUENCE_MISMATCH,
+                        "WebSocket event sequence rollback requires recovery")
+                .runId(run.id())
+                .sessionId(run.sessionId())
+                .operation("websocket.topic.deliver")
+                .attribute("connectionId", context.connectionId())
+                .attribute("topicId", context.topicId())
+                .attribute("subscribeAfterSeq", decision.resumeAfterSeq())
+                .attribute("recoveryAfterSeq", decision.recoveryAfterSeq())
+                .attribute("actualSeq", decision.actualSeq())
+                .attribute("highestDeliveredSeq", decision.highestDeliveredSeq())
+                .attribute("lastSentSeq", lastSentSeq)
+                .build());
+        context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
+                context.topicId(), decision.recoveryAfterSeq(), decision.actualSeq(),
+                Map.of(
+                        "reason", "SEQ_ROLLBACK",
+                        "topicId", context.topicId(),
+                        "runId", run.id(),
+                        "sessionId", run.sessionId(),
+                        "subscribeAfterSeq", decision.resumeAfterSeq(),
+                        "recoveryAfterSeq", decision.recoveryAfterSeq(),
+                        "actualSeq", decision.actualSeq(),
+                        "highestDeliveredSeq", decision.highestDeliveredSeq(),
+                        "lastSentSeq", lastSentSeq
+                )));
+        // 发现同 topic seq 回退后暂停该 topic，避免前端恢复期间继续接收更高 seq。
+        context.cancellation().tryEmitEmpty();
+        connectionRegistry.unsubscribe(context.connectionId(), context.topicId());
     }
 
     private Disposable cancellationDisposable(Sinks.Empty<Void> cancellation) {

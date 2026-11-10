@@ -122,7 +122,11 @@ public final class DomainAgentControlEventMapper {
         String normalized = field == null ? "" : field.toLowerCase(Locale.ROOT);
         return normalized.contains("cookie") || normalized.contains("authorization")
                 || normalized.contains("token") || normalized.contains("secret")
-                || normalized.contains("password") || normalized.contains("credential")
+                || credentialField(normalized);
+    }
+
+    private boolean credentialField(String normalized) {
+        return normalized.contains("password") || normalized.contains("credential")
                 || normalized.contains("apikey") || normalized.contains("api_key")
                 || normalized.contains("access_key");
     }

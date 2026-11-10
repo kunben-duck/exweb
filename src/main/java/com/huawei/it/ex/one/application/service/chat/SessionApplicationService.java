@@ -991,25 +991,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 if (draft == null || draft.partType() == null || draft.partType().isBlank()) {
                     continue;
                 }
-                parts.add(new ChatMessagePart(
-                        idGenerator.newId("part", IdGenerateContext.of(context.tenantId(), context.userId(), context.sessionId())),
-                        context.tenantId(),
-                        context.userId(),
-                        context.sessionId(),
-                        context.messageId(),
-                        context.runId(),
-                        draft.partType(),
-                        draft.sourceType(),
-                        draft.contentText(),
-                        draft.title(),
-                        draft.status(),
-                        draft.channel(),
-                        draft.displayHint(),
-                        draft.visible(),
-                        draft.payload(),
-                        order++,
-                        context.now()
-                ));
+                parts.add(buildDraftPart(context, draft, order++));
             }
         }
         if (context.appendAnswerPart()) {
@@ -1037,6 +1019,28 @@ public class SessionApplicationService implements ChatSessionFacade {
             ));
         }
         return List.copyOf(parts);
+    }
+
+    private ChatMessagePart buildDraftPart(MessagePartBuildContext context, ChatMessagePartDraft draft, int order) {
+        return new ChatMessagePart(
+                idGenerator.newId("part", IdGenerateContext.of(context.tenantId(), context.userId(), context.sessionId())),
+                context.tenantId(),
+                context.userId(),
+                context.sessionId(),
+                context.messageId(),
+                context.runId(),
+                draft.partType(),
+                draft.sourceType(),
+                draft.contentText(),
+                draft.title(),
+                draft.status(),
+                draft.channel(),
+                draft.displayHint(),
+                draft.visible(),
+                draft.payload(),
+                order,
+                context.now()
+        );
     }
 
     private List<ChatMessagePart> copyMessageParts(UserContext user, String targetSessionId, String targetMessageId,
@@ -1386,9 +1390,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 || !session.id().equals(existing.sessionId())
                 || !session.tenantId().equals(existing.tenantId())
                 || !session.userId().equals(existing.userId())
-                || !command.tenantId().equals(existing.tenantId())
-                || !command.userId().equals(existing.userId())
-                || !"assistant".equalsIgnoreCase(existing.role())) {
+                || invalidAsyncResultOwner(command, existing)) {
             throw new IllegalArgumentException("异步任务目标消息不属于当前会话");
         }
         ensureUnlockedAssistantMessage(existing, "异步任务 assistant 消息");
@@ -1586,5 +1588,11 @@ public class SessionApplicationService implements ChatSessionFacade {
             String metadataJson,
             boolean appendAnswerPart
     ) {
+    }
+
+    private boolean invalidAsyncResultOwner(AsyncAssistantResultUpdateCommand command, ChatMessage existing) {
+        return !command.tenantId().equals(existing.tenantId())
+                || !command.userId().equals(existing.userId())
+                || !"assistant".equalsIgnoreCase(existing.role());
     }
 }

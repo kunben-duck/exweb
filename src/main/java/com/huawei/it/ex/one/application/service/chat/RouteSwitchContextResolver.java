@@ -55,17 +55,7 @@ final class RouteSwitchContextResolver {
                 RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
         String candidateTargetId = firstText(
                 interaction.requestPayload().get("candidateTargetId"));
-        String currentProvider = blankToDefault(
-                firstText(interaction.requestPayload().get("currentProvider")),
-                RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
-        String currentTargetId = firstText(
-                interaction.requestPayload().get("currentTargetId"));
-        if (!RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(currentProvider)
-                || currentTargetId == null
-                || currentTargetId.isBlank()) {
-            throw new IllegalStateException(
-                    "路由切换 Interaction 缺少当前 DomainAgent 上下文");
-        }
+        String currentTargetId = currentTargetId(interaction);
         String originalQuery = firstText(
                 interaction.requestPayload().get("originalQuery"));
         String normalizedQuery = originalQuery == null ? "" : originalQuery;
@@ -101,6 +91,17 @@ final class RouteSwitchContextResolver {
                 currentTargetId,
                 normalizedQuery,
                 candidateRouteQuery);
+    }
+
+    private String currentTargetId(ChatInteractionRequest interaction) {
+        String provider = blankToDefault(firstText(interaction.requestPayload().get("currentProvider")),
+                RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
+        String targetId = firstText(interaction.requestPayload().get("currentTargetId"));
+        if (!RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(provider)
+                || targetId == null || targetId.isBlank()) {
+            throw new IllegalStateException("路由切换 Interaction 缺少当前 DomainAgent 上下文");
+        }
+        return targetId;
     }
 
     RouteTarget target(

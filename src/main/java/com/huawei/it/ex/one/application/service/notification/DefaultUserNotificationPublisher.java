@@ -47,8 +47,7 @@ public class DefaultUserNotificationPublisher implements UserNotificationPublish
     public void publish(UserNotificationRecipient recipient, UserNotification notification) {
         try {
             if (recipient == null || !recipient.valid() || notification == null
-                    || notification.type() == null || notification.type().isBlank()
-                    || notification.type().length() > 128 || notification.data() == null) {
+                    || invalidNotificationPayload(notification)) {
                 throw new IllegalArgumentException("Invalid user notification");
             }
             // 序列化快照避免调用方修改嵌套 Map；有界输出避免先构建超大 JSON。
@@ -71,6 +70,11 @@ public class DefaultUserNotificationPublisher implements UserNotificationPublish
         } catch (Exception ex) {
             warn("user-notification.prepare", ex);
         }
+    }
+
+    private boolean invalidNotificationPayload(UserNotification notification) {
+        return notification.type() == null || notification.type().isBlank()
+                || notification.type().length() > 128 || notification.data() == null;
     }
 
     private void enqueue(UserNotificationRecipient recipient, String frozen) {

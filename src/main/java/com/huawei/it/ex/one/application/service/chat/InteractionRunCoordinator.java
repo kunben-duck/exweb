@@ -60,38 +60,7 @@ final class InteractionRunCoordinator {
             return Flux.empty();
         }
         if (interaction.interactionType() == ChatInteractionType.INTENT_CLARIFICATION) {
-            if (request.clarificationInput() == null) {
-                throw new IllegalStateException(
-                        "意图澄清 continuation 缺少可信附件解析结果");
-            }
-            if (request.ambiguousRoutePlan() != null
-                    && request.ambiguousRoutePlan().selectedCandidate()) {
-                if (ambiguousRouteCoordinator == null) {
-                    throw new IllegalStateException(
-                            "AMBIGUOUS_ROUTE continuation 协调器未配置");
-                }
-                return ambiguousRouteCoordinator.execute(
-                        new AmbiguousRouteContinuationCoordinator.Request(
-                                request.user(),
-                                request.claim(),
-                                request.runId(),
-                                session,
-                                request.forwardHeaders(),
-                                request.traceContext(),
-                                request.startAttempt(),
-                                request.clarificationInput(),
-                                request.ambiguousRoutePlan()));
-            }
-            return intentClarificationCoordinator.execute(
-                    new IntentClarificationRunCoordinator.Request(
-                            request.user(),
-                            request.claim(),
-                            request.runId(),
-                            session,
-                            request.forwardHeaders(),
-                            request.traceContext(),
-                            request.startAttempt(),
-                            request.clarificationInput()));
+            return executeIntentClarification(request, session);
         }
         if (interaction.interactionType()
                 == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION) {
@@ -118,6 +87,41 @@ final class InteractionRunCoordinator {
                         request.traceContext(),
                         request.startAttempt(),
                         request.agentMode()));
+    }
+
+    private Flux<ChatEvent> executeIntentClarification(Request request, ChatSession session) {
+        if (request.clarificationInput() == null) {
+            throw new IllegalStateException(
+                    "意图澄清 continuation 缺少可信附件解析结果");
+        }
+        if (request.ambiguousRoutePlan() != null
+                && request.ambiguousRoutePlan().selectedCandidate()) {
+            if (ambiguousRouteCoordinator == null) {
+                throw new IllegalStateException(
+                        "AMBIGUOUS_ROUTE continuation 协调器未配置");
+            }
+            return ambiguousRouteCoordinator.execute(
+                    new AmbiguousRouteContinuationCoordinator.Request(
+                            request.user(),
+                            request.claim(),
+                            request.runId(),
+                            session,
+                            request.forwardHeaders(),
+                            request.traceContext(),
+                            request.startAttempt(),
+                            request.clarificationInput(),
+                            request.ambiguousRoutePlan()));
+        }
+        return intentClarificationCoordinator.execute(
+                new IntentClarificationRunCoordinator.Request(
+                        request.user(),
+                        request.claim(),
+                        request.runId(),
+                        session,
+                        request.forwardHeaders(),
+                        request.traceContext(),
+                        request.startAttempt(),
+                        request.clarificationInput()));
     }
 
     record Request(

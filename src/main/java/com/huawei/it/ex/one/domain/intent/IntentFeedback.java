@@ -17,7 +17,11 @@ public record IntentFeedback(
                 && Objects.equals(feedbackType, other.feedbackType)
                 && Objects.equals(commentText, other.commentText)
                 && Objects.equals(replacementRunId, other.replacementRunId)
-                && Objects.equals(skillId, other.skillId)
+                && sameSelectedIntent(other);
+    }
+
+    private boolean sameSelectedIntent(IntentFeedback other) {
+        return Objects.equals(skillId, other.skillId)
                 && Objects.equals(intentId, other.intentId)
                 && Objects.equals(intentName, other.intentName);
     }

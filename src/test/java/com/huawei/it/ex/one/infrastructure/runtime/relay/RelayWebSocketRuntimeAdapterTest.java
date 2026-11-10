@@ -14,6 +14,7 @@ import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.common.trace.TraceContext;
+import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
@@ -1252,6 +1253,54 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void cancelledQueryDoesNotShareHandshakeStateWithNextSubscription() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+        Flux<ChatEvent> query = adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1"));
+
+        StepVerifier.create(query)
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"first\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "first"))
+                .thenCancel()
+                .verify();
+        ReusableFakeWebSocketSession cancelledSession = client.session;
+        assertThat(cancelledSession.inbound.currentSubscriberCount()).isZero();
+
+        StepVerifier.create(query)
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"next\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "next"))
+                .expectNextCount(2)
+                .verifyComplete();
+        assertThat(client.executeCount()).isEqualTo(2);
+        assertThat(client.sent().stream().filter(frame -> frame.contains("\"type\":\"user-message\"")))
+                .hasSize(2);
+        assertThat(client.session.inbound.currentSubscriberCount()).isZero();
+    }
+
+    @Test
+    void cancelledTemporaryStopDoesNotShareAcknowledgementStateWithNextSubscription() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+        Mono<Void> stop = adapter.cancel(cancelRequest("run1", "relay-session-1", TraceContext.empty()));
+
+        StepVerifier.create(stop).thenCancel().verify();
+        assertThat(client.session.inbound.currentSubscriberCount()).isZero();
+        StepVerifier.create(stop)
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"paused\",\"session_id\":\"relay-session-1\"}"))
+                .verifyComplete();
+        assertThat(client.executeCount()).isEqualTo(2);
+        assertThat(client.sent().stream().filter(frame -> frame.equals("{\"type\":\"stop_all_agents\"}")))
+                .hasSize(1);
+        assertThat(client.session.inbound.currentSubscriberCount()).isZero();
+    }
+
+    @Test
     void interactionContinuationSendsApprovalResponseFrame() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
@@ -2101,8 +2150,7 @@ class RelayWebSocketRuntimeAdapterTest {
 
         @Override
         public Mono<Void> close(CloseStatus status) {
-            inbound.tryEmitComplete();
-            return Mono.empty();
+            return Mono.fromRunnable(() -> inbound.tryEmitComplete());
         }
 
         @Override

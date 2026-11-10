@@ -101,33 +101,7 @@ final class StandardRunRuntimeCoordinator {
         try {
             RunEventPipelineContext context = pipelineContext(plan, executionClaim);
             return eventPersistenceCoordinator.executeAfterRunStarted(context, () -> {
-                RoutePipelineRequest request = new RoutePipelineRequest(
-                        prepared.user(),
-                        prepared.session(),
-                        plan.runCommand(),
-                        prepared.attachments(),
-                        prepared.documents(),
-                        prepared.memory(),
-                        prepared.runId(),
-                        plan.runtimeBindingLeafId(),
-                        prepared.forwardHeaders(),
-                        prepared.traceContext(),
-                        plan.routeRef(),
-                        plan.bindingRef(),
-                        plan.runtimeSessionModeRef(),
-                        executionClaim,
-                        plan.admission().run(),
-                        plan.currentRouteQuery(),
-                        plan.intentQuery(),
-                        plan.intentQuery(),
-                        null,
-                        prepared.command().agentMode(),
-                        plan.bindingLifecycle(),
-                        plan.assistant().persistenceState(),
-                        plan.assistant().messageSkill(),
-                        plan.pendingInteractionPayloadRef(),
-                        plan.deferredDomainAgentBindingRef(),
-                        plan.pendingRouteMemoryDecisionRef());
+                RoutePipelineRequest request = routeRequest(plan, executionClaim, prepared);
                 Flux<ChatEvent> runtimeEvents = Flux.defer(() -> runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
                         new RouteResolutionCoordinator.InitialRoutePreparation(
                                 prepared.user(),
@@ -168,6 +142,37 @@ final class StandardRunRuntimeCoordinator {
                             context)
                     .doFinally(ignored -> runExecutionRegistry.complete(executionClaim));
         }
+    }
+
+    private RoutePipelineRequest routeRequest(RuntimePlan plan, RunExecutionClaim executionClaim,
+                                               StandardRunInputPreparer.PreparedRun prepared) {
+        return new RoutePipelineRequest(
+                prepared.user(),
+                prepared.session(),
+                plan.runCommand(),
+                prepared.attachments(),
+                prepared.documents(),
+                prepared.memory(),
+                prepared.runId(),
+                plan.runtimeBindingLeafId(),
+                prepared.forwardHeaders(),
+                prepared.traceContext(),
+                plan.routeRef(),
+                plan.bindingRef(),
+                plan.runtimeSessionModeRef(),
+                executionClaim,
+                plan.admission().run(),
+                plan.currentRouteQuery(),
+                plan.intentQuery(),
+                plan.intentQuery(),
+                null,
+                prepared.command().agentMode(),
+                plan.bindingLifecycle(),
+                plan.assistant().persistenceState(),
+                plan.assistant().messageSkill(),
+                plan.pendingInteractionPayloadRef(),
+                plan.deferredDomainAgentBindingRef(),
+                plan.pendingRouteMemoryDecisionRef());
     }
 
     /** 候选回放以最后标识的持久化 ACK 放行路由，不能用源 Flux 发完或前端接收代替该屏障。 */

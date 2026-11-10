@@ -57,55 +57,11 @@ final class RouteResolutionCoordinator {
         // 显式目标优先；否则 forceReroute 清除续接资格，普通请求才尝试当前专家范围内的 ACTIVE Binding。
         ExplicitRuntimeTarget explicitTarget = preparation.explicitRuntimeTarget();
         if (explicitTarget != null && explicitTarget.domainAgent()) {
-            RouteTarget route = RouteTarget.domainAgent(explicitTarget.targetId(), "front-selected", 1.0,
-                    "front selected domain agent");
-            DomainAgentBindingCommand bindingCommand = new DomainAgentBindingCommand(
-                    preparation.user().tenantId(),
-                    preparation.user().ownerUserId(),
-                    preparation.session().id(),
-                    preparation.runId(),
-                    preparation.runtimeBindingLeafId(),
-                    explicitTarget.targetId(),
-                    "front-selected",
-                    domainAgentBindingMetadata(route, null,
-                            preparation.command() == null ? Map.of() : preparation.command().metadata()),
-                    preparation.agentMode());
-            if (preparation.deferDomainAgentBinding()) {
-                // 此处只准备候选，不写入本轮 Binding 变更；物化由 Gate 通过或完成事务决定。
-                DeferredDomainAgentBinding deferred =
-                        runtimeBindingService.prepareDomainAgentForRun(bindingCommand);
-                preparation.deferredDomainAgentBindingRef().set(deferred);
-                preparation.routeRef().set(route);
-                preparation.bindingRef().set(deferred.candidate());
-                preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
-                return;
-            }
-            RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(bindingCommand);
-            preparation.routeRef().set(route);
-            preparation.bindingRef().set(binding);
-            preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
-            preparation.bindingLifecycle().trackCreated(binding);
+            prepareExplicitDomainAgent(preparation, explicitTarget);
             return;
         }
         if (explicitTarget != null && explicitTarget.domainExpert()) {
-            RouteTarget route = RouteTarget.domainExpertRuntime(
-                    "front-selected", 1.0, "front selected domain expert",
-                    explicitTarget.targetId(), explicitTarget.targetId());
-            RuntimeBindingResolution resolution = runtimeBindingService.resolvePinnedDomainExpertForRun(
-                    new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
-                            preparation.user().tenantId(),
-                            preparation.user().ownerUserId(),
-                            preparation.session().id(),
-                            preparation.runId(),
-                            preparation.runtimeBindingLeafId(),
-                            RuntimeProfile.DOMAIN_EXPERT,
-                            explicitTarget.targetId()),
-                    domainExpertBindingMetadata(preparation.command(), explicitTarget.targetId()),
-                    preparation.executionClaim());
-            preparation.routeRef().set(route);
-            preparation.bindingRef().set(resolution.binding());
-            preparation.runtimeSessionModeRef().set(resolution.sessionMode());
-            trackBindingResolution(preparation.bindingLifecycle(), resolution);
+            prepareExplicitDomainExpert(preparation, explicitTarget);
             return;
         }
         if (preparation.forceReroute()) {
@@ -124,6 +80,58 @@ final class RouteResolutionCoordinator {
                         preparation.session().id(),
                         intentExpertScope)
                 .ifPresent(active -> restoreActiveBinding(preparation, active));
+    }
+
+    private void prepareExplicitDomainAgent(InitialRoutePreparation preparation, ExplicitRuntimeTarget explicitTarget) {
+        RouteTarget route = RouteTarget.domainAgent(explicitTarget.targetId(), "front-selected", 1.0,
+                "front selected domain agent");
+        DomainAgentBindingCommand bindingCommand = new DomainAgentBindingCommand(
+                preparation.user().tenantId(),
+                preparation.user().ownerUserId(),
+                preparation.session().id(),
+                preparation.runId(),
+                preparation.runtimeBindingLeafId(),
+                explicitTarget.targetId(),
+                "front-selected",
+                domainAgentBindingMetadata(route, null,
+                        preparation.command() == null ? Map.of() : preparation.command().metadata()),
+                preparation.agentMode());
+        if (preparation.deferDomainAgentBinding()) {
+            // 此处只准备候选，不写入本轮 Binding 变更；物化由 Gate 通过或完成事务决定。
+            DeferredDomainAgentBinding deferred =
+                    runtimeBindingService.prepareDomainAgentForRun(bindingCommand);
+            preparation.deferredDomainAgentBindingRef().set(deferred);
+            preparation.routeRef().set(route);
+            preparation.bindingRef().set(deferred.candidate());
+            preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
+            return;
+        }
+        RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(bindingCommand);
+        preparation.routeRef().set(route);
+        preparation.bindingRef().set(binding);
+        preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
+        preparation.bindingLifecycle().trackCreated(binding);
+    }
+
+    private void prepareExplicitDomainExpert(InitialRoutePreparation preparation, ExplicitRuntimeTarget explicitTarget) {
+        RouteTarget route = RouteTarget.domainExpertRuntime(
+                "front-selected", 1.0, "front selected domain expert",
+                explicitTarget.targetId(), explicitTarget.targetId());
+        RuntimeBindingResolution resolution = runtimeBindingService.resolvePinnedDomainExpertForRun(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        preparation.user().tenantId(),
+                        preparation.user().ownerUserId(),
+                        preparation.session().id(),
+                        preparation.runId(),
+                        preparation.runtimeBindingLeafId(),
+                        RuntimeProfile.DOMAIN_EXPERT,
+                        explicitTarget.targetId()),
+                domainExpertBindingMetadata(preparation.command(), explicitTarget.targetId()),
+                preparation.executionClaim());
+        preparation.routeRef().set(route);
+        preparation.bindingRef().set(resolution.binding());
+        preparation.runtimeSessionModeRef().set(resolution.sessionMode());
+        trackBindingResolution(preparation.bindingLifecycle(), resolution);
     }
 
     RouteExecutionResolution resolve(RouteResolutionRequest request,
@@ -282,9 +290,19 @@ final class RouteResolutionCoordinator {
                             preparation.agentMode())
                     : runtimeBindingService.touchForRun(scopedActive, preparation.runId());
         }
+        RouteTarget route = activeBindingRoute(domainAgent, binding);
+        preparation.bindingRef().set(binding);
+        preparation.routeRef().set(route);
+        preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
+        if (!(domainAgent && preparation.deferDomainAgentBinding())) {
+            preparation.bindingLifecycle().trackReused(binding, active);
+        }
+    }
+
+    private RouteTarget activeBindingRoute(boolean domainAgent, RuntimeBinding binding) {
         boolean domainExpert = !domainAgent
                 && runtimeBindingService.isDomainExpert(binding);
-        RouteTarget route = domainAgent
+        return domainAgent
                 ? RouteTarget.domainAgent(
                         domainAgentId(binding),
                         "runtime-binding",
@@ -308,12 +326,6 @@ final class RouteResolutionCoordinator {
                                 runtimeBindingService.runtimeRoleName(binding),
                                 com.huawei.it.ex.one.domain.routing.RelayOutputMode.FULL_STREAM,
                                 metadataText(binding, IntentExpertContext.INVOCATION_SKILL_ID_KEY));
-        preparation.bindingRef().set(binding);
-        preparation.routeRef().set(route);
-        preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
-        if (!(domainAgent && preparation.deferDomainAgentBinding())) {
-            preparation.bindingLifecycle().trackReused(binding, active);
-        }
     }
 
     private BindingResolution bindResolvedRoute(RouteResolutionRequest request,
@@ -329,30 +341,7 @@ final class RouteResolutionCoordinator {
                     normalizedMode(request.currentRuntimeSessionMode()));
         }
         if (route.type() == RouteType.DOMAIN_AGENT) {
-            DomainAgentBindingCommand bindingCommand = new DomainAgentBindingCommand(
-                    request.user().tenantId(),
-                    request.user().ownerUserId(),
-                    request.session().id(),
-                    request.runId(),
-                    request.runtimeBindingLeafId(),
-                    route.selectedAgentCode(),
-                    route.routeSource(),
-                    domainAgentBindingMetadata(
-                            route,
-                            intent,
-                            request.runCommand() == null ? Map.of() : request.runCommand().metadata(),
-                            request.runCommand() == null ? null : request.runCommand().intentExpertScope()),
-                    request.agentMode());
-            if (request.deferDomainAgentBinding()) {
-                DeferredDomainAgentBinding deferred =
-                        runtimeBindingService.prepareDomainAgentForRun(bindingCommand);
-                request.deferredDomainAgentBindingRef().set(deferred);
-                return new BindingResolution(
-                        route, deferred.candidate(), normalizedMode(request.currentRuntimeSessionMode()));
-            }
-            RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(bindingCommand);
-            request.bindingLifecycle().trackCreated(binding);
-            return new BindingResolution(route, binding, normalizedMode(request.currentRuntimeSessionMode()));
+            return bindResolvedDomainAgent(request, route, intent);
         }
         if (route.type() == RouteType.AGENT_RUNTIME) {
             RuntimeBindingResolution resolution = runtimeBindingService.resolveForProfile(
@@ -370,6 +359,34 @@ final class RouteResolutionCoordinator {
         }
         return new BindingResolution(route, request.currentBinding(),
                 normalizedMode(request.currentRuntimeSessionMode()));
+    }
+
+    private BindingResolution bindResolvedDomainAgent(RouteResolutionRequest request,
+                                                        RouteTarget route, IntentDecision intent) {
+        DomainAgentBindingCommand bindingCommand = new DomainAgentBindingCommand(
+                request.user().tenantId(),
+                request.user().ownerUserId(),
+                request.session().id(),
+                request.runId(),
+                request.runtimeBindingLeafId(),
+                route.selectedAgentCode(),
+                route.routeSource(),
+                domainAgentBindingMetadata(
+                        route,
+                        intent,
+                        request.runCommand() == null ? Map.of() : request.runCommand().metadata(),
+                        request.runCommand() == null ? null : request.runCommand().intentExpertScope()),
+                request.agentMode());
+        if (request.deferDomainAgentBinding()) {
+            DeferredDomainAgentBinding deferred =
+                    runtimeBindingService.prepareDomainAgentForRun(bindingCommand);
+            request.deferredDomainAgentBindingRef().set(deferred);
+            return new BindingResolution(
+                    route, deferred.candidate(), normalizedMode(request.currentRuntimeSessionMode()));
+        }
+        RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(bindingCommand);
+        request.bindingLifecycle().trackCreated(binding);
+        return new BindingResolution(route, binding, normalizedMode(request.currentRuntimeSessionMode()));
     }
 
     RouteExecutionResolution materializeDeferredDomainAgentBinding(

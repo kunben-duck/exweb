@@ -235,6 +235,17 @@ class ApiStoreDocumentStorageTest {
                 .hasMessageContaining("docId 或 url");
     }
 
+    @Test
+    void responseValidationKeepsStatusBeforeMissingDocument() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        ApiStoreDocumentStorage storage = storage(captured,
+                "{\"status\":\"failed\",\"message\":\"first-error\",\"data\":null}", false);
+
+        assertThatThrownBy(() -> storage.upload(request(null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("api-store 上传失败: first-error");
+    }
+
     private ApiStoreDocumentStorage storage(AtomicReference<ClientRequest> captured, String responseBody,
                                             boolean forwardCookie) {
         WebClient.Builder builder = WebClient.builder()

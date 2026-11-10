@@ -323,22 +323,22 @@ public class RouteMemoryApplicationService {
         } catch (RuntimeException ex) {
             cancelFuture(future);
             recordReadFailure();
-            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
-                            "RouteMemory read failed; falling back to an empty context")
-                    .sessionId(sessionId)
-                    .operation(operation)
-                    .build(), ex);
+            warnReadFailure(operation, sessionId, ex);
             return fallback;
         } catch (Exception ex) {
             cancelFuture(future);
             recordReadFailure();
-            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
-                            "RouteMemory read failed; falling back to an empty context")
-                    .sessionId(sessionId)
-                    .operation(operation)
-                    .build(), ex);
+            warnReadFailure(operation, sessionId, ex);
             return fallback;
         }
+    }
+
+    private void warnReadFailure(String operation, String sessionId, Exception ex) {
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                        "RouteMemory read failed; falling back to an empty context")
+                .sessionId(sessionId)
+                .operation(operation)
+                .build(), ex);
     }
 
     private void writeSafely(String operation, UserContext user, String sessionId, Runnable task) {

@@ -417,10 +417,6 @@ public class DocumentApplicationService implements DocumentFacade {
         return filename.length() > 255 ? filename.substring(filename.length() - 255) : filename;
     }
 
-    private String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
-    }
-
     private void closeQuietly(InputStream inputStream) {
         if (inputStream == null) {
             return;

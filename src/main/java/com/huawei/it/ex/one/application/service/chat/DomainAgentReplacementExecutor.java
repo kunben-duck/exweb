@@ -115,17 +115,7 @@ final class DomainAgentReplacementExecutor {
         DomainAgentRunContext context = reroute.context();
         context.bindingRef().set(bindingPolicy.markRejected(
                 context.bindingRef().get(), reroute.refusal()));
-        RuntimeBindingResolution resolution = runtimeBindingService.resolveForProfile(
-                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
-                        context.user().tenantId(),
-                        context.user().ownerUserId(),
-                        context.session().id(),
-                        context.runId(),
-                        bindingPolicy.runtimeBindingLeafId(context.command()),
-                        nextRoute.runtimeProfile(),
-                        nextRoute.runtimeRoleName()),
-                routeResolutionCoordinator.relayBindingMetadata(
-                        nextRoute, signal.intentDecision(), context.command()));
+        RuntimeBindingResolution resolution = resolveReplacementProfile(context, nextRoute, signal);
         trackRelayBinding(lifecycle, resolution);
         context.bindingRef().set(resolution.binding());
         context.routeRef().set(nextRoute);
@@ -158,6 +148,21 @@ final class DomainAgentReplacementExecutor {
                                         context,
                                         execution,
                                         lifecycle))));
+    }
+
+    private RuntimeBindingResolution resolveReplacementProfile(DomainAgentRunContext context,
+                                                                 RouteTarget nextRoute, RouteSignalResult signal) {
+        return runtimeBindingService.resolveForProfile(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        context.user().tenantId(),
+                        context.user().ownerUserId(),
+                        context.session().id(),
+                        context.runId(),
+                        bindingPolicy.runtimeBindingLeafId(context.command()),
+                        nextRoute.runtimeProfile(),
+                        nextRoute.runtimeRoleName()),
+                routeResolutionCoordinator.relayBindingMetadata(
+                        nextRoute, signal.intentDecision(), context.command()));
     }
 
     private Flux<ChatEvent> relayReplacementRuntime(

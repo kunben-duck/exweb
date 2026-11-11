@@ -14,8 +14,8 @@ class ServletWebSocketOutboundQueueTest {
         ServletWebSocketOutboundQueue queue = new ServletWebSocketOutboundQueue(2, 4096);
         queue.offer(notification(100));
         assertThat(queue.tryStartDraining()).isTrue();
-        var first = message("first", 100, false);
-        var second = message("second", 200, false);
+        var first = message(100, false);
+        var second = message(200, false);
         queue.offer(first);
 
         assertThat(queue.offer(second)).isEqualTo(ServletWebSocketOutboundQueue.OfferResult.ACCEPTED);
@@ -41,10 +41,10 @@ class ServletWebSocketOutboundQueueTest {
     void removingNotificationDoesNotDisableRealRunOverflowProtection() {
         ServletWebSocketOutboundQueue queue = new ServletWebSocketOutboundQueue(4, 1024);
         queue.offer(notification(100));
-        var first = message("first", 800, false);
+        var first = message(800, false);
         queue.offer(first);
 
-        assertThat(queue.offer(message("large", 800, false)))
+        assertThat(queue.offer(message(800, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.OVERFLOW);
         assertThat(queue.snapshot().queuedBytes()).isEqualTo(800);
         assertThat(queue.poll()).isSameAs(first);
@@ -56,7 +56,7 @@ class ServletWebSocketOutboundQueueTest {
         queue.offer(notification(100));
         queue.tryStartDraining();
         assertThat(queue.poll().notification()).isTrue();
-        assertThat(queue.offer(message("run", 1024, false)))
+        assertThat(queue.offer(message(1024, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.ACCEPTED);
         assertThat(queue.snapshot().draining()).isTrue();
     }
@@ -74,7 +74,7 @@ class ServletWebSocketOutboundQueueTest {
         assertThat(queue.tryStartDraining()).isTrue();
         assertThat(queue.offer(notification))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.SKIPPED_NOTIFICATION);
-        queue.offer(message("stream-item", 100, false));
+        queue.offer(message(100, false));
         assertThat(queue.discardNotificationsAfterRejectedDrain()).isTrue();
         assertThat(queue.snapshot().queueSize()).isEqualTo(1);
         assertThat(queue.snapshot().queuedBytes()).isEqualTo(100);
@@ -88,11 +88,11 @@ class ServletWebSocketOutboundQueueTest {
     void skipsHeartbeatWhenDrainIsBusy() {
         ServletWebSocketOutboundQueue queue = new ServletWebSocketOutboundQueue(4, 4096);
 
-        assertThat(queue.offer(message("stream-item", 100, false)))
+        assertThat(queue.offer(message(100, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.ACCEPTED);
         assertThat(queue.tryStartDraining()).isTrue();
 
-        assertThat(queue.offer(message("heartbeat", 100, true)))
+        assertThat(queue.offer(message(100, true)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.SKIPPED_HEARTBEAT);
     }
 
@@ -100,10 +100,10 @@ class ServletWebSocketOutboundQueueTest {
     void rejectsWhenMessageCapacityIsExceeded() {
         ServletWebSocketOutboundQueue queue = new ServletWebSocketOutboundQueue(1, 4096);
 
-        assertThat(queue.offer(message("stream-item", 100, false)))
+        assertThat(queue.offer(message(100, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.ACCEPTED);
 
-        assertThat(queue.offer(message("stream-item", 100, false)))
+        assertThat(queue.offer(message(100, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.OVERFLOW);
         assertThat(queue.snapshot().queueSize()).isEqualTo(1);
     }
@@ -112,10 +112,10 @@ class ServletWebSocketOutboundQueueTest {
     void rejectsWhenByteCapacityIsExceeded() {
         ServletWebSocketOutboundQueue queue = new ServletWebSocketOutboundQueue(4, 1024);
 
-        assertThat(queue.offer(message("stream-item", 800, false)))
+        assertThat(queue.offer(message(800, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.ACCEPTED);
 
-        assertThat(queue.offer(message("stream-item", 800, false)))
+        assertThat(queue.offer(message(800, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.OVERFLOW);
         assertThat(queue.snapshot().queuedBytes()).isEqualTo(800);
     }
@@ -123,11 +123,11 @@ class ServletWebSocketOutboundQueueTest {
     @Test
     void finishDrainRequestsRescheduleWhenMessagesArrivedDuringSend() {
         ServletWebSocketOutboundQueue queue = new ServletWebSocketOutboundQueue(4, 4096);
-        assertThat(queue.offer(message("stream-item", 100, false)))
+        assertThat(queue.offer(message(100, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.ACCEPTED);
         assertThat(queue.tryStartDraining()).isTrue();
         assertThat(queue.poll()).isNotNull();
-        assertThat(queue.offer(message("stream-item", 100, false)))
+        assertThat(queue.offer(message(100, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.ACCEPTED);
 
         assertThat(queue.finishDrainingAndHasPending()).isTrue();
@@ -137,16 +137,16 @@ class ServletWebSocketOutboundQueueTest {
     @Test
     void closeClearsPendingMessagesAndRejectsFutureOffers() {
         ServletWebSocketOutboundQueue queue = new ServletWebSocketOutboundQueue(4, 4096);
-        queue.offer(message("stream-item", 100, false));
+        queue.offer(message(100, false));
 
         assertThat(queue.close()).isTrue();
 
         assertThat(queue.snapshot().queueSize()).isZero();
-        assertThat(queue.offer(message("stream-item", 100, false)))
+        assertThat(queue.offer(message(100, false)))
                 .isEqualTo(ServletWebSocketOutboundQueue.OfferResult.CLOSED);
     }
 
-    private ServletWebSocketOutboundQueue.OutboundMessage message(String type, int bytes, boolean heartbeat) {
+    private ServletWebSocketOutboundQueue.OutboundMessage message(int bytes, boolean heartbeat) {
         return new ServletWebSocketOutboundQueue.OutboundMessage("x".repeat(bytes), bytes, "message",
                 "chat-run-run1", "1", heartbeat);
     }

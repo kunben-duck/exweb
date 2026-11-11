@@ -29,7 +29,6 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.intent.IntentFeedback;
 import com.huawei.it.ex.one.interfaces.ApiExceptionHandler;
 import com.huawei.it.ex.one.interfaces.ReactiveApiExceptionHandler;
-import com.huawei.it.ex.one.interfaces.chat.dto.IntentFeedbackRequest;
 
 import reactor.core.publisher.Mono;
 

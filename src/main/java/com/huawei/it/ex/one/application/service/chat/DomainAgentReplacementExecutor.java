@@ -415,7 +415,6 @@ final class DomainAgentReplacementExecutor {
     private RuntimeBinding bindDomainAgent(DomainAgentRerouteContext reroute,
                                            RouteSignalResult signal,
                                            RouteTarget nextRoute) {
-        DomainAgentRunContext context = reroute.context();
         return runtimeBindingService.bindDomainAgentForRun(domainAgentBindingCommand(
                 reroute, signal, nextRoute));
     }

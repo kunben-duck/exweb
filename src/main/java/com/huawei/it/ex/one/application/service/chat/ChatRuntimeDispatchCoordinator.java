@@ -165,7 +165,7 @@ final class ChatRuntimeDispatchCoordinator {
             return Flux.error(new IntentRoutingFailedException(routeSignal.intentFailureReason()));
         }
         RouteResolutionCoordinator.RouteExecutionResolution resolution =
-                resolveRoute(request, routeSignal, recordIntentRecognition);
+                resolveRoute(request, routeSignal);
         if (resolution.waitingIntentClarification()) {
             appliedRouteRecorder.bindIntentAgentProvider(request.runId());
             Map<String, Object> internalPayload = resolution.intentClarificationPayload();
@@ -180,8 +180,7 @@ final class ChatRuntimeDispatchCoordinator {
 
     private RouteResolutionCoordinator.RouteExecutionResolution resolveRoute(
             RoutePipelineRequest request,
-            RouteSignalResult routeSignal,
-            boolean recordIntentRecognition) {
+            RouteSignalResult routeSignal) {
         RouteResolutionCoordinator.RouteExecutionResolution resolution =
                 routeResolutionCoordinator.resolve(
                         new RouteResolutionCoordinator.RouteResolutionRequest(

@@ -96,7 +96,7 @@ public class LocalWebSocketConnectionRegistry {
      *
      * @param connectionId WebSocket 物理连接 ID。
      * @param topicId run 级 stream topic。
-     * @param sessionId topic 所属前端会话 ID，用于同一连接内跨会话订阅隔离。
+     * @param sessionId topic 所属前端会话 ID，保留调用兼容性；归属校验由调用方负责，本注册表不保存该值。
      * @param afterSeq 订阅起点，服务端不会向该连接重复投递小于等于该值的事件。
      * @param disposable 当前 topic 实时事件订阅句柄，取消订阅或断开连接时释放。
      */
@@ -117,7 +117,7 @@ public class LocalWebSocketConnectionRegistry {
                 && topicSubscriberCount(topicId) >= properties.normalizedMaxSubscribersPerTopic()) {
             throw new IllegalStateException("WS_TOPIC_SUBSCRIBER_LIMIT_EXCEEDED: 当前 topic 本机订阅数已达上限");
         }
-        state.subscribe(topicId, sessionId, afterSeq, disposable, properties.normalizedDeliveredSeqWindow());
+        state.subscribe(topicId, afterSeq, disposable, properties.normalizedDeliveredSeqWindow());
     }
 
     /**
@@ -306,9 +306,9 @@ public class LocalWebSocketConnectionRegistry {
             touch();
         }
 
-        private void subscribe(String topicId, String sessionId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
+        private void subscribe(String topicId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
             unsubscribe(topicId);
-            subscriptions.put(topicId, new SubscriptionState(topicId, sessionId, afterSeq, disposable, deliveredSeqWindow));
+            subscriptions.put(topicId, new SubscriptionState(topicId, afterSeq, disposable, deliveredSeqWindow));
             touch();
         }
 
@@ -349,15 +349,13 @@ public class LocalWebSocketConnectionRegistry {
      */
     private static final class SubscriptionState {
         private final String topicId;
-        private final String sessionId;
         private final Disposable disposable;
         private final Map<Long, Boolean> deliveredSeqs;
         private final long resumeAfterSeq;
         private volatile long highestDeliveredSeq;
 
-        private SubscriptionState(String topicId, String sessionId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
+        private SubscriptionState(String topicId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
             this.topicId = topicId;
-            this.sessionId = sessionId;
             this.resumeAfterSeq = afterSeq;
             this.highestDeliveredSeq = afterSeq;
             this.disposable = disposable;

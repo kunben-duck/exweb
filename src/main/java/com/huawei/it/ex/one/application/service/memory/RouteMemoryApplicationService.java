@@ -173,7 +173,7 @@ public class RouteMemoryApplicationService {
         if (user == null || blank(sessionId) || requestPayload == null || requestPayload.isEmpty()) {
             return;
         }
-        writeSafely("appendClarification", user, sessionId, () -> {
+        writeSafely("appendClarification", sessionId, () -> {
             Instant now = Instant.now();
             repository.save(new RouteMemoryItem(
                     idGenerator.newId("rmem", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), sessionId)),
@@ -209,7 +209,7 @@ public class RouteMemoryApplicationService {
         if (user == null || blank(sessionId) || !recordableRoute(route)) {
             return;
         }
-        writeSafely("appendRoute", user, sessionId, () -> repository.save(newRouteItem(command, Instant.now())));
+        writeSafely("appendRoute", sessionId, () -> repository.save(newRouteItem(command, Instant.now())));
     }
 
     /**
@@ -228,7 +228,7 @@ public class RouteMemoryApplicationService {
         if (user == null || blank(sessionId) || !recordableRoute(route)) {
             return;
         }
-        writeSafely("recordRouteDecision", user, sessionId, () -> {
+        writeSafely("recordRouteDecision", sessionId, () -> {
             Instant now = Instant.now();
             repository.foldActiveClarifications(user.tenantId(), user.ownerUserId(), sessionId, now);
             repository.save(newRouteItem(command, now));
@@ -242,7 +242,7 @@ public class RouteMemoryApplicationService {
         if (user == null || blank(sessionId)) {
             return;
         }
-        writeSafely("completeWithoutRoute", user, sessionId,
+        writeSafely("completeWithoutRoute", sessionId,
                 () -> repository.foldActiveClarifications(user.tenantId(), user.ownerUserId(), sessionId, Instant.now()));
     }
 
@@ -278,7 +278,7 @@ public class RouteMemoryApplicationService {
         if (user == null || blank(sessionId)) {
             return;
         }
-        writeSafely("foldActiveClarifications", user, sessionId,
+        writeSafely("foldActiveClarifications", sessionId,
                 () -> repository.foldActiveClarifications(user.tenantId(), user.ownerUserId(), sessionId, Instant.now()));
     }
 
@@ -341,7 +341,7 @@ public class RouteMemoryApplicationService {
                 .build(), ex);
     }
 
-    private void writeSafely(String operation, UserContext user, String sessionId, Runnable task) {
+    private void writeSafely(String operation, String sessionId, Runnable task) {
         try {
             writeExecutor.execute(() -> {
                 try {

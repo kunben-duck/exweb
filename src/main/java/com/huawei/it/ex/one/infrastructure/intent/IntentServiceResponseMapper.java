@@ -111,7 +111,7 @@ public class IntentServiceResponseMapper {
                         "CLARIFY domain expert accessName has no roleName"));
             }
             IntentRecognitionResult clarification = IntentRecognitionResult.waitingClarification(
-                    clarificationPayload(root, result),
+                    clarificationPayload(result),
                     firstText(result.path("intentSessionId"), data.path("intentSessionId")),
                     firstText(result.path("intentRequestId"), data.path("intentRequestId")));
             return captureAmbiguousResponse(root, result, clarification);
@@ -248,7 +248,7 @@ public class IntentServiceResponseMapper {
         return List.copyOf(names);
     }
 
-    private Map<String, Object> clarificationPayload(JsonNode root, JsonNode result) {
+    private Map<String, Object> clarificationPayload(JsonNode result) {
         JsonNode clarification = result.path("clarification");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("routeAction", "CLARIFY");

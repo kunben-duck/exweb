@@ -74,7 +74,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
 
     @Override
     public Flux<ChatEvent> query(DomainAgentRequest request) {
-        validate(request);
+        validate();
         Map<String, Object> body = requestMapper.toWireRequest(request);
         return exchange(new ExchangeRequest(request.runId(), request.sessionId(), body,
                 request.forwardHeaders(), () -> { }, request.turnTraceContext(),
@@ -84,7 +84,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
 
     @Override
     public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
-        validate(null);
+        validate();
         Map<String, Object> body = requestMapper.toInteractionWireRequest(request);
         return exchange(new ExchangeRequest(request.runId(), request.sessionId(), body, request.forwardHeaders(),
                 request.dispatchState()::markResponseDispatched, request.turnTraceContext(),
@@ -200,7 +200,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         });
     }
 
-    private void validate(DomainAgentRequest request) {
+    private void validate() {
         if (!properties.isEnabled()) {
             throw new IllegalStateException("DOMAIN_AGENT_DISABLED: DomainAgent 服务未启用");
         }

@@ -226,7 +226,7 @@ final class AssistantAssembly {
             activeContentAgentPartIndex = parts.size();
             activeContentAgentContent = new StringBuilder();
             activeContentAgentPayload = eventPartPayload(event);
-            parts.add(contentAgentPart(chunk, activeContentAgentPayload));
+            parts.add(contentAgentPart(activeContentAgentPayload));
         } else {
             activeContentAgentPayload = eventPartPayload(event);
         }
@@ -248,10 +248,10 @@ final class AssistantAssembly {
         String content = activeContentAgentContent.toString();
         Map<String, Object> payload = new LinkedHashMap<>(activeContentAgentPayload);
         payload.put("contentAgent", content);
-        parts.set(activeContentAgentPartIndex, contentAgentPart(content, payload));
+        parts.set(activeContentAgentPartIndex, contentAgentPart(payload));
     }
 
-    private static ChatMessagePartDraft contentAgentPart(String content, Map<String, Object> payload) {
+    private static ChatMessagePartDraft contentAgentPart(Map<String, Object> payload) {
         return new ChatMessagePartDraft("CARD", "contentAgent", null, payload);
     }
 

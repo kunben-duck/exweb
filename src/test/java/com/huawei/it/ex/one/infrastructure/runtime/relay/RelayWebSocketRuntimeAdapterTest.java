@@ -2049,7 +2049,6 @@ class RelayWebSocketRuntimeAdapterTest {
         private final boolean gateOutboundCompletion;
         private final Sinks.One<Void> outboundCompletion = Sinks.one();
         private ReusableFakeWebSocketSession session;
-        private URI uri;
         private int executeCount;
 
         private ReusableFakeWebSocketClient() {
@@ -2068,7 +2067,6 @@ class RelayWebSocketRuntimeAdapterTest {
         @Override
         public Mono<Void> execute(URI url, HttpHeaders requestHeaders, WebSocketHandler handler) {
             executeCount++;
-            this.uri = url;
             this.session = new ReusableFakeWebSocketSession(
                     sent,
                     gateOutboundCompletion ? outboundCompletion.asMono() : Mono.empty());
@@ -2088,10 +2086,6 @@ class RelayWebSocketRuntimeAdapterTest {
 
         private int executeCount() {
             return executeCount;
-        }
-
-        private URI uri() {
-            return uri;
         }
 
         private void completeOutbound() {
@@ -2182,14 +2176,9 @@ class RelayWebSocketRuntimeAdapterTest {
         private void emit(String frame) {
             inbound.tryEmitNext(frame);
         }
-
-        private List<String> sent() {
-            return sent;
-        }
     }
 
     private static final class FakeWebSocketClient implements WebSocketClient {
-        private final Flux<String> inboundFrames;
         private final FakeWebSocketSession session;
         private URI uri;
         private HttpHeaders headers;
@@ -2199,7 +2188,6 @@ class RelayWebSocketRuntimeAdapterTest {
         }
 
         private FakeWebSocketClient(Flux<String> inboundFrames) {
-            this.inboundFrames = inboundFrames;
             this.session = new FakeWebSocketSession(inboundFrames);
         }
 

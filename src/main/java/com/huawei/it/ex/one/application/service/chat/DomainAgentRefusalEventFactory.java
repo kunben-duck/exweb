@@ -51,9 +51,7 @@ final class DomainAgentRefusalEventFactory {
         payload.put("currentProvider", RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
         payload.put("currentTargetId", reroute.currentDomainAgentId());
         putIfNotNull(payload, "currentRouteSource", routeSource);
-        payload.put("message", Boolean.TRUE.equals(reroute.refusal().recoverable())
-                ? "当前技能暂未完成回答，请选择仍然使用当前技能重试，或交还Supervisor重新意图。"
-                : "当前技能无法处理该问题，是否重新识别并选择合适技能继续回答？");
+        payload.put("message", "当前技能无法处理该问题，是否重新识别并选择合适技能继续回答？");
         putIfNotNull(payload, "refusalCode", reroute.refusal().code());
         putIfNotNull(payload, "refusalReasonCode", reroute.refusal().reasonCode());
         putIfNotNull(payload, "refusalRecoverable", reroute.refusal().recoverable());
@@ -185,6 +183,7 @@ final class DomainAgentRefusalEventFactory {
         rerouteState.put(DomainAgentRejectReason.METADATA_KEY, reroute.lastIntentRejectReason().toMap());
         rerouteState.put("rerouteCount", context.rerouteCount());
         putIfNotNull(rerouteState, "confirmationInteractionId", reroute.confirmationInteractionId());
+        // 仅延续旧澄清上下文的提前计数标记，新确认流程不生成该标记。
         if (reroute.attemptCounted()) {
             rerouteState.put("attemptCounted", true);
         }

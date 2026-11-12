@@ -226,19 +226,9 @@ recoverable = 当前 DomainAgent 是否可以在补充信息、授权确认或�
 
 表示当前 DomainAgent 可以在后续条件满足后继续处理。
 
-ChatService 当前支持的 `agent.refusal + code=FN-EX-CAHT-BIZ-DAG-001` 增加原技能重试约定：
-`recoverable=true` 表示允许用户选择用当前技能重新执行原问题，不保证重试成功。后端保留当前 Binding，
-生成 `ROUTE_SWITCH_CONFIRMATION / BEFORE_INTENT`，以已有 `refusalRecoverable=true` 区分
-“仍然使用当前技能”和“交还Supervisor重新意图”。自动来源及开启拒答自动切换配置时也先等待选择。
-其他事件类型及未知拒答编码不因该字段启用新流程。
-
-原技能重试重新发送普通 query：`runId` 为新 Run，`messageId` 为原 user 消息，`skillId/query/sessionId`
-来自可信原技能、原问题和 Binding 下游会话。短期记忆沿用现有组装；业务 metadata 及附件仅使用本次
-确认显式提交的数据。不自动追加 `retry/RETRY_CURRENT/approved/recoverable/sessionMode`，也不发送
-`approval-response`。下游须支持同 messageId、新 runId 再执行，不能仅按 messageId 返回旧拒答。
-
-`recoverable=false`、缺失或 null 保留原路由及确认策略。前端倒计时仍通过 `approved=true`
-交还 Supervisor；后端不增加技能排除名单或反复挑选 Intent 结果的循环。
+ChatService 保留 `recoverable` 及公开 `refusalRecoverable`，但该标记不决定重路由、绑定保留或是否弹窗。
+拒答确认仍按来源及 `refusal-auto-switch-enabled` 执行；需要确认时先等待 `approved`，同意后调用 Intent，
+拒绝则保留原 Binding 并结束本轮。倒计时仍提交原 `approved=true`，不增加技能排除或循环选择规则。
 
 | 场景                | 事件类型                      | recoverable |
 | ----------------- | ------------------------- | ----------- |

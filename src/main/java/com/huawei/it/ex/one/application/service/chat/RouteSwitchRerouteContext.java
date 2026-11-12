@@ -25,36 +25,7 @@ record RouteSwitchRerouteContext(String originalQuery, String routeQuery,
                                  AgentDataPersistenceState persistenceState) {
     static final String STAGE_KEY = "confirmationStage";
     static final String BEFORE_INTENT = "BEFORE_INTENT";
-    static final String RETRY_CURRENT = "RETRY_CURRENT";
     static final String PRIVATE_KEY = "_routeSwitchRerouteContext";
-
-    static boolean retryCurrent(Map<String, Object> response) {
-        return RETRY_CURRENT.equals(response.get("interactionAction"));
-    }
-
-    static boolean validateRetryCurrent(ChatInteractionRequest interaction, ChatInteractionResponseCommand command) {
-        String action = command.interactionAction();
-        if (action == null || action.isBlank()) {
-            return false;
-        }
-        if (!RETRY_CURRENT.equals(action) || !Boolean.TRUE.equals(command.approved())
-                || hasExplicitTarget(command)
-                || !command.questionnaireAnswers().isEmpty()) {
-            throw new IllegalArgumentException("RETRY_CURRENT 需要 approved=true，且不能指定目标或问卷答案");
-        }
-        if (!BEFORE_INTENT.equals(interaction.requestPayload().get(STAGE_KEY))
-                || !Boolean.TRUE.equals(interaction.requestPayload().get("refusalRecoverable"))
-                || !"domain-agent".equals(interaction.runtimeProvider())
-                || !Boolean.TRUE.equals(require(interaction).state().refusal().recoverable())) {
-            throw new IllegalArgumentException("当前确认不支持原技能重试");
-        }
-        return true;
-    }
-
-    private static boolean hasExplicitTarget(ChatInteractionResponseCommand command) {
-        return command.targetType() != null && !command.targetType().isBlank()
-                || command.targetId() != null && !command.targetId().isBlank();
-    }
 
     static boolean authorized(ChatCommand command) {
         DomainAgentRerouteState state = new DomainAgentRerouteStateMapper().from(command);

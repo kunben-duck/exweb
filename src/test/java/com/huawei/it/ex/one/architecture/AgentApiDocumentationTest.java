@@ -52,7 +52,11 @@ class AgentApiDocumentationTest {
                 .path("requestBody").path("content").path("application/json").path("examples");
         assertThat(switchExamples.path("relayExpert").path("value").path("skillId").asText())
                 .isEqualTo("RE_national-cfo");
-        assertThat(runExample(api, "refusalRetryCurrent").path("interactionAction").asText()).isEqualTo("RETRY_CURRENT");
+        assertThat(paths.path("/v1/chat/runs").path("post").path("requestBody")
+                .path("content").path("application/json").path("examples").has("refusalRetryCurrent")).isFalse();
+        assertThat(api.path("components").path("schemas").path("CreateChatRunRequest")
+                .path("properties").path("interactionAction").path("enum"))
+                .isEqualTo(json.readTree("[\"AUTO_SELECT\"]"));
         assertThat(runExample(api, "refusalSwitchApprove").has("interactionAction")).isFalse();
     }
 
@@ -114,9 +118,6 @@ class AgentApiDocumentationTest {
                         new ConversationMemoryMessage("assistant", "上月费用为示例值", "skill_history")),
                 true, metadata, RuntimeForwardHeaders.empty());
         assertThat(json.<JsonNode>valueToTree(mapper.toWireRequest(request))).isEqualTo(example);
-        var retry = new DomainAgentRequest(user, "session_demo", "run_B", "skill_A", "domain_session_demo",
-                "分析本月费用", "msg_user_demo", List.of(), Map.of(), RuntimeForwardHeaders.empty());
-        assertThat(json.<JsonNode>valueToTree(mapper.toWireRequest(retry))).isEqualTo(examples.get("domain-retry"));
     }
 
     private JsonNode openApi() throws Exception {

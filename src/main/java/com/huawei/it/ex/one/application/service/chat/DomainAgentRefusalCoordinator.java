@@ -231,32 +231,15 @@ final class DomainAgentRefusalCoordinator {
     /** 已持久化的确认只授权一次 Intent 决策；等待澄清时携带授权，Runtime 再次拒答时不继承。 */
     Flux<ChatEvent> rerouteConfirmed(DomainAgentRunContext context, DomainAgentRerouteState state,
                                     String interactionId, AgentModeProfile agentMode) {
-        if (context.rerouteCount() >= domainAgentProperties.normalizedMaxReroutes()) {
-            return Flux.just(eventFactory.rerouteMetadata(context, state.refusal(), null, "MAX_REROUTES_REACHED"));
-        }
-        boolean attemptCounted = Boolean.TRUE.equals(state.refusal().recoverable());
-        if (attemptCounted) {
-            context = context.withRerouteCount(context.rerouteCount() + 1);
-        }
         DomainAgentRerouteContext reroute = new DomainAgentRerouteContext(context, state.refusal(),
                 state.lastIntentRejectReason(), state.currentTargetId(), state.rejectedDomainAgentIds(),
                 IntentClarificationContextAssembler.answerWithAttachments(
-                        context.command().message(), context.command().attachments()), agentMode, interactionId,
-                attemptCounted);
-        return rerouteFrames(reroute, eventFactory.commandWithDomainRejectContext(
-                context.command(), state.lastIntentRejectReason()), true);
-    }
-
-    Flux<ChatEvent> retryCurrent(DomainAgentRunContext context, DomainAgentRerouteState state) {
+                        context.command().message(), context.command().attachments()), agentMode, interactionId);
         if (context.rerouteCount() >= domainAgentProperties.normalizedMaxReroutes()) {
             return Flux.just(eventFactory.rerouteMetadata(context, state.refusal(), null, "MAX_REROUTES_REACHED"));
         }
-        DomainAgentRunContext retry = context.withRerouteCount(context.rerouteCount() + 1);
-        return requireCurrentOwnerRunning(context.executionClaim(), "before-domain-agent-retry")
-                .then(Mono.fromRunnable(() -> appliedRouteRecorder.markRuntimeDispatchStartedRequired(
-                        context.runId(), context.route(), context.bindingRef().get(), context.executionClaim(),
-                        context.persistenceState())))
-                .thenMany(Flux.defer(() -> execute(retry)));
+        return rerouteFrames(reroute, eventFactory.commandWithDomainRejectContext(
+                context.command(), state.lastIntentRejectReason()), true);
     }
 
     RuntimeBinding markRejectedAutomaticBindingNotRoutable(RuntimeBinding binding,
@@ -270,10 +253,6 @@ final class DomainAgentRefusalCoordinator {
 
     boolean requiresRouteSwitchConfirmation(String routeSource) {
         return bindingPolicy.requiresRouteSwitchConfirmation(routeSource);
-    }
-
-    boolean requiresRouteSwitchConfirmation(String routeSource, DomainAgentRefusal refusal) {
-        return bindingPolicy.requiresRouteSwitchConfirmation(routeSource, refusal);
     }
 
     String routeSource(RuntimeBinding binding) {
@@ -348,7 +327,7 @@ final class DomainAgentRefusalCoordinator {
                 rerouteIntentQuery,
                 null);
         if (bindingPolicy.requiresRouteSwitchConfirmation(
-                bindingPolicy.routeSource(context.bindingRef().get()), refusal)) {
+                bindingPolicy.routeSource(context.bindingRef().get()))) {
             return requireCurrentOwnerRunning(context.executionClaim(), "before-reroute-confirmation")
                     .thenMany(Flux.defer(() -> Flux.just(eventFactory.beforeIntentConfirmation(
                             reroute, bindingPolicy.routeSource(context.bindingRef().get())))));

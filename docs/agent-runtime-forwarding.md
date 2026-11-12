@@ -12,7 +12,6 @@
 | `POST /v1/chat/runs`，Intent、用例库或显式目标命中 DomainAgent | POST chat-path，普通问答 | 使用 Binding 的 runtimeSessionId；[普通请求](#domain-query) |
 | 同接口续接 ACTIVE DomainAgent Binding | 同一普通问答协议，不发送 sessionMode | 复用下游会话，新 runId/messageId 按本次可信消息；[普通请求](#domain-query) |
 | `switch-domain-agent` 候选选 DomainAgent | 停止旧 Run 后普通问答 | 新 Run，复用原 user 消息；Binding 按既有匹配规则选择 |
-| 可恢复拒答 `RETRY_CURRENT` | 普通问答，跳过 Intent 和用例库 | 新 Run，原 user、技能、Binding 及下游 session；[重试](#domain-retry) |
 | 拒答确认 `approved=true`，不传 action | 先 Intent，再按结果调用对应 Agent | 不是新增下游提交类型；可能再次命中原技能 |
 | 普通路由进入 Relay Delegate | WS config 后 user-message | NEW 或 RESUME；[Delegate](#relay-query) |
 | 显式、Intent 或候选选 Relay 专家 | WS config 后 chat_expert | 最终 roleName，NEW 或 RESUME；[专家](#relay-expert) |
@@ -27,7 +26,7 @@
 | --- | --- |
 | ChatService `sessionId` | 本地会话 ID，如 `session_demo`；前端历史、Run、Stop 入口使用它 |
 | `runtimeSessionId` | Binding 的真实下游会话，如 `domain_session_demo` 或 `relay_session_demo`，可与本地 ID 不同 |
-| `runId` | 本次本地执行；问卷续跑、原技能重试及候选切换会创建新 Run |
+| `runId` | 本次本地执行；问卷续跑、拒答确认续跑及候选切换会创建新 Run |
 | `messageId` | 可信 user 消息 ID；问卷/拒答确认复用原消息，普通 Intent 澄清可创建新 user 消息 |
 | `interactionId` | ChatService 持久化交互 ID，前端续跑使用；不是下游 request_id |
 | `approval_id` / `request_id` | 下游问卷入站 approval_id 保存到 Interaction；回复时原样作为 request_id |
@@ -126,27 +125,12 @@ X-Observation-Id: obs_0123456789abcdef0123456789abcdef
 附件 Gate 拒绝时不调用 Agent；请求上限、技能数量/类型限制见 [DomainAgent协议](domain.md)。
 这里“不自动增加”不等于 Mapper 会移除任意同名业务扩展，前端仍需遵循 metadata 使用约束。
 
-<a id="domain-retry"></a>
-### 3.2 原技能重试与重新意图
+<a id="domain-reroute"></a>
+### 3.2 拒答确认后重新意图
 
-`BEFORE_INTENT + refusalRecoverable=true` 时，前端用 `approved=true + interactionAction=RETRY_CURRENT`。
-后端恢复原技能、原 Binding、真实下游 session 和原 user 消息，创建 Run-B；先持久化开始及确认响应，
-再经 owner、Binding、附件 Gate 等既有屏障调用**普通 query**。仅使用本次显式 metadata/附件，记忆按原规则组装。
-无业务扩展且短期记忆未启用的完整 body：
-
-<!-- contract: domain-retry -->
-```json
-{
-  "runId": "run_B",
-  "messageId": "msg_user_demo",
-  "skillId": "skill_A",
-  "query": "分析本月费用",
-  "sessionId": "domain_session_demo"
-}
-```
-
-不会转成问卷答案协议，也不会自动传 `RETRY_CURRENT/retry/recoverable/approved`。
-若前端不传 action、仅 approved=true，则沿用拒答重意图参数，先 Intent 再执行目标；不排除原技能。
+需要确认时，前端提交原 `approved=true`，不传 action。确认响应持久化并ACK后，先调用 Intent，
+再按结果执行目标；不排除原技能。`approved=false` 不调用 Intent 或目标，保留原 Binding 并结束本轮。
+DomainAgent目标仍使用普通 query 协议，metadata和附件仅来自本次显式请求，不自动增加重试控制字段。
 
 Intent请求的 `conversationContext` 在有可信原始意图ID时补充如下字段（以下为字段片段）：
 
@@ -169,9 +153,9 @@ ID仅来自意图服务实际返回并采用的结果或已保存的选中候选
 技能ID、Relay roleName或内部兜底编码。缺失时省略；只有唯一意图的route历史补充ID，澄清、无匹配和
 多意图不补顶层ID。不新增历史条目，不改变原历史过滤范围；该片段不代表当前Run的拒答路由会被加入history。
 完整口径见[Intent协议](intent/intent.md#22-conversationcontext)。这些字段只补充Intent上下文，
-不会自动追加到DomainAgent或Relay业务请求，`RETRY_CURRENT`仍不调用Intent。
+不会自动追加到DomainAgent或Relay业务请求。
 
-逻辑重试/重意图共用 max-reroutes（默认3）并跨确认 Run 累计，不等于 HTTP 自动重试。
+拒答重意图使用 max-reroutes（默认3）并跨确认 Run 累计，不等于 HTTP 自动重试。
 
 <a id="questionnaires"></a>
 ### 3.3 问卷回答与忽略（两种 Provider 共用答案语义）

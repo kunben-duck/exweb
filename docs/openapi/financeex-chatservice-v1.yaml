@@ -381,7 +381,7 @@ paths:
                     - documentId: doc_003
                   metadata: {}
               refusalSwitchApprove:
-                summary: BEFORE_INTENT交还Supervisor重新意图；存量无阶段确认仍执行已保存候选
+                summary: BEFORE_INTENT同意后重新意图；存量无阶段确认仍执行已保存候选
                 value:
                   commandId: cmd_013
                   sessionId: session_001
@@ -389,16 +389,6 @@ paths:
                   interactionId: interaction_switch_001
                   approved: true
                   scope: once
-                  metadata: {}
-              refusalRetryCurrent:
-                summary: BEFORE_INTENT且refusalRecoverable=true，重试当前DomainAgent，不调用Intent
-                value:
-                  sessionId: session_001
-                  runMode: CONTINUE_INTERACTION
-                  interactionId: interaction_switch_001
-                  approved: true
-                  interactionAction: RETRY_CURRENT
-                  channel: mobile
                   metadata: {}
               refusalSwitchDecline:
                 summary: DomainAgent 拒答后拒绝切换
@@ -2415,8 +2405,8 @@ components:
               $ref: '#/components/examples/AmbiguousRouteCardEvent'
             routeSwitchConfirmation:
               $ref: '#/components/examples/RouteSwitchConfirmationEvent'
-            recoverableRefusalConfirmation:
-              $ref: '#/components/examples/RecoverableRefusalConfirmationEvent'
+            beforeIntentRefusalConfirmation:
+              $ref: '#/components/examples/BeforeIntentRefusalConfirmationEvent'
             relayExpertCandidateSwitch:
               $ref: '#/components/examples/RelayExpertCandidateSwitchEvent'
             relayQuestionnaireCard:
@@ -2715,8 +2705,8 @@ components:
                 autoActionAt: '2026-08-05T10:00:30Z'
                 autoActionTimeoutMs: 30000
                 autoActionType: APPROVE_ROUTE_SWITCH
-    RecoverableRefusalConfirmationEvent:
-      summary: 可恢复拒答的两选项卡片，提交须使用run.waiting_user中的interactionId
+    BeforeIntentRefusalConfirmationEvent:
+      summary: Intent调用前的拒答确认卡片，提交须使用run.waiting_user中的interactionId
       value:
         type: conversation-turn-stream
         payload:
@@ -2741,7 +2731,7 @@ components:
                 currentTargetId: skill_A
                 currentRouteSource: front-selected
                 refusalRecoverable: true
-                message: 当前技能暂未完成回答，请选择仍然使用当前技能重试，或交还Supervisor重新意图。
+                message: 当前技能无法处理该问题，是否重新识别并选择合适技能继续回答？
                 originalQuery: 分析本月费用
                 autoActionType: APPROVE_ROUTE_SWITCH
                 autoActionAt: '2026-11-09T02:00:30Z'
@@ -3179,8 +3169,8 @@ components:
           type: string
           maxLength: 32
           nullable: true
-          enum: [AUTO_SELECT, RETRY_CURRENT]
-          description: AUTO_SELECT仅用于模糊候选代选；RETRY_CURRENT仅用于BEFORE_INTENT且refusalRecoverable=true的拒答确认，要求approved=true。
+          enum: [AUTO_SELECT]
+          description: AUTO_SELECT仅用于模糊候选代选；其他Interaction不允许提交interactionAction。
         language:
           type: string
           maxLength: 32
@@ -3205,8 +3195,7 @@ components:
         ambiguousCandidate: targetType=DOMAIN_AGENT 且 targetId 必须精确匹配服务端候选 skillId。
         ambiguousAutoSelect: interactionAction=AUTO_SELECT，不能同时提交 target、答案或附件。
         ambiguousOther: questionnaireAnswers 或有效 attachments，重新调用 Intent。
-        routeSwitchConfirmation: approved=true/false，不提交 target 或答案；approved=true允许本次显式附件，不传action时保持原重新意图或存量候选调用。
-        retryCurrent: BEFORE_INTENT且持久化refusalRecoverable=true时允许interactionAction=RETRY_CURRENT，要求approved=true，不传target或答案，允许本次显式附件。未知动作、存量无阶段、false/null不可恢复标记或冲突在claim前拒绝。重试与重新意图共用max-reroutes（默认3），跨Run累计；approved=false仅结束本轮，不是Stop。
+        routeSwitchConfirmation: approved=true/false，不提交 target、答案或action；approved=true允许本次显式附件，执行重新意图或存量候选调用。
         relayQuestionnaire: DomainAgent与Relay共用label/ignore互斥规则；可选ignoredQuestions记载逐题原因，逐题提交可仅有忽略列表，整份忽略附明细须覆盖全部题目。
 
     SwitchDomainAgentRequest:
@@ -3957,7 +3946,7 @@ components:
         refusalRecoverable:
           type: boolean
           nullable: true
-          description: BEFORE_INTENT阶段为true时展示原技能重试/交还Supervisor；false、缺失或null保持旧流程，无阶段存量候选确认不启用重试。
+          description: 原始拒答的可恢复标记，仅用于信息展示，不改变确认、路由或Binding策略。
         refusalReason:
           type: string
           nullable: true
@@ -3975,10 +3964,10 @@ components:
           type: string
           enum: [APPROVE_ROUTE_SWITCH]
       description: |
-        DomainAgent可恢复拒答（recoverable=true）在调用Intent前生成，提供原技能重试或交还Supervisor；其他拒答仍仅在front-selected/user-confirmed且自动切换关闭时生成。
-        未确认或拒绝时不调用Intent、用例库或新技能。交还Supervisor时，一次同意授权识别及一次目标执行，结果仍可命中原技能；
+        DomainAgent拒答且来源为front-selected/user-confirmed、自动切换关闭时，在调用Intent前生成。
+        未确认或拒绝时不调用Intent、用例库或新技能。同意时，一次同意授权识别及一次目标执行，结果仍可命中原技能；
         需要澄清时保留授权，新技能再次拒答须重新确认，max-reroutes跨确认Run累计。
-        false、缺失或null时，自动来源或开启 refusal-auto-switch-enabled 沿用原自动流程。截止时间与 AMBIGUOUS_ROUTE 共用配置，
+        recoverable的值不改变上述规则；自动来源或开启 refusal-auto-switch-enabled 沿用原自动流程。截止时间与 AMBIGUOUS_ROUTE 共用配置，
         到期后由前端提交现有 approved=true 请求，不新增服务端定时任务。
 
     RelayQuestionnaireCardPayload:

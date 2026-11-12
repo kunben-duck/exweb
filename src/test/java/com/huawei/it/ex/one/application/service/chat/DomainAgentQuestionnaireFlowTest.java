@@ -274,13 +274,14 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void retryAndQuestionnaireShareBindingMessagesAndObservation(boolean questionnaireFirst) throws Exception {
+    void confirmedRerouteAndQuestionnaireShareMessagesAndObservation(boolean questionnaireFirst) throws Exception {
         String refusal = "data: {\"type\":\"agent.refusal\",\"code\":\"FN-EX-CAHT-BIZ-DAG-001\","
                 + "\"recoverable\":true,\"reason\":\"try again\"}\n\n";
-        initialFrames = questionnaireFirst ? promptWithSession("q1", "domain-retry-session")
-                : "data: {\"sessionId\":\"domain-retry-session\"}\n\n" + refusal;
+        initialFrames = questionnaireFirst ? promptWithSession("q1", "domain-original-session")
+                : "data: {\"sessionId\":\"domain-original-session\"}\n\n" + refusal;
+        rerouteResult.set(RouteSignalResult.of(RouteTarget.domainAgent("skill-b", "intent-agent", 1.0, "reroute")));
         if (!questionnaireFirst) {
-            nextQueryFrames = prompt("retry-questionnaire");
+            nextQueryFrames = prompt("reroute-questionnaire");
         } else {
             answer = request -> Flux.defer(() -> {
                 request.dispatchState().markResponseDispatched();
@@ -304,25 +305,26 @@ class DomainAgentQuestionnaireFlowTest extends ChatFlowTestSupport {
                     .filter(ChatInteractionRequest::waiting).findFirst().orElseThrow();
             assertThat(confirmation.interactionType()).isEqualTo(ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
             assertThat(confirmation.requestPayload()).containsEntry("refusalRecoverable", true);
-            ChatCommand retry = new ChatCommand(null, null, null, first.sessionId(), null, "web", null,
+            ChatCommand approval = new ChatCommand(null, null, null, first.sessionId(), null, "web", null,
                     List.of(), Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
-                    null, confirmation.id(), true, "once", Map.of(), null, null, null, "RETRY_CURRENT");
-            ChatRunStartResult retryRun = service.startRun(user, retry, RuntimeForwardHeaders.empty())
+                    null, confirmation.id(), true, "once", Map.of(), null, null, null, null);
+            ChatRunStartResult continuedRun = service.startRun(user, approval, RuntimeForwardHeaders.empty())
                     .block(Duration.ofSeconds(10));
-            List<ChatEvent> output = awaitTerminal(retryRun);
+            List<ChatEvent> output = awaitTerminal(continuedRun);
             assertThat(output.getLast().type()).isEqualTo(questionnaireFirst ? "run.completed" : "run.waiting_user");
             assertThat(query.get().turnTraceContext().traceId()).isEqualTo(trace.traceId());
             assertThat(query.get().messageId()).isEqualTo(first.userMessageId());
-            assertThat(query.get().runtimeSessionId()).isEqualTo("domain-retry-session");
+            assertThat(query.get().domainAgentId()).isEqualTo("skill-b");
+            assertThat(query.get().runtimeSessionId()).isNotEqualTo("domain-original-session");
             if (!questionnaireFirst) {
                 ChatInteractionRequest question = interactions.requests.values().stream()
                         .filter(ChatInteractionRequest::waiting).findFirst().orElseThrow();
                 assertThat(respond(question, true, Map.of("label", Map.of("期间", "本月"))).getLast().type())
                         .isEqualTo("run.completed");
             }
-            assertThat(bindings.saved.id()).isEqualTo(first.runtimeBindingId());
+            assertThat(bindings.saved.id()).isNotEqualTo(first.runtimeBindingId());
             assertThat(messages.messages).hasSize(2);
-            assertThat(routeCalls).hasValue(0);
+            assertThat(routeCalls).hasValue(1);
             assertThat(queries).hasValue(2);
             com.huawei.it.ex.one.application.service.observation.ObservationTestFixture.await(
                     () -> observation.traces.stream().anyMatch(t -> "COMPLETED".equals(t.status())));

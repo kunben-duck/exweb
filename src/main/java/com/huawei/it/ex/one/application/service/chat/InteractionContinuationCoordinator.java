@@ -218,11 +218,7 @@ final class InteractionContinuationCoordinator {
     private Map<String, Object> prepareRuntimeResponse(ContinuationStartContext context,
                                                         ChatInteractionRequest interaction, UserContext user,
                                                         ChatInteractionResponseCommand command) {
-        boolean retryCurrent = interaction.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
-                && RouteSwitchRerouteContext.validateRetryCurrent(interaction, command);
-        if (!retryCurrent) {
-            rejectAmbiguousRouteFields(command);
-        }
+        rejectAmbiguousRouteFields(command);
         if (!command.attachments().isEmpty()) {
             if (interaction.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
                     || !Boolean.TRUE.equals(command.approved())) {
@@ -234,14 +230,7 @@ final class InteractionContinuationCoordinator {
                     documentFacade.resolveChatAttachmentsForUser(user, command.attachments()));
         }
         runtimeQuestionnaireAnswerValidator.validate(command, interaction);
-        Map<String, Object> response = interactionService.prepareResponsePayload(
-                command, interaction.interactionType(), null);
-        if (!retryCurrent) {
-            return response;
-        }
-        Map<String, Object> retryResponse = new LinkedHashMap<>(response);
-        retryResponse.put("interactionAction", RouteSwitchRerouteContext.RETRY_CURRENT);
-        return Map.copyOf(retryResponse);
+        return interactionService.prepareResponsePayload(command, interaction.interactionType(), null);
     }
 
     private AmbiguousRouteContinuationPlan ambiguousPlan(

@@ -91,7 +91,7 @@ public class IntentFeedbackCommitService {
                             user.tenantId(), user.ownerUserId(), source.sessionId())),
                     user.tenantId(), user.ownerUserId(), entry, source.sessionId(), messageId,
                     "CORRECT".equals(command.feedbackType()) ? "INTENT_FEEDBACK_CORRECT" : "INTENT_FEEDBACK_SWITCH",
-                    query, selected.intentName(), null, now, now));
+                    query, selected.intentName(), selected.intentId(), null, now, now));
         }
         return submission;
     }

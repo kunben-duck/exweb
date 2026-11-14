@@ -296,6 +296,7 @@ CREATE TABLE IF NOT EXISTS fin_ex_intent_preference_correction_t (
     source_type VARCHAR(32) NOT NULL,
     query_text TEXT,
     preference_intent TEXT NOT NULL,
+    preference_intent_id NVARCHAR2(128),
     original_intent TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -724,6 +725,7 @@ COMMENT ON COLUMN fin_ex_intent_preference_correction_t.source_message_id IS '�
 COMMENT ON COLUMN fin_ex_intent_preference_correction_t.source_type IS '偏好来源：INTENT_CANDIDATE为候选选择，AMBIGUOUS_ROUTE为模糊意图人工选择，INTENT_FEEDBACK_CORRECT为准确反馈，INTENT_FEEDBACK_SWITCH为候选改选反馈。';
 COMMENT ON COLUMN fin_ex_intent_preference_correction_t.query_text IS '产生本次偏好的原始可信用户问题。';
 COMMENT ON COLUMN fin_ex_intent_preference_correction_t.preference_intent IS '用户最终选择的意图名称。';
+COMMENT ON COLUMN fin_ex_intent_preference_correction_t.preference_intent_id IS '用户选择的偏好意图ID；来自已有选择结果，缺失或无效时为空，不作为可信路由身份。';
 COMMENT ON COLUMN fin_ex_intent_preference_correction_t.original_intent IS '原始识别意图名称；模糊意图没有唯一原始结果时为空。';
 COMMENT ON COLUMN fin_ex_intent_preference_correction_t.created_at IS '记录首次创建时间。';
 COMMENT ON COLUMN fin_ex_intent_preference_correction_t.updated_at IS '记录最后一次选择更新时间，也是发送给Intent的timestamp。';

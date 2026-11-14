@@ -10,6 +10,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.config.RouteMemoryProperties;
+import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
+import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties;
+import com.huawei.it.ex.one.infrastructure.intent.IntentServiceResponseMapper;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
@@ -19,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -28,6 +36,42 @@ import java.util.List;
 import java.util.Map;
 
 class MyBatisRouteMemoryRepositoryTest {
+    @Test
+    void multiIdsSurviveJsonPersistenceAndNewServiceInstance() throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        RouteMemoryMapper mapper = mock(RouteMemoryMapper.class);
+        var repository = new MyBatisRouteMemoryRepository(mapper, json);
+        var writer = new RouteMemoryApplicationService(repository, (type, context) -> "rmem-1",
+                new RouteMemoryProperties());
+        var user = new UserContext("t", "u", "user");
+        var decision = new IntentServiceResponseMapper(json, new IntentServiceHttpProperties()).toDecision(json.readTree("""
+                {"data":{"result":{"routeAction":"ROUTE_MULTI","items":[
+                  {"intentName":"Sales","intentId":"EX_sales"},
+                  {"intentName":"Report","intentId":"report"}]}}}
+                """));
+        var command = new RouteMemoryApplicationService.RouteMemoryRouteCommand(user, "s", "r", "query",
+                decision, RouteTarget.agentRuntime("intent-agent", 0, "multi"));
+        writer.recordRouteDecision(command);
+        var captured = ArgumentCaptor.forClass(RouteMemoryRow.class);
+        verify(mapper).insert(captured.capture());
+        RouteMemoryRow row = captured.getValue();
+        assertThat(json.readTree(row.getPayloadJson()).path("candidateIntentIds"))
+                .isEqualTo(json.valueToTree(List.of("EX_sales", "report")));
+        assertThat(row.getIntentId()).isEqualTo("relay");
+        when(mapper.findRecentRoutes("t", "u", "s", 5, null)).thenReturn(List.of(row));
+        when(mapper.findActiveClarifications("t", "u", "s")).thenReturn(List.of());
+        var reader = new RouteMemoryApplicationService(new MyBatisRouteMemoryRepository(mapper, json),
+                (type, context) -> "unused", new RouteMemoryProperties());
+        assertThat(reader.loadForIntent(user, "s", "user_correction", Map.of()).history())
+                .containsExactly(writer.routeHistory(command));
+        assertThat(writer.routeHistory(command)).containsEntry("intentId", "EX_sales;report");
+        var oldPayload = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(row.getPayloadJson());
+        oldPayload.remove("candidateIntentIds");
+        row.setPayloadJson(json.writeValueAsString(oldPayload));
+        assertThat(reader.loadForIntent(user, "s", "user_correction", Map.of()).history()).singleElement()
+                .satisfies(item -> assertThat(item).containsEntry("intent", "Sales;Report").doesNotContainKey("intentId"));
+    }
+
     @Test
     void forwardsOptionalRunExclusionWithoutAddingQueriesAndKeepsOriginalReadEntry() {
         RouteMemoryMapper mapper = mock(RouteMemoryMapper.class);

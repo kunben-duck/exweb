@@ -24,6 +24,8 @@
 - `CORRECT`有明确目标，以及`INCORRECT_SWITCH`，自动保存偏好。新反馈流程不要再次调用旧偏好接口。
 - `INCORRECT_COMMENT`及无单一目标的`CORRECT`（例如NO_MATCH、ROUTE_MULTI）只保存反馈，不清空已有偏好。
 - 意图名称是用户偏好摘要，不伪装为可信识别结果；不查询或补齐`originalIntent`。
+- 有目标反馈同步保存已有`selectedIntent.intentId`，后续Intent以可选`preferenceIntentId`发送。
+  新名称无ID时清空旧ID，缺失或无效值不补造、不截断；客户端偏好ID不提升为可信路由事实。
 - 同一user消息、同一逻辑入口的不同Run反馈分别保存，偏好表只保留最后成功写入的选择。幂等重试不刷新偏好。
 - 普通模式提交被评价Run的逻辑入口，未传回退服务端默认。聚合专家使用source Run保存的入口，不读取当前Session。
 - 入口`fin`用于偏好分组，即使出站Intent配置为`EX_fin`也不改变分组；每次请求应提交未拼接前缀的入口。
@@ -62,6 +64,8 @@ financeex:
 
 ## 部署与验证
 - 先执行`src/main/resources/db/incremental-20260908-intent-feedback.sql`，初始化DDL也包含新表。
+- 已部署偏好表还需先执行`src/main/resources/db/incremental-20261114-intent-preference-id.sql`再部署新版Mapper，
+  仅增加可空ID列，不回填旧数据、不增加索引；DDL锁等待及兼容性须在目标环境验证。
 - 反馈新表以tenant/user/run唯一约束支持幂等和历史批量读取；无外键级联，不随会话删除自动清理。
 - Run执行、候选切换、Intent请求及现有偏好读取不增加SQL或外部调用。
 - Java测试覆盖事务拦截器及回滚模型、并发幂等、原入口隔离、轻量SQL、DTO节点归属和降级；模型测试不等同于真实openGauss并发验证。

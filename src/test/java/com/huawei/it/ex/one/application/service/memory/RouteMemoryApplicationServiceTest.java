@@ -20,9 +20,15 @@ import com.huawei.it.ex.one.domain.memory.RouteMemoryItemStatus;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemType;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties;
+import com.huawei.it.ex.one.infrastructure.intent.IntentServiceResponseMapper;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -34,12 +40,53 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 class RouteMemoryApplicationServiceTest {
     private final UserContext user = new UserContext("tenant1", "user1", "tester");
     private final InMemoryRouteMemoryRepository repository = new InMemoryRouteMemoryRepository();
     private final RouteMemoryApplicationService service = new RouteMemoryApplicationService(
             repository, new FixedIdGenerator(), new RouteMemoryProperties());
+
+    @ParameterizedTest
+    @MethodSource("multiIntentItems")
+    void multiIntentIdsMatchNamesInInlineAndStoredHistory(String items, String names, String ids) throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        IntentDecision decision = new IntentServiceResponseMapper(json, new IntentServiceHttpProperties())
+                .toDecision(json.readTree("{\"code\":200,\"data\":{\"result\":{\"routeAction\":\"ROUTE_MULTI\",\"items\":"
+                        + items + "}}}"));
+        var command = new RouteMemoryApplicationService.RouteMemoryRouteCommand(user, "multi-id", "run-multi",
+                "question", decision, RouteTarget.agentRuntime("intent-agent", 0.0, "multiple intents"));
+        service.recordRouteDecision(command);
+        Map<String, Object> inline = service.routeHistory(command);
+        assertThat(inline).containsEntry("intent", names);
+        if (ids == null) {
+            assertThat(inline).doesNotContainKey("intentId");
+        } else {
+            assertThat(inline).containsEntry("intentId", ids);
+        }
+        assertThat(service.loadForIntent(user, "multi-id", "user_correction", Map.of()).history())
+                .containsExactly(inline);
+        assertThat(decision.slots()).doesNotContainKey("candidateIntentIds");
+    }
+
+    static Stream<Arguments> multiIntentItems() {
+        String first = "{\"intentName\":\" Sales \",\"intentId\":\"EX_sales\"}";
+        String second = "{\"intentName\":\"Report\",\"intentId\":\"report\"}";
+        return Stream.of(
+                Arguments.of("[" + first + "," + second + "]", "Sales;Report", "EX_sales;report"),
+                Arguments.of("[" + second + "," + first + "," + second + "]", "Report;Sales", "report;EX_sales"),
+                Arguments.of("[" + first + ",{\"intentName\":\"Report\",\"intentId\":\"EX_sales\"}]",
+                        "Sales;Report", "EX_sales;EX_sales"),
+                Arguments.of("[" + first + ",{\"intentName\":\"Report\"}]", "Sales;Report", null),
+                Arguments.of("[" + first + ",{\"intentName\":\"Report\",\"intentId\":null}]", "Sales;Report", null),
+                Arguments.of("[" + first + ",{\"intentName\":\"Report\",\"intentId\":42}]", "Sales;Report", null),
+                Arguments.of("[" + first + ",{\"intentName\":\"Report\",\"intentId\":\"  \"}]", "Sales;Report", null),
+                Arguments.of("[" + first + ",{\"intentName\":\"Sales\",\"intentId\":\"other\"}]", "Sales", null),
+                Arguments.of("[" + first + ",{\"intentName\":\"Sales\"}]", "Sales", null),
+                Arguments.of("[{\"intentName\":\"Sales;Report\",\"intentId\":\"id\"}]", "Sales;Report", null),
+                Arguments.of("[{\"intentName\":\"Sales\",\"intentId\":\"id;other\"}]", "Sales", null));
+    }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})

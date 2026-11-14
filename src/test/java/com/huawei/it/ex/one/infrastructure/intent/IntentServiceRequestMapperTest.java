@@ -139,6 +139,8 @@ class IntentServiceRequestMapperTest {
         assertThat(populated.userPreferenceCorrections()).containsExactly(correction);
         assertThat(objectMapper.valueToTree(populated)
                 .path("userPreferenceCorrections").get(0).has("originalIntent")).isFalse();
+        assertThat(objectMapper.valueToTree(populated)
+                .path("userPreferenceCorrections").get(0).has("preferenceIntentId")).isFalse();
         assertThat(objectMapper.valueToTree(empty).path("userPreferenceCorrections").isArray()).isTrue();
         assertThat(objectMapper.valueToTree(empty).path("userPreferenceCorrections")).isEmpty();
     }
@@ -154,6 +156,25 @@ class IntentServiceRequestMapperTest {
                 new UserContext("tenant1", "user1", "User One"));
 
         assertThat(request.accessName()).isEqualTo("Frontend-Entry");
+    }
+
+    @Test
+    void newPreferenceIdOnlyEnrichesTheOptionalWireField() {
+        var mapper = new IntentServiceRequestMapper(new IntentServiceHttpProperties());
+        ObjectMapper json = new ObjectMapper().findAndRegisterModules();
+        Instant now = Instant.parse("2026-08-27T02:00:00Z");
+        var legacy = new IntentUserPreferenceCorrection("query", "name", "original", now);
+        var identified = new IntentUserPreferenceCorrection("query", "name", "EX_id", "original", now);
+        ObjectNode expected = json.valueToTree(mapper.toWireRequest(command(null), MemoryContext.empty(),
+                new UserContext("t", "u", "U"), "msg", List.of(legacy)));
+        ((ObjectNode) expected.path("userPreferenceCorrections").get(0)).put("preferenceIntentId", "EX_id");
+        ObjectNode actual = json.valueToTree(mapper.toWireRequest(command(null), MemoryContext.empty(),
+                new UserContext("t", "u", "U"), "msg", List.of(identified)));
+        assertThat(actual).isEqualTo(expected);
+        for (String invalid : new String[] {null, "", " ", "x".repeat(129)}) {
+            assertThat(json.valueToTree(new IntentUserPreferenceCorrection("q", "n", invalid, null, now))
+                    .has("preferenceIntentId")).isFalse();
+        }
     }
 
     @Test

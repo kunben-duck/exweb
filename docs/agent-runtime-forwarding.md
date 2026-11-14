@@ -150,10 +150,33 @@ Intent请求的 `conversationContext` 在有可信原始意图ID时补充如下�
 ```
 
 ID仅来自意图服务实际返回并采用的结果或已保存的选中候选，不使用前端 `selectedIntent.intentId`、
-技能ID、Relay roleName或内部兜底编码。缺失时省略；只有唯一意图的route历史补充ID，澄清、无匹配和
-多意图不补顶层ID。不新增历史条目，不改变原历史过滤范围；该片段不代表当前Run的拒答路由会被加入history。
+技能ID、Relay roleName或内部兜底编码。缺失时省略；澄清和无匹配不补顶层ID。
+多意图`ROUTE_MULTI`仅在名称与ID完整对应时，按现有名称顺序拼接`intentId`，例如名称
+`销售数据分析;财经报告生成`对应`intent_sales_002;intent_report_003`。缺失ID、同名冲突或分号歧义时整组省略，
+不改变名称。不新增历史条目，不改变原历史过滤范围；该片段不代表当前Run的拒答路由会被加入history。
 完整口径见[Intent协议](intent/intent.md#22-conversationcontext)。这些字段只补充Intent上下文，
 不会自动追加到DomainAgent或Relay业务请求。
+
+Intent请求顶层的用户偏好另有可选字段`userPreferenceCorrections[].preferenceIntentId`（以下为字段片段）：
+
+<!-- contract: intent-preference-context -->
+```json
+{
+  "userPreferenceCorrections": [
+    {
+      "query": "分析上季度销售额下降原因",
+      "preferenceIntent": "销售数据分析",
+      "preferenceIntentId": "intent_sales_002",
+      "originalIntent": "财经知识助手",
+      "timestamp": "2026-11-13T02:00:00Z"
+    }
+  ]
+}
+```
+
+偏好ID沿用已有选择来源，普通候选和反馈允许使用客户端`selectedIntent.intentId`，模糊候选使用持久化选择。
+这与上方可信路由ID的来源约束不同；偏好不会提升为路由事实。无ID或无效时省略，旧偏好不回填。
+阻塞与流式Intent共用同一组装方式；不新增前端字段、请求头或DomainAgent/Relay字段。
 
 拒答重意图使用 max-reroutes（默认3）并跨确认 Run 累计，不等于 HTTP 自动重试。
 

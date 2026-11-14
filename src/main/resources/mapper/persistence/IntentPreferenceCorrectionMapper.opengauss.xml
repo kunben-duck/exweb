@@ -10,17 +10,18 @@
     <insert id="upsert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.IntentPreferenceCorrectionWriteRow">
         INSERT INTO fin_ex_intent_preference_correction_t(
             id, tenant_id, user_id, intent_access_name, session_id, source_message_id,
-            source_type, query_text, preference_intent, original_intent, created_at, updated_at
+            source_type, query_text, preference_intent, preference_intent_id, original_intent, created_at, updated_at
         )
         VALUES(
             #{id}, #{tenantId}, #{userId}, #{intentAccessName}, #{sessionId}, #{sourceMessageId},
-            #{sourceType}, #{queryText}, #{preferenceIntent}, #{originalIntent}, #{createdAt}, #{updatedAt}
+            #{sourceType}, #{queryText}, #{preferenceIntent}, #{preferenceIntentId}, #{originalIntent}, #{createdAt}, #{updatedAt}
         )
         ON DUPLICATE KEY UPDATE
             session_id = EXCLUDED.session_id,
             source_type = EXCLUDED.source_type,
             query_text = EXCLUDED.query_text,
             preference_intent = EXCLUDED.preference_intent,
+            preference_intent_id = EXCLUDED.preference_intent_id,
             original_intent = EXCLUDED.original_intent,
             updated_at = EXCLUDED.updated_at
     </insert>
@@ -33,6 +34,7 @@
         SELECT
             query_text AS queryText,
             preference_intent AS preferenceIntent,
+            preference_intent_id AS preferenceIntentId,
             original_intent AS originalIntent,
             updated_at AS updatedAt
         FROM fin_ex_intent_preference_correction_t

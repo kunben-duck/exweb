@@ -10,7 +10,12 @@ import java.time.Instant;
 public record IntentPreferenceCorrectionReadRow(
         String queryText,
         String preferenceIntent,
+        String preferenceIntentId,
         String originalIntent,
         Instant updatedAt
 ) {
+    public IntentPreferenceCorrectionReadRow(String queryText, String preferenceIntent, String originalIntent,
+            Instant updatedAt) {
+        this(queryText, preferenceIntent, null, originalIntent, updatedAt);
+    }
 }

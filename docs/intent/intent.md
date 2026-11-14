@@ -38,6 +38,7 @@ Authorization: {dynamicToken}
     {
       "query": "上次查询支付成功率的问题",
       "preferenceIntent": "支付成功率分析",
+      "preferenceIntentId": "intent_payment_analysis",
       "originalIntent": "支付数据查询",
       "timestamp": "2026-08-27T02:00:00Z"
     }
@@ -99,7 +100,20 @@ financeex:
 修改请求前缀不清理既有Binding；`response-access-name-prefix`及响应技能解析完全独立，DomainAgent和Relay
 请求不受影响。未传入口时仍要求配置有效的服务端默认入口。
 
-`userPreferenceCorrections`来自独立偏好表，不进入`conversationContext.history`。每项只包含可信问题、用户选择的意图名称、可选原始意图名称和服务端UTC更新时间；同一次阻塞或流式Intent重试复用同一列表，不重复读取数据库。读取使用独立有界执行器和失败开放策略，因此偏好能力不可用时仍会正常调用Intent，只发送空数组。
+`userPreferenceCorrections`来自独立偏好表，不进入`conversationContext.history`。每项包含可信问题、用户选择的意图名称、可选偏好意图ID、可选原始意图名称和服务端UTC更新时间；同一次阻塞或流式Intent重试复用同一列表，不重复读取数据库。读取使用独立有界执行器和失败开放策略，因此偏好能力不可用时仍会正常调用Intent，只发送空数组。
+
+`preferenceIntentId`与`preferenceIntent`对应。普通候选选择、准确反馈和候选改选反馈沿用请求中已有的
+`selectedIntent.intentId`，模糊候选使用服务端已保存的`selectedIntentId`。前者属于客户端提交的偏好，
+不宣称已通过意图结果验证，也不作为`lastIntentId/history[].intentId`的可信来源。不用skillId、accessName
+或roleName替代，不新增`originalIntentId`。缺失、空白、非字符串或超过128个Unicode码点时省略，不发送null或截断ID。
+名称与ID同次保存，新选择没有ID时清空旧ID；旧偏好不回填。前端原有请求校验不变。
+
+已部署环境需先由DBA执行
+[`incremental-20261114-intent-preference-id.sql`](../../src/main/resources/db/incremental-20261114-intent-preference-id.sql)，
+在偏好表新增可空`preference_intent_id NVARCHAR2(128)`，再部署新版Mapper。无需新增索引或SQL往返。
+升级DDL不自动执行；目标环境应验证锁等待并选择维护窗口。
+发布时需完成所有偏好写入实例的升级，避免旧实例继续更新名称却不更新新ID列；切换窗口内暂停偏好写入，
+不要将新旧写入版本混跑视为名称与ID成对更新的保证。
 
 ### 2.2 conversationContext
 
@@ -128,14 +142,14 @@ financeex:
 | `lastIntentRejectReason` | object | 否 | 上一个跳出的意图及拒答原因。仅传当前这次拒答，不累计历史拒答噪音。 |
 | `history` | array | 否 | 历史已生效路由记录和未完成的澄清链路，按时间从早到晚排列。 |
 | `lastIntentRejectReason.lastIntentId` | string | 否 | 当前被拒答技能关联的、此前意图服务实际返回的原始 `intentId`。 |
-| `history[].intentId` | string | 否 | 仅在 `type=route` 且具有唯一可信意图ID时发送。 |
+| `history[].intentId` | string | 否 | 单意图发送可信原始ID；`ROUTE_MULTI`仅在名称与ID完整对应时按名称顺序使用英文分号拼接。 |
 
-两个ID只取自实际采用的 `data.result.items[].intentId`，或服务端已保存并选定的模糊候选
+拒答ID及单意图历史ID只取自实际采用的 `data.result.items[].intentId`，或服务端已保存并选定的模糊候选
 `data.result.clarification.candidateIntents[].intentId`，不套用 `accessName` 的前缀处理规则。
 不使用 `skillId/accessName/roleName`、内部兜底 `intentCode` 或前端 `selectedIntent.intentId` 替代。
 仅前端提交ID而没有对应服务端意图结果时，仍省略字段。旧Binding或历史记录无法确认原始ID时也省略，
-不发送null，不回填、不额外查询。`NO_MATCH`、`clarify`、`ROUTE_MULTI`不新增顶层 `intentId`，
-原有 `candidateIntents[].intentId` 不变。
+不发送null，不回填、不额外查询。`NO_MATCH`、`clarify`不新增顶层 `intentId`，
+原有 `candidateIntents[].intentId` 不变。`ROUTE_MULTI`采用下方的成组ID规则，不使用内部`relay`占位值。
 
 拒答ID随既有私有上下文保留，覆盖自动重意图、确认后重意图及澄清续跑；连续拒答改为当前被拒答技能的ID。
 两个字段适用于阻塞与流式Intent，历史范围、排序、TopK及去重口径不变。下游启用前需兼容新增可选字段；
@@ -192,6 +206,23 @@ Ask User 回答、澄清或候选切换创建新 Run 后，之前 Run 的路由�
 | `type` | string | 固定为 `route`。 |
 | `query` | string | 当时产生路由决策的用户问题。 |
 | `intent` | string | 当时命中的意图或 DomainAgent 名称。 |
+| `intentId` | string | 可选原始意图ID；多意图为与名称一一对应的分号列表。 |
+
+`ROUTE_MULTI`历史示例：
+
+```json
+{
+  "type": "route",
+  "query": "分析销售下降原因并生成报告",
+  "intent": "销售数据分析;财经报告生成",
+  "intentId": "intent_sales_002;intent_report_003"
+}
+```
+
+多意图保留现有名称trim、去重及顺序，从原始`data.result.items`提取对应ID；同名同ID折叠，
+ID不独立排序或去重。任一名称缺少有效字符串ID、同名对应不同ID，或名称/ID含分号使对应关系不明确时，
+整条记录省略`intentId`，原`intent`不变。完整ID列表保存在既有RouteMemory payload，内存和持久化历史
+使用相同投影；旧记录无列表时不补造、不读取审计记录反推，也不修改路由事实列或公开事件。
 
 上一轮意图结果为 `NO_MATCH` 时使用独立摘要，不把 Relay 或 `no_match` 伪装成命中意图：
 

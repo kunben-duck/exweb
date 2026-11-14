@@ -4,6 +4,8 @@
 
 package com.huawei.it.ex.one.application.integration.intent;
 
+import com.huawei.it.ex.one.domain.intent.IntentPreferenceCorrection;
+
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.Instant;
@@ -12,7 +14,16 @@ import java.time.Instant;
 public record IntentUserPreferenceCorrection(
         String query,
         String preferenceIntent,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String preferenceIntentId,
         @JsonInclude(JsonInclude.Include.NON_NULL) String originalIntent,
         Instant timestamp
 ) {
+    public IntentUserPreferenceCorrection {
+        preferenceIntentId = IntentPreferenceCorrection.optionalIntentId(preferenceIntentId);
+    }
+
+    public IntentUserPreferenceCorrection(String query, String preferenceIntent, String originalIntent,
+            Instant timestamp) {
+        this(query, preferenceIntent, null, originalIntent, timestamp);
+    }
 }

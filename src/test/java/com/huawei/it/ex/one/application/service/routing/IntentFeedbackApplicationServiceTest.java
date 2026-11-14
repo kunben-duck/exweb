@@ -112,6 +112,7 @@ class IntentFeedbackApplicationServiceTest {
         IntentPreferenceCorrection preference = storedPreferences.get("fin");
         assertThat(preference.queryText()).isEqualTo("可信原问题");
         assertThat(preference.preferenceIntent()).isEqualTo("技能B");
+        assertThat(preference.preferenceIntentId()).isEqualTo("b");
         assertThat(preference.originalIntent()).isNull();
         assertThat(preference.sourceType()).isEqualTo("INTENT_FEEDBACK_CORRECT");
         assertThat(preference.createdAt()).isEqualTo(preference.updatedAt()).isEqualTo(result.createdAt());
@@ -138,6 +139,7 @@ class IntentFeedbackApplicationServiceTest {
         assertThat(service.record(USER, "a", correct("fin")).block()).isEqualTo(first);
         assertThat(preferenceWrites).hasValue(2);
         assertThat(storedPreferences.get("fin").preferenceIntent()).isEqualTo("技能C");
+        assertThat(storedPreferences.get("fin").preferenceIntentId()).isEqualTo("c");
         assertThatThrownBy(() -> service.record(USER, "a", correct("other")).block())
                 .isInstanceOf(IntentFeedbackException.class)
                 .extracting("code").isEqualTo("INTENT_FEEDBACK_ALREADY_SUBMITTED");
@@ -154,6 +156,16 @@ class IntentFeedbackApplicationServiceTest {
                 .extracting("code").isEqualTo("INTENT_FEEDBACK_UNAVAILABLE");
         assertThat(feedbacks.values).isEmpty();
         assertThat(storedPreferences).isEmpty();
+    }
+
+    @Test
+    void feedbackWithNewNameButNoIdDoesNotRetainPreviousId() {
+        service.record(USER, "a", correct("fin")).block();
+        service.record(USER, "b", new IntentFeedbackCommand("CORRECT", null, null, null,
+                new IntentFeedbackCommand.SelectedIntent(null, "新选择"), "fin")).block();
+        assertThat(storedPreferences.get("fin").preferenceIntent()).isEqualTo("新选择");
+        assertThat(storedPreferences.get("fin").preferenceIntentId()).isNull();
+        assertThat(preferenceWrites).hasValue(2);
     }
 
     @Test

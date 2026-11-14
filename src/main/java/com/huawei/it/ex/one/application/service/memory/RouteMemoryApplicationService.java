@@ -52,6 +52,7 @@ import java.util.function.Supplier;
 public class RouteMemoryApplicationService {
     private static final AppLogger log = AppLoggerFactory.getLogger(RouteMemoryApplicationService.class);
     private static final String CANDIDATE_INTENT_NAMES = "candidateIntentNames";
+    private static final String CANDIDATE_INTENT_IDS = "candidateIntentIds";
     private static final String FRONT_SELECTED_ROUTE_SOURCE = "front-selected";
 
     public static final String TRIGGER_FIRST_TURN = "first_turn";
@@ -270,7 +271,9 @@ public class RouteMemoryApplicationService {
         history.put("type", "route");
         history.put("query", blankToDefault(command.query(), ""));
         history.put("intent", routeHistoryIntent(command.intent(), command.route()));
-        putIfPresent(history, "intentId", IntentServiceIdentity.id(command.intent()));
+        putIfPresent(history, "intentId", isRouteMultiRoute(command.intent(), command.route())
+                ? joinedMultiIntentIds(candidateIntentNames(command.intent()), multiIntentIds(command.intent()))
+                : IntentServiceIdentity.id(command.intent()));
         return Map.copyOf(history);
     }
 
@@ -387,10 +390,7 @@ public class RouteMemoryApplicationService {
         if (route.type() == com.huawei.it.ex.one.domain.routing.RouteType.AGENT_RUNTIME) {
             payload.put("targetProvider", "relay");
             payload.put("routeAction", routeAction(intent));
-            List<String> candidateIntentNames = candidateIntentNames(intent);
-            if (isRouteMultiRoute(intent, route) && !candidateIntentNames.isEmpty()) {
-                payload.put(CANDIDATE_INTENT_NAMES, candidateIntentNames);
-            }
+            putMultiIntentHistory(payload, intent, route);
         } else if (route.type() == com.huawei.it.ex.one.domain.routing.RouteType.DOMAIN_AGENT) {
             payload.put("targetProvider", "domain-agent");
         }
@@ -453,7 +453,10 @@ public class RouteMemoryApplicationService {
         history.put("type", "route");
         history.put("query", blankToDefault(item.queryText(), ""));
         history.put("intent", routeHistoryIntent(item));
-        if (!isRouteMultiRoute(item)) {
+        if (isRouteMultiRoute(item)) {
+            putIfPresent(history, "intentId", joinedMultiIntentIds(
+                    candidateIntentNames(item), item.payload().get(CANDIDATE_INTENT_IDS)));
+        } else {
             String id = IntentServiceIdentity.idFromSlots(map(item.payload().get("slots")));
             // Diagnostic slots can also contain an unused candidate after a protocol failure.
             if (Objects.equals(id, item.intentId()) && Objects.equals(id, item.payload().get("intentCode"))) {
@@ -539,6 +542,65 @@ public class RouteMemoryApplicationService {
                 ? null
                 : intent.slots().get(CANDIDATE_INTENT_NAMES);
         return normalizedCandidateIntentNames(value);
+    }
+
+    private void putMultiIntentHistory(Map<String, Object> payload, IntentDecision intent, RouteTarget route) {
+        List<String> names = candidateIntentNames(intent);
+        if (isRouteMultiRoute(intent, route) && !names.isEmpty()) {
+            payload.put(CANDIDATE_INTENT_NAMES, names);
+            List<String> ids = multiIntentIds(intent);
+            if (!ids.isEmpty()) {
+                payload.put(CANDIDATE_INTENT_IDS, ids);
+            }
+        }
+    }
+
+    /** Keep IDs paired with the existing distinct names; never infer them from routing codes. */
+    private List<String> multiIntentIds(IntentDecision intent) {
+        if (intent == null) {
+            return List.of();
+        }
+        Map<String, Object> response = map(intent.raw().get("response"));
+        Map<String, Object> result = map(map(response.get("data")).get("result"));
+        if (!isRouteMultiRouteAction(result.get("routeAction")) || !(result.get("items") instanceof List<?> items)) {
+            return List.of();
+        }
+        Map<String, String> identities = new LinkedHashMap<>();
+        for (Object value : items) {
+            if (!(value instanceof Map<?, ?> item) || !(item.get("intentName") instanceof String name)
+                    || name.isBlank()) {
+                continue;
+            }
+            String id = IntentServiceIdentity.text(item.get("intentId"));
+            if (!unambiguousMultiValue(name) || !unambiguousMultiValue(id)) {
+                return List.of();
+            }
+            String previous = identities.putIfAbsent(name.trim(), id);
+            if (previous != null && !previous.equals(id)) {
+                return List.of();
+            }
+        }
+        return List.copyOf(identities.keySet()).equals(candidateIntentNames(intent))
+                ? List.copyOf(identities.values()) : List.of();
+    }
+
+    private String joinedMultiIntentIds(List<String> names, Object value) {
+        if (names.isEmpty() || !(value instanceof List<?> ids) || ids.size() != names.size()) {
+            return null;
+        }
+        List<String> validIds = new ArrayList<>(ids.size());
+        for (int index = 0; index < ids.size(); index++) {
+            String id = IntentServiceIdentity.text(ids.get(index));
+            if (!unambiguousMultiValue(names.get(index)) || !unambiguousMultiValue(id)) {
+                return null;
+            }
+            validIds.add(id);
+        }
+        return String.join(";", validIds);
+    }
+
+    private boolean unambiguousMultiValue(String value) {
+        return value != null && !value.isBlank() && !value.contains(";");
     }
 
     private List<String> candidateIntentNames(RouteMemoryItem item) {

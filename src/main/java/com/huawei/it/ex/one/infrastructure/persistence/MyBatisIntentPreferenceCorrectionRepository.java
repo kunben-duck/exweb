@@ -26,7 +26,7 @@ public class MyBatisIntentPreferenceCorrectionRepository implements IntentPrefer
         mapper.upsert(new IntentPreferenceCorrectionWriteRow(
                 correction.id(), correction.tenantId(), correction.userId(), correction.intentAccessName(),
                 correction.sessionId(), correction.sourceMessageId(), correction.sourceType(),
-                correction.queryText(), correction.preferenceIntent(), correction.originalIntent(),
+                correction.queryText(), correction.preferenceIntent(), correction.preferenceIntentId(), correction.originalIntent(),
                 correction.createdAt(), correction.updatedAt()));
     }
 
@@ -38,7 +38,7 @@ public class MyBatisIntentPreferenceCorrectionRepository implements IntentPrefer
         }
         return mapper.findRecent(tenantId, userId, intentAccessName, limit).stream()
                 .map(row -> new IntentUserPreferenceCorrection(
-                        row.queryText(), row.preferenceIntent(), row.originalIntent(), row.updatedAt()))
+                        row.queryText(), row.preferenceIntent(), row.preferenceIntentId(), row.originalIntent(), row.updatedAt()))
                 .toList();
     }
 }

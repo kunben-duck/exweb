@@ -156,6 +156,38 @@ class AgentApiDocumentationTest {
         return value;
     }
 
+    @Test
+    void documentedPreferenceIdMatchesTheOptionalRequestField() throws Exception {
+        ObjectMapper wireJson = new ObjectMapper().findAndRegisterModules()
+                .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        var correction = new com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection(
+                "分析上季度销售额下降原因", "销售数据分析", "intent_sales_002", "财经知识助手",
+                java.time.Instant.parse("2026-11-13T02:00:00Z"));
+        var requestMapper = new com.huawei.it.ex.one.infrastructure.intent.IntentServiceRequestMapper(
+                new com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties());
+        var wire = requestMapper.toWireRequest(null, null, null, "msg", List.of(correction));
+        assertThat(wireJson.<JsonNode>valueToTree(wire.userPreferenceCorrections()))
+                .isEqualTo(documentedExamples().get("intent-preference-context").path("userPreferenceCorrections"));
+        assertThat(wire.conversationContext()).doesNotContainKeys("preferenceIntentId", "userPreferenceCorrections");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"README.md,", "docs/intent/intent.md,", "docs/intent/confidence.md,## 13. 用户偏好独立记录",
+            "docs/intent/intent-feedback.md,", "docs/frontend-integration.md,", "docs/agent-runtime-forwarding.md,"})
+    void intentIdRelatedDocumentationContainsValidJsonExamples(String file, String section) throws Exception {
+        String markdown = Files.readString(Path.of(file));
+        if (section != null) {
+            assertThat(markdown).contains(section);
+            markdown = markdown.substring(markdown.indexOf(section));
+        }
+        var blocks = Pattern.compile("(?s)```json\\s+(.*?)```").matcher(markdown);
+        int count = 0;
+        while (blocks.find()) {
+            assertThat(json.readTree(blocks.group(1))).as("%s example %s", file, ++count).isNotNull();
+        }
+        assertThat(count).isPositive();
+    }
+
     private Map<String, JsonNode> documentedExamples() throws Exception {
         var blocks = Pattern.compile("(?s)<!-- contract: ([a-z-]+) -->\\s+```json\\s+(.*?)```")
                 .matcher(Files.readString(FORWARDING));

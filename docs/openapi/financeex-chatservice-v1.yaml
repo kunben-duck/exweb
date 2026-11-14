@@ -834,7 +834,9 @@ paths:
 
         INTENT_CANDIDATE使用当前用户拥有的source user消息及前端选择的意图摘要；
         AMBIGUOUS_ROUTE只接受已成功受理或已完成的人工SELECT_CANDIDATE Interaction，候选信息由服务端恢复。
-        同一来源重复提交会覆盖为最后一次选择。
+        同一来源重复提交会覆盖为最后一次选择。已有selectedIntent.intentId与名称同时保存，
+        后续Intent以可选preferenceIntentId发送；AMBIGUOUS_ROUTE从持久化Interaction恢复选择ID。
+        新选择无ID时清空旧ID，旧偏好不回填；客户端偏好ID不作为可信路由身份。本接口不增加请求字段。
       requestBody:
         required: true
         content:
@@ -2932,7 +2934,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/ChatSelectedIntent'
           nullable: true
-          description: INTENT_CANDIDATE必填；AMBIGUOUS_ROUTE不得提交
+          description: INTENT_CANDIDATE必填；AMBIGUOUS_ROUTE不得提交。已有intentId可随名称保存为偏好ID，缺失时不补造，不修改原字段校验。
         interactionId:
           type: string
           maxLength: 64

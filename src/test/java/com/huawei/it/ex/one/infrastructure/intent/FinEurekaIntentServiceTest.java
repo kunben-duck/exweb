@@ -85,7 +85,7 @@ class FinEurekaIntentServiceTest {
             properties.setMaxRetries(1);
             AtomicInteger preferenceLoads = new AtomicInteger();
             List<IntentUserPreferenceCorrection> preferences = List.of(new IntentUserPreferenceCorrection(
-                    "问题", "偏好意图", "原始意图", Instant.parse("2026-08-27T02:00:00Z")));
+                    "问题", "偏好意图", "EX_preferred", "原始意图", Instant.parse("2026-08-27T02:00:00Z")));
             IntentPreferenceCorrectionLoader loader = new IntentPreferenceCorrectionLoader(
                     null, null, null, null, Runnable::run) {
                 @Override
@@ -106,7 +106,8 @@ class FinEurekaIntentServiceTest {
 
             ChatCommand command = command(entry);
             var context = new RouteMemoryContext("domain_reject", List.of(Map.of(
-                    "type", "route", "query", "prior", "intent", "Knowledge", "intentId", "EX_prior-id")),
+                    "type", "route", "query", "prior", "intent", "Knowledge", "intentId", "EX_prior-id"),
+                    Map.of("type", "route", "query", "multi", "intent", "Sales;Report", "intentId", "EX_sales;report")),
                     Map.of("lastIntent", "Knowledge", "lastIntentId", "EX_prior-id", "domainRejectMessage", "reason"));
             IntentDecision decision = service.recognize(command, MemoryContext.empty().withRouteMemory(context), user());
 
@@ -116,6 +117,8 @@ class FinEurekaIntentServiceTest {
                     .isEqualTo(objectMapper.valueToTree(context.toConversationContext()));
             assertThat(lastRequestBody.get()).contains(
                     "\"userPreferenceCorrections\":[{\"query\":\"问题\",\"preferenceIntent\":\"偏好意图\"");
+            assertThat(objectMapper.readTree(lastRequestBody.get()).path("userPreferenceCorrections").get(0)
+                    .path("preferenceIntentId").asText()).isEqualTo("EX_preferred");
             assertThat(preferenceLoads.get()).isEqualTo(1);
             assertThat(accessNames).containsExactly(expected, expected);
             assertThat(command.intentAccessName()).isEqualTo(entry == null ? null : entry.trim());

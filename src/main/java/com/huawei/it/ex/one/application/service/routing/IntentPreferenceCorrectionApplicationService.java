@@ -128,7 +128,7 @@ public class IntentPreferenceCorrectionApplicationService {
                         .orElse(null);
         return correction(user, accessName, new CorrectionSource(
                 message.sessionId(), message.id(), TYPE_INTENT_CANDIDATE,
-                message.content(), selected.intentName().trim(), originalIntent));
+                message.content(), selected.intentName().trim(), selected.intentId(), originalIntent));
     }
 
     private IntentPreferenceCorrection fromAmbiguousRoute(
@@ -151,7 +151,8 @@ public class IntentPreferenceCorrectionApplicationService {
         String selectedIntentName = text(interaction.responsePayload(), "selectedIntentName");
         return correction(user, accessName, new CorrectionSource(
                 interaction.sessionId(), message.id(), TYPE_AMBIGUOUS_ROUTE,
-                query, selectedIntentName, null));
+                query, selectedIntentName,
+                IntentPreferenceCorrection.optionalIntentId(interaction.responsePayload().get("selectedIntentId")), null));
     }
 
     private void validateManualAmbiguousSelection(ChatInteractionRequest interaction) {
@@ -185,6 +186,7 @@ public class IntentPreferenceCorrectionApplicationService {
                 source.sourceType(),
                 source.query() == null ? "" : source.query(),
                 source.preferenceIntent(),
+                source.preferenceIntentId(),
                 source.originalIntent(),
                 now,
                 now);
@@ -254,6 +256,7 @@ public class IntentPreferenceCorrectionApplicationService {
             String sourceType,
             String query,
             String preferenceIntent,
+            String preferenceIntentId,
             String originalIntent
     ) {
     }

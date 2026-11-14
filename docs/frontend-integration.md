@@ -311,6 +311,11 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 `POST /v1/chat/runs` 会返回 HTTP 409，错误码 `ACTIVE_RUN_EXISTS`。前端应保持“生成中/停止”
 按钮状态，先调用 stop 或等待终态后再允许同一会话再次发送。
 
+偏好接口及意图反馈沿用现有`selectedIntent.intentId`，不新增前端字段；模糊候选的偏好ID由持久化Interaction恢复。
+后端将该ID作为可选`userPreferenceCorrections[].preferenceIntentId`发送给Intent，新选择没有ID时清空旧ID。
+原有请求校验保持不变，旧记录不回填；偏好ID不作为可信路由身份。多意图history的分号ID也由后端组装，
+前端无需拼接。完整规则见[Intent协议](intent/intent.md#21-顶层字段)。
+
 ### WebSocket 控制消息
 
 | 消息 | 使用场景 | 入参 | 出参 | 注意事项 |

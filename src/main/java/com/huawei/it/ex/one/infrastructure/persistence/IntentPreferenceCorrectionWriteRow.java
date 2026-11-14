@@ -17,8 +17,15 @@ public record IntentPreferenceCorrectionWriteRow(
         String sourceType,
         String queryText,
         String preferenceIntent,
+        String preferenceIntentId,
         String originalIntent,
         Instant createdAt,
         Instant updatedAt
 ) {
+    public IntentPreferenceCorrectionWriteRow(String id, String tenantId, String userId, String intentAccessName,
+            String sessionId, String sourceMessageId, String sourceType, String queryText,
+            String preferenceIntent, String originalIntent, Instant createdAt, Instant updatedAt) {
+        this(id, tenantId, userId, intentAccessName, sessionId, sourceMessageId, sourceType, queryText,
+                preferenceIntent, null, originalIntent, createdAt, updatedAt);
+    }
 }

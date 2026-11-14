@@ -29,6 +29,8 @@ import com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
@@ -36,9 +38,11 @@ import org.mockito.ArgumentCaptor;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 class IntentPreferenceCorrectionApplicationServiceTest {
     private static final Instant NOW = Instant.parse("2026-08-27T02:00:00Z");
@@ -106,6 +110,7 @@ class IntentPreferenceCorrectionApplicationServiceTest {
             assertThat(saved.sourceType()).isEqualTo("INTENT_CANDIDATE");
             assertThat(saved.queryText()).isEqualTo("原始问题");
             assertThat(saved.preferenceIntent()).isEqualTo("偏好意图");
+            assertThat(saved.preferenceIntentId()).isEqualTo("intent-new");
             assertThat(saved.originalIntent()).isEqualTo("原始意图");
             assertThat(saved.updatedAt()).isEqualTo(NOW);
         });
@@ -128,6 +133,7 @@ class IntentPreferenceCorrectionApplicationServiceTest {
         verify(corrections).upsert(captor.capture());
         assertThat(captor.getValue().queryText()).isEqualTo("可信原始问题");
         assertThat(captor.getValue().preferenceIntent()).isEqualTo("人工选择意图");
+        assertThat(captor.getValue().preferenceIntentId()).isEqualTo("intent-ambiguous");
         assertThat(captor.getValue().originalIntent()).isNull();
         assertThat(captor.getValue().intentAccessName()).isEqualTo("default-entry");
     }
@@ -187,15 +193,68 @@ class IntentPreferenceCorrectionApplicationServiceTest {
                 null, null, null, null, null, List.of(), List.of(), NOW);
     }
 
+    @ParameterizedTest
+    @MethodSource("optionalIds")
+    void optionalAmbiguousIdentityDoesNotChangeAcceptance(Object rawId, String expected) {
+        when(ids.newId(any(), any())).thenReturn("pref-optional");
+        when(interactions.findByOwnerAndId("tenant", "user", "interaction-1"))
+                .thenReturn(Optional.of(ambiguousInteraction(
+                        ChatInteractionStatus.ANSWERED, "SELECT_CANDIDATE", "USER", rawId)));
+        when(messages.findByOwnerAndId("tenant", "user", "msg-source"))
+                .thenReturn(Optional.of(userMessage("msg-source", "run-source", "question")));
+        service.record(user, new IntentPreferenceCorrectionCommand(
+                "AMBIGUOUS_ROUTE", null, null, "interaction-1", null)).block();
+        var captor = ArgumentCaptor.forClass(IntentPreferenceCorrection.class);
+        verify(corrections).upsert(captor.capture());
+        assertThat(captor.getValue().preferenceIntentId()).isEqualTo(expected);
+        assertThat(captor.getValue().preferenceIntent()).isEqualTo("人工选择意图");
+    }
+
+    static Stream<Arguments> optionalIds() {
+        return Stream.of(Arguments.of(null, null), Arguments.of("", null), Arguments.of(" \t", null),
+                Arguments.of(42, null), Arguments.of(true, null), Arguments.of(List.of("id"), null),
+                Arguments.of(Map.of("id", "wrong"), null), Arguments.of("EX_id", "EX_id"),
+                Arguments.of("x".repeat(128), "x".repeat(128)), Arguments.of("x".repeat(129), null),
+                Arguments.of("意".repeat(128), "意".repeat(128)),
+                Arguments.of("\uD83D\uDE00".repeat(128), "\uD83D\uDE00".repeat(128)),
+                Arguments.of("\uD83D\uDE00".repeat(129), null));
+    }
+
+    @Test
+    void candidateSelectionWithoutIdClearsPreviousIdentityAndKeepsName() {
+        when(ids.newId(any(), any())).thenReturn("pref-repeated");
+        when(messages.findByOwnerAndId("tenant", "user", "msg-source"))
+                .thenReturn(Optional.of(userMessage("msg-source", null, "question")));
+        for (var selection : List.of(new IntentPreferenceCorrectionCommand.SelectedIntent("id-a", "A"),
+                new IntentPreferenceCorrectionCommand.SelectedIntent(null, "B"))) {
+            service.record(user, new IntentPreferenceCorrectionCommand(
+                    "INTENT_CANDIDATE", "msg-source", selection, null, "entry")).block();
+        }
+        var captor = ArgumentCaptor.forClass(IntentPreferenceCorrection.class);
+        verify(corrections, org.mockito.Mockito.times(2)).upsert(captor.capture());
+        assertThat(captor.getAllValues()).extracting(IntentPreferenceCorrection::preferenceIntentId)
+                .containsExactly("id-a", null);
+        assertThat(captor.getAllValues()).extracting(IntentPreferenceCorrection::preferenceIntent)
+                .containsExactly("A", "B");
+        org.mockito.Mockito.verifyNoInteractions(recognitions);
+    }
+
     private ChatInteractionRequest ambiguousInteraction(
             ChatInteractionStatus status, String action, String selectionSource) {
+        return ambiguousInteraction(status, action, selectionSource, "intent-ambiguous");
+    }
+
+    private ChatInteractionRequest ambiguousInteraction(
+            ChatInteractionStatus status, String action, String selectionSource, Object id) {
+        Map<String, Object> response = new LinkedHashMap<>(Map.of("interactionAction", action,
+                "selectionSource", selectionSource, "selectedIntentName", "人工选择意图"));
+        response.put("selectedIntentId", id);
         return new ChatInteractionRequest(
                 "interaction-1", "tenant", "user", "session", "run-source", "run-next",
                 "msg-source", "msg-assistant", "intent-agent", null, null, null,
                 ChatInteractionType.INTENT_CLARIFICATION, status,
                 Map.of("clarificationType", "AMBIGUOUS_ROUTE", "originalQuery", "可信原始问题"),
-                Map.of("interactionAction", action, "selectionSource", selectionSource,
-                        "selectedIntentName", "人工选择意图"),
+                response,
                 NOW.plusSeconds(3600), NOW, null, NOW.minusSeconds(60), NOW);
     }
 }

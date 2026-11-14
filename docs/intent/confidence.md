@@ -236,3 +236,9 @@ Content-Type: application/json
 原子更新为最后一次选择。偏好保存失败返回`503/INTENT_PREFERENCE_UNAVAILABLE`，不影响已经受理的Run。
 后续阻塞和流式Intent调用都会在请求顶层携带最近记录的`userPreferenceCorrections`；默认最多5条，
 由`FINANCEEX_INTENT_USER_PREFERENCE_CORRECTIONS_LIMIT`控制，设为`0`时跳过数据库读取并发送`[]`。
+
+已有`selectedIntent.intentId`会与名称一起保存并作为可选`preferenceIntentId`发送；模糊候选从持久化
+Interaction读取选择ID，不增加前端参数。缺失或无效时省略，不使用skillId替代，也不回填旧偏好。
+新名称没有ID时清空上次选择的ID，避免错配。客户端选择ID只表达偏好，不作为可信路由身份。
+部署须先执行[偏好ID增量DDL](../../src/main/resources/db/incremental-20261114-intent-preference-id.sql)，
+完整出站规则见[Intent协议](intent.md#21-顶层字段)。
